@@ -1,0 +1,58 @@
+---
+name: Build Windows
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 1 * * *"
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+        with:
+          submodules: recursive
+
+      # Windows
+      - name: Enable Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          cache-dependency-glob: "" # we have recursive symlinks
+
+      - name: Install Conan
+        run: |
+          uv tool install conan
+          conan --version
+          conan profile detect
+
+      - name: Build
+        shell: pwsh
+        run: |
+          mkdir build
+          cd build
+          cmake `
+            --preset debug-conan `
+            ..
+          cmake --build .
+
+      - name: Test
+        working-directory: build
+        run: |
+          ctest

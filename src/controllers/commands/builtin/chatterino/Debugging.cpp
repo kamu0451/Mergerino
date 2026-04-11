@@ -1,0 +1,311 @@
+// SPDX-FileCopyrightText: 2023 Contributors to Chatterino <https://chatterino.com>
+//
+// SPDX-License-Identifier: MIT
+
+#include "controllers/commands/builtin/chatterino/Debugging.hpp"
+
+#include "Application.hpp"
+#include "common/Channel.hpp"
+#include "common/Env.hpp"
+#include "controllers/commands/CommandContext.hpp"
+#include "controllers/notifications/NotificationController.hpp"
+#include "controllers/spellcheck/SpellChecker.hpp"
+#include "messages/Image.hpp"
+#include "messages/Message.hpp"
+#include "messages/MessageBuilder.hpp"
+#include "messages/MessageElement.hpp"
+#include "providers/seventv/SeventvEventAPI.hpp"
+#include "providers/twitch/eventsub/Controller.hpp"
+#include "providers/twitch/PubSubManager.hpp"
+#include "providers/twitch/TwitchChannel.hpp"
+#include "providers/twitch/TwitchIrcServer.hpp"
+#include "singletons/Settings.hpp"
+#include "singletons/Theme.hpp"
+#include "singletons/Toasts.hpp"
+#include "singletons/Updates.hpp"
+#include "singletons/WindowManager.hpp"
+#include "util/PostToThread.hpp"
+
+#include <QApplication>
+#include <QLoggingCategory>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QString>
+
+using namespace Qt::StringLiterals;
+
+namespace chatterino::commands {
+
+QString setLoggingRules(const CommandContext &ctx)
+{
+    if (ctx.words.size() < 2)
+    {
+        ctx.channel->addSystemMessage(
+            "Usage: /c2-set-logging-rules <rules...>. To enable debug logging "
+            "for all categories from chatterino, use "
+            "'chatterino.*.debug=true'. For the format on the rules, see "
+            "https://doc.qt.io/qt-6/"
+            "qloggingcategory.html#configuring-categories");
+        return {};
+    }
+
+    auto filterRules = ctx.words.mid(1).join('\n');
+
+    QLoggingCategory::setFilterRules(filterRules);
+
+    auto message =
+        QStringLiteral("Updated filter rules to '%1'.").arg(filterRules);
+
+    if (!qgetenv("QT_LOGGING_RULES").isEmpty())
+    {
+        message += QStringLiteral(
+            " Warning: Logging rules were previously set by the "
+            "QT_LOGGING_RULES environment variable. This might cause "
+            "interference - see: "
+            "https://doc.qt.io/qt-6/qloggingcategory.html#setFilterRules");
+    }
+
+    ctx.channel->addSystemMessage(message);
+    return {};
+}
+
+QString toggleThemeReload(const CommandContext &ctx)
+{
+    if (getTheme()->isAutoReloading())
+    {
+        getTheme()->setAutoReload(false);
+        ctx.channel->addSystemMessage(u"Disabled theme auto reloading."_s);
+        return {};
+    }
+
+    getTheme()->setAutoReload(true);
+    ctx.channel->addSystemMessage(u"Auto reloading theme every %1 ms."_s.arg(
+        Theme::AUTO_RELOAD_INTERVAL_MS));
+    return {};
+}
+
+QString listEnvironmentVariables(const CommandContext &ctx)
+{
+    const auto &channel = ctx.channel;
+    if (channel == nullptr)
+    {
+        return "";
+    }
+
+    auto env = Env::get();
+
+    QStringList debugMessages{
+        "recentMessagesApiUrl: " + env.recentMessagesApiUrl,
+        "linkResolverUrl: " + env.linkResolverUrl,
+        "proxyUrl: " + env.proxyUrl.value_or("N/A"),
+        "twitchServerHost: " + env.twitchServerHost,
+        "twitchServerPort: " + QString::number(env.twitchServerPort),
+        "twitchServerSecure: " + QString::number(env.twitchServerSecure),
+    };
+
+    for (QString &str : debugMessages)
+    {
+        MessageBuilder builder;
+        builder.emplace<TimestampElement>(QTime::currentTime());
+        builder.emplace<TextElement>(str, MessageElementFlag::Text,
+                                     MessageColor::System);
+        channel->addMessage(builder.release(), MessageContext::Original);
+    }
+    return "";
+}
+
+QString listArgs(const CommandContext &ctx)
+{
+    const auto &channel = ctx.channel;
+    if (channel == nullptr)
+    {
+        return "";
+    }
+
+    QString msg = QApplication::instance()->arguments().join(' ');
+
+    channel->addSystemMessage(msg);
+
+    return "";
+}
+
+QString forceImageGarbageCollection(const CommandContext &ctx)
+{
+    (void)ctx;
+
+    runInGuiThread([] {
+        auto &iep = ImageExpirationPool::instance();
+        iep.freeOld();
+    });
+    return "";
+}
+
+QString forceImageUnload(const CommandContext &ctx)
+{
+    (void)ctx;
+
+    runInGuiThread([] {
+        auto &iep = ImageExpirationPool::instance();
+        iep.freeAll();
+    });
+    return "";
+}
+
+QString forceLayoutChannelViews(const CommandContext & /*ctx*/)
+{
+    getApp()->getWindows()->forceLayoutChannelViews();
+    return {};
+}
+
+QString incrementImageGeneration(const CommandContext & /*ctx*/)
+{
+    getApp()->getWindows()->incGeneration();
+    return {};
+}
+
+QString invalidateBuffers(const CommandContext & /*ctx*/)
+{
+    getApp()->getWindows()->invalidateChannelViewBuffers();
+    return {};
+}
+
+QString eventsub(const CommandContext & /*ctx*/)
+{
+    getApp()->getEventSub()->debug();
+    return {};
+}
+
+QString debugTest(const CommandContext &ctx)
+{
+    if (!ctx.channel)
+    {
+        return "";
+    }
+
+    const auto command = ctx.words.value(1);
+
+    if (command == "timeout-irc")
+    {
+        auto nowMillis = QDateTime::currentDateTime().toSecsSinceEpoch();
+
+        const auto ircText =
+            QString(
+                "@tmi-sent-ts=%1;room-id=117166826;user-id=11148817;badges=;"
+                "badge-info=;flags=;user-type=;emotes=;target-user-id=11148817;"
+                "ban-"
+                "duration=1 :tmi.twitch.tv CLEARCHAT #testaccount_420 pajlada")
+                .arg(nowMillis);
+        getApp()->getTwitch()->addFakeMessage(ircText);
+    }
+    else if (command == "desktop-notify")
+    {
+        auto title = ctx.twitchChannel->accessStreamStatus()->title;
+
+        getApp()->getToasts()->sendChannelNotification(
+            ctx.twitchChannel->getName(), title);
+        ctx.channel->addSystemMessage(
+            QString("debug-test sent desktop notification"));
+    }
+    else if (command == "update-check")
+    {
+        getApp()->getUpdates().checkForUpdates();
+        ctx.channel->addSystemMessage(QString("checking for updates"));
+    }
+    else if (command == "save-settings")
+    {
+        ctx.channel->addSystemMessage(u"requesting settings save"_s);
+        auto res = getSettings()->requestSave();
+        switch (res)
+        {
+            case pajlada::Settings::SettingManager::SaveResult::Failed:
+                ctx.channel->addSystemMessage(u"setting save failed"_s);
+                break;
+            case pajlada::Settings::SettingManager::SaveResult::Success:
+                ctx.channel->addSystemMessage(u"setting save success"_s);
+                break;
+            case pajlada::Settings::SettingManager::SaveResult::Skipped:
+                ctx.channel->addSystemMessage(u"setting save skipped"_s);
+                break;
+        }
+    }
+    else if (command == "set-watching")
+    {
+        if (ctx.words.size() < 3)
+        {
+            ctx.channel->addSystemMessage("Missing name");
+            return {};
+        }
+        auto chan = getApp()->getTwitch()->getOrAddChannel(ctx.words.at(2));
+        if (chan != getApp()->getTwitch()->getWatchingChannel().get())
+        {
+            getApp()->getTwitch()->setWatchingChannel(chan);
+        }
+    }
+    else if (command == "pubsub-reconnect")
+    {
+        getApp()->getTwitchPubSub()->reconnect();
+    }
+    else if (command == "7tv-reconnect")
+    {
+        getApp()->getSeventvEventAPI()->reconnect();
+    }
+    else if (command == "7tv-reconnect-random")
+    {
+        getApp()->getSeventvEventAPI()->reconnectRandom();
+    }
+    else
+    {
+        ctx.channel->addSystemMessage(
+            QString("debug-test called with command: '%1'").arg(command));
+    }
+
+    return "";
+}
+
+#ifdef Q_OS_WIN
+QString relaunchWithConsole(const CommandContext &ctx)
+{
+    if (!ctx.channel)
+    {
+        return {};
+    }
+
+    const QString loggingRulesEnv = u"QT_LOGGING_RULES"_s;
+    const QString winDebugConsoleEnv = u"QT_WIN_DEBUG_CONSOLE"_s;
+
+    auto env = QProcessEnvironment::systemEnvironment();
+    if (ctx.words.size() > 1)
+    {
+        env.insert(loggingRulesEnv, ctx.words.mid(1).join(';'));
+    }
+    else if (!env.contains(loggingRulesEnv))
+    {
+        // by default, enable all debug logging
+        env.insert(loggingRulesEnv, "chatterino.*.debug=true");
+    }
+
+    getSettings()->requestSave();
+
+    QProcess proc;
+    proc.setProgram(qApp->applicationFilePath());
+    // https://doc.qt.io/qt-6/debug.html#environment-variables-recognized-by-qt
+    env.insert(winDebugConsoleEnv, "new");
+    proc.setProcessEnvironment(env);
+    if (proc.startDetached())
+    {
+        getSettings()->disableSave();  // only disable if the process started
+        QMetaObject::invokeMethod(
+            qApp,
+            [] {
+                QApplication::exit();
+            },
+            Qt::QueuedConnection);
+        return {};
+    }
+
+    ctx.channel->addSystemMessage("Failed to start process.");
+    return {};
+}
+#endif
+
+}  // namespace chatterino::commands

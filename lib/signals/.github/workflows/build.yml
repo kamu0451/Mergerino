@@ -1,0 +1,97 @@
+---
+name: Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 1 * * *'
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SIGNALS_COVERAGE: "Off"
+  SIGNALS_JOBS: "4"
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }} with ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            compiler: msvc
+
+          - os: ubuntu-24.04
+            compiler: clang
+          - os: ubuntu-24.04
+            compiler: gcc
+          
+          - os: ubuntu-22.04
+            compiler: clang
+          - os: ubuntu-22.04
+            compiler: gcc
+
+          - os: macos-latest
+            compiler: clang
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+
+      - name: Enable coverage
+        if: matrix.compiler == 'gcc' && matrix.os == 'ubuntu-24.04'
+        run: |
+            echo "SIGNALS_COVERAGE=On" >> "$GITHUB_ENV"
+
+      - name: Fill env
+        shell: bash
+        run: |
+            if [ ${{ matrix.compiler }} = "clang" ]; then
+              echo "CC=clang" >> "$GITHUB_ENV"
+              echo "CXX=clang++" >> "$GITHUB_ENV"
+            fi
+
+      - name: Install dependencies
+        if: env.SIGNALS_COVERAGE == 'On' && startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get -y install gcovr
+
+      - name: Build
+        shell: bash
+        run: |
+            mkdir build
+            cd build
+            cmake \
+                -DCMAKE_BUILD_TYPE=Debug \
+                -DPAJLADA_SIGNALS_BUILD_TESTS=On \
+                -DPAJLADA_SIGNALS_BUILD_COVERAGE="$SIGNALS_COVERAGE" \
+                ..
+            cmake --build .
+
+      - name: Test
+        working-directory: ./build
+        run: ctest --output-on-failure
+
+      - name: Generate coverage
+        if: ${{ env.SIGNALS_COVERAGE == 'On' }}
+        working-directory: ./build
+        run: make coverage
+
+      - name: Upload coverage
+        if: ${{ env.SIGNALS_COVERAGE == 'On' }}
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          plugins: gcov
+          fail_ci_if_error: true
+          verbose: true

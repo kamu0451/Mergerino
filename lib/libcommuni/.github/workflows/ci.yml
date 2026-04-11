@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [master, chatterino-cmake]
+  pull_request:
+    branches: [master, chatterino-cmake]
+
+jobs:
+  build:
+    name: Build
+    runs-on: ${{matrix.os}}
+
+    strategy:
+      matrix:
+        config: [shared, static]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        qt-version: [6.7.*]
+
+    steps:
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        cache: true
+        cache-key-prefix: install-qt-action-${{runner.os}}-${{matrix.qt-version}}
+
+    - name: Git Checkout
+      uses: actions/checkout@v4
+
+    - name: Enable Developer Command Prompt
+      uses: ilammy/msvc-dev-cmd@v1
+      if: matrix.os == 'windows-latest'
+
+    - name: Build
+      run: |
+        qmake -v
+        ./configure -verbose -config ${{matrix.config}}
+        make -j2
+      if: matrix.os != 'windows-latest'
+
+    - name: Build
+      run: |
+        qmake -v
+        qmake -config verbose -config ${{matrix.config}}
+        set CL=/MP
+        nmake
+      shell: cmd
+      if: matrix.os == 'windows-latest'
+
+    - name: Run Tests
+      run: make check
+      if: matrix.os == 'ubuntu-latest'
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        cache: true
+        cache-key-prefix: install-qt-action-${{runner.os}}
+
+    - name: Install LCOV
+      run: sudo apt install lcov
+
+    - name: Git Checkout
+      uses: actions/checkout@v4
+
+    - name: Configure
+      run: |
+        qmake -v
+        ./configure -verbose -config coverage -config no_examples
+
+    - name: Build
+      run: make -j2
+
+    - name: Measure Coverage
+      run: |
+        make coverage
+        cat coverage/Irc*.cov > coverage/lcov.info
+
+    - name: Upload Coverage
+      uses: codecov/codecov-action@v5.1.2
+      with:
+        token: ${{secrets.CODECOV_TOKEN}}
+        file: coverage/lcov.info

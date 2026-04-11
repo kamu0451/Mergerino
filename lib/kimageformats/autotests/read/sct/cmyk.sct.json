@@ -1,0 +1,15 @@
+[
+    {
+        "minQtVersion" : "6.8.0",
+        "fileName" : "cmyk.tif",
+        "resolution" : {
+            "dotsPerMeterX" : 3780,
+            "dotsPerMeterY" : 3780
+        }
+    },
+    {
+        "maxQtVersion" : "6.7.99",
+        "unsupportedFormat" : true,
+        "comment" : "Qt versions lower than 6.8 do not support CMYK format so this test should be skipped."
+    }
+]

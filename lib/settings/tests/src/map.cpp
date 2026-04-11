@@ -1,0 +1,74 @@
+#include <gtest/gtest.h>
+
+#include <pajlada/settings.hpp>
+
+using namespace pajlada::Settings;
+using SaveResult = pajlada::Settings::SettingManager::SaveResult;
+using LoadError = pajlada::Settings::SettingManager::LoadError;
+
+TEST(Map, Simple)
+{
+    using std::any_cast;
+
+    auto sm = std::make_shared<SettingManager>();
+    sm->saveMethod = SettingManager::SaveMethod::SaveManually;
+
+    Setting<std::map<std::string, std::any>> test("/map", sm);
+
+    EXPECT_EQ(LoadError::NoError, sm->loadFrom("files/in.simplemap.json"));
+
+    auto myMap = test.getValue();
+    EXPECT_EQ(myMap.size(), 3);
+    EXPECT_EQ(any_cast<int>(myMap["a"]), 1);
+    EXPECT_EQ(any_cast<std::string>(myMap["b"]), "asd");
+    EXPECT_DOUBLE_EQ(any_cast<double>(myMap["c"]), 3.14);
+
+    std::vector<std::string> keys{"a", "b", "c"};
+
+    EXPECT_EQ(keys, SettingManager::getObjectKeys("/map", sm));
+
+    EXPECT_EQ(SaveResult::Success, sm->saveAs("files/out.simplemap.json"));
+}
+
+TEST(Map, Complex)
+{
+    using std::any_cast;
+
+    auto sm = std::make_shared<SettingManager>();
+    sm->saveMethod = SettingManager::SaveMethod::SaveManually;
+
+    Setting<std::map<std::string, std::any>> test("/map", sm);
+
+    EXPECT_EQ(LoadError::NoError, sm->loadFrom("files/in.complexmap.json"));
+
+    auto myMap = test.getValue();
+    EXPECT_EQ(myMap.size(), 3);
+    EXPECT_EQ(any_cast<int>(myMap["a"]), 5);
+
+    auto innerMap =
+        any_cast<std::map<std::string, std::any>>(myMap["innerMap"]);
+    EXPECT_EQ(innerMap.size(), 3);
+    EXPECT_EQ(any_cast<int>(innerMap["a"]), 420);
+    EXPECT_EQ(any_cast<int>(innerMap["b"]), 320);
+    EXPECT_DOUBLE_EQ(any_cast<double>(innerMap["c"]), 13.37);
+
+    auto innerArray = any_cast<std::vector<std::any>>(myMap["innerArray"]);
+    EXPECT_EQ(innerArray.size(), 9);
+    EXPECT_EQ(any_cast<int>(innerArray[0]), 1);
+    EXPECT_EQ(any_cast<int>(innerArray[1]), 2);
+    EXPECT_EQ(any_cast<int>(innerArray[2]), 3);
+    EXPECT_EQ(any_cast<int>(innerArray[3]), 4);
+    EXPECT_EQ(any_cast<std::string>(innerArray[4]), "testman");
+    EXPECT_EQ(any_cast<bool>(innerArray[5]), true);
+    EXPECT_EQ(any_cast<bool>(innerArray[6]), false);
+    EXPECT_DOUBLE_EQ(any_cast<double>(innerArray[7]), 4.20);
+
+    auto innerArrayMap =
+        any_cast<std::map<std::string, std::any>>(innerArray[8]);
+    EXPECT_EQ(innerArrayMap.size(), 3);
+    EXPECT_EQ(any_cast<int>(innerArrayMap["a"]), 1);
+    EXPECT_EQ(any_cast<int>(innerArrayMap["b"]), 2);
+    EXPECT_EQ(any_cast<int>(innerArrayMap["c"]), 3);
+
+    EXPECT_EQ(SaveResult::Success, sm->saveAs("files/out.complexmap.json"));
+}

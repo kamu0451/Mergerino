@@ -1,0 +1,243 @@
+#include <gtest/gtest.h>
+
+#include <filesystem>
+#include <pajlada/settings.hpp>
+
+#include "common.hpp"
+
+using namespace pajlada::Settings;
+using SaveResult = SettingManager::SaveResult;
+using SaveMethod = SettingManager::SaveMethod;
+using LoadError = SettingManager::LoadError;
+
+namespace fs = std::filesystem;
+
+TEST(Save, Int)
+{
+    auto sm = std::make_shared<SettingManager>();
+    sm->saveMethod = SaveMethod::SaveManually;
+    sm->setBackupEnabled(false);
+
+    Setting<int>::set("/lol", 10, sm);
+
+    EXPECT_EQ(SaveResult::Success, sm->saveAs("files/out.save.save_int.json"));
+
+    EXPECT_TRUE(
+        FilesMatch("out.save.save_int.json", "correct.save.save_int.json"));
+}
+
+TEST(Save, DoNotWriteToJSON)
+{
+    auto sm = std::make_shared<SettingManager>();
+    sm->saveMethod = SaveMethod::SaveManually;
+    sm->setBackupEnabled(false);
+
+    Setting<int>::set("/asd", 5, sm, SettingOption::DoNotWriteToJSON);
+
+    Setting<int>::set("/lol", 10, sm);
+
+    EXPECT_EQ(SaveResult::Success, sm->saveAs("files/out.save.save_int.json"));
+
+    EXPECT_TRUE(
+        FilesMatch("out.save.save_int.json", "correct.save.save_int.json"));
+}
+
+TEST(Save, Symlink)
+{
+    auto sm = std::make_shared<SettingManager>();
+    sm->saveMethod = SaveMethod::SaveManually;
+    sm->setBackupEnabled(false);
+
+    RemoveFile("files/out.after-symlink.json");
+
+    std::string ps = "files/save.symlink.json";
+    EXPECT_TRUE(fs::is_symlink(ps));
+
+    Setting<int> s("/lol", sm);
+    s.setValue(10);
+
+    EXPECT_EQ(SaveResult::Success, sm->saveAs("files/save.symlink.json"));
+
+    EXPECT_TRUE(fs::is_symlink(ps));
+
+    EXPECT_TRUE(FilesMatch("save.symlink.json", "correct.save.symlink.json"));
+    EXPECT_TRUE(
+        FilesMatch("out.after-symlink.json", "correct.save.symlink.json"));
+}
+
+TEST(Save, Backup)
+{
+    auto sm = std::make_shared<SettingManager>();
+
+    sm->setPath("files/out.backup.json");
+
+    sm->saveMethod = SettingManager::SaveMethod::SaveManually;
+
+    RemoveFile("files/out.backup.json");
+    RemoveFile("files/out.backup.json.bkp-1");
+    RemoveFile("files/out.backup.json.bkp-2");
+    RemoveFile("files/out.backup.json.bkp-3");
+
+    sm->setBackupEnabled(true);
+    sm->setBackupSlots(3);
+
+    {
+        Setting<int> setting("/lol", SettingOption::Default, sm);
+
+        setting.setValue(13);
+    }
+
+    EXPECT_TRUE(!fs::exists("files/out.backup.json"));
+
+    EXPECT_EQ(SaveResult::Success, sm->save());
+
+    EXPECT_TRUE(fs::exists("files/out.backup.json"));
+    EXPECT_TRUE(!fs::exists("files/out.backup.json.bkp-1"));
+
+    EXPECT_EQ(SaveResult::Success, sm->save());
+
+    EXPECT_TRUE(fs::exists("files/out.backup.json"));
+    EXPECT_TRUE(fs::exists("files/out.backup.json.bkp-1"));
+    EXPECT_TRUE(!fs::exists("files/out.backup.json.bkp-2"));
+
+    EXPECT_EQ(SaveResult::Success, sm->save());
+
+    EXPECT_TRUE(fs::exists("files/out.backup.json"));
+    EXPECT_TRUE(fs::exists("files/out.backup.json.bkp-1"));
+    EXPECT_TRUE(fs::exists("files/out.backup.json.bkp-2"));
+    EXPECT_TRUE(!fs::exists("files/out.backup.json.bkp-3"));
+
+    EXPECT_EQ(SaveResult::Success, sm->save());
+
+    EXPECT_TRUE(fs::exists("files/out.backup.json"));
+    EXPECT_TRUE(fs::exists("files/out.backup.json.bkp-1"));
+    EXPECT_TRUE(fs::exists("files/out.backup.json.bkp-2"));
+    EXPECT_TRUE(fs::exists("files/out.backup.json.bkp-3"));
+}
+
+TEST(Save, SaveSymlink)
+{
+    auto sm = std::make_shared<SettingManager>();
+    sm->saveMethod = SettingManager::SaveMethod::SaveManually;
+
+    std::string bp("files/save.symlink-normal.json");
+    std::string tp("files/out.symlink-normal.target.json");
+
+    sm->setPath(bp);
+
+    RemoveFile(tp);
+
+    EXPECT_TRUE(fs::is_symlink(bp));
+    EXPECT_TRUE(!fs::exists(tp));
+
+    {
+        Setting<int> setting("/lol", SettingOption::Default, sm);
+
+        setting.setValue(13);
+    }
+
+    EXPECT_EQ(SaveResult::Success, sm->save());
+
+    EXPECT_TRUE(fs::exists(bp));
+    EXPECT_TRUE(fs::is_symlink(bp));
+    EXPECT_TRUE(fs::exists(tp));
+}
+
+TEST(Save, SaveBackupSymlink)
+{
+    // In this scenario:
+    // The base file is a symlink
+    // bkp-1 is not a symlink
+    // bkp-2 is a symlink
+    std::string bp("files/save.symlink-backup.json");
+    std::string tp("files/out.symlink-backup.target.json");
+
+    std::string tp1("files/save.symlink-backup.json.bkp-1");
+
+    std::string bp2("files/save.symlink-backup.json.bkp-2");
+    std::string tp2("files/out.symlink-backup.target.json.bkp-2");
+
+    // Start from a clean slate - we should only have symlinks at the start
+    RemoveFile(tp);
+    RemoveFile(tp1);
+    RemoveFile(tp2);
+
+    EXPECT_TRUE(!fs::exists(tp));
+    EXPECT_TRUE(!fs::exists(tp1));
+    EXPECT_TRUE(!fs::exists(tp2));
+
+    auto sm = std::make_shared<SettingManager>();
+
+    sm->setPath(bp);
+    sm->setBackupEnabled(true);
+    sm->setBackupSlots(2);
+    sm->saveMethod = SettingManager::SaveMethod::SaveManually;
+
+    {
+        Setting<int> setting("/lol", SettingOption::Default, sm);
+
+        setting.setValue(13);
+    }
+
+    EXPECT_TRUE(fs::is_symlink(bp));
+    EXPECT_TRUE(!fs::exists(tp));
+
+    // Save to base file (following the symlink)
+    EXPECT_EQ(SaveResult::Success, sm->save());
+
+    EXPECT_TRUE(fs::is_symlink(bp));
+    EXPECT_TRUE(fs::exists(tp));
+
+    EXPECT_TRUE(!fs::exists(tp1));
+
+    // Save to base file, should create bkp-1
+    EXPECT_EQ(SaveResult::Success, sm->save());
+
+    EXPECT_TRUE(fs::exists(tp1));
+
+    EXPECT_TRUE(fs::is_symlink(bp2));
+    EXPECT_TRUE(!fs::exists(tp2));
+
+    // Save to base file, should follow bkp-2 and save a file there
+    EXPECT_EQ(SaveResult::Success, sm->save());
+
+    EXPECT_TRUE(fs::is_symlink(bp2));
+    EXPECT_TRUE(fs::exists(tp2));
+}
+
+TEST(Save, OnlySaveIfChanged)
+{
+    auto sm = std::make_shared<SettingManager>();
+    sm->saveMethod = SettingManager::SaveMethod::OnlySaveIfChanged;
+
+    EXPECT_EQ(SaveResult::Skipped,
+              sm->saveAs("files/out.save.compare_before_save.json"));
+
+    Setting<int> s("/compare_before_save_lol", sm);
+
+    EXPECT_EQ(SaveResult::Skipped,
+              sm->saveAs("files/out.save.compare_before_save.json"));
+
+    s.setValue(15);
+
+    EXPECT_EQ(SaveResult::Success,
+              sm->saveAs("files/out.save.compare_before_save.json"));
+
+    EXPECT_TRUE(FilesMatch("out.save.compare_before_save.json",
+                           "correct.save.compare_before_save.json"));
+
+    EXPECT_EQ(SaveResult::Skipped,
+              sm->saveAs("files/out.save.compare_before_save.json"));
+}
+
+TEST(Save, ParentDirectoryDoesNotExist)
+{
+    auto sm = std::make_shared<SettingManager>();
+    sm->saveMethod = SettingManager::SaveMethod::SaveManually;
+
+    Setting<int> s("/a", sm);
+    s.setValue(10);
+
+    EXPECT_EQ(SaveResult::Failed,
+              sm->saveAs("files/non-existent-directory/thiswillfail.json"));
+}

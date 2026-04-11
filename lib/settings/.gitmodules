@@ -1,0 +1,12 @@
+[submodule "external/signals"]
+	path = external/signals
+	url = https://github.com/pajlada/signals
+[submodule "external/serialize"]
+	path = external/serialize
+	url = https://github.com/pajlada/serialize
+[submodule "external/googletest"]
+	path = external/googletest
+	url = https://github.com/google/googletest.git
+[submodule "external/rapidjson"]
+	path = external/rapidjson
+	url = https://github.com/Tencent/rapidjson

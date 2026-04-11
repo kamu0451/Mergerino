@@ -1,0 +1,43 @@
+IndentCaseLabels: true
+BasedOnStyle: Google
+IndentWidth: 4
+Standard: Auto
+PointerBindsToType: false
+Language: Cpp
+SpacesBeforeTrailingComments: 2
+AccessModifierOffset: -4
+AlignEscapedNewlinesLeft: true
+AlwaysBreakAfterDefinitionReturnType: true
+AlwaysBreakBeforeMultilineStrings: false
+BreakConstructorInitializersBeforeComma: true
+# BreakBeforeBraces: Linux
+BreakBeforeBraces: Custom
+ConstructorInitializerAllOnOneLineOrOnePerLine: false
+AllowShortFunctionsOnASingleLine: false
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+DerivePointerBinding: false
+BraceWrapping: {
+    AfterNamespace: 'false',
+    AfterClass: 'true',
+    BeforeElse: 'false',
+    AfterControlStatement: 'false',
+    AfterFunction: 'true',
+    BeforeCatch: 'false'
+}
+ColumnLimit: 80
+
+# Might need to comment this out if you don't have the latest clang installed
+FixNamespaceComments: true
+
+ReflowComments: false
+
+IncludeBlocks: Regroup
+
+IncludeCategories:
+  - Regex: '^("|<)(pajlada/signals).*'
+    Priority: 1
+  - Regex: '^<[[:alnum].]+/[a-zA-Z\._\/-]+>$'
+    Priority: 3
+  - Regex: '^<[a-zA-Z_]+>$'
+    Priority: 4

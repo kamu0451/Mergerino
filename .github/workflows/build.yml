@@ -1,0 +1,116 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CONAN_VERSION: 2.11.0
+
+jobs:
+  build-windows:
+    name: "Build Windows x64"
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install Qt6
+        uses: jurplel/install-qt-action@v4.3.0
+        with:
+          cache: true
+          cache-key-prefix: windows-qt-6.9.3-v1
+          modules: qtimageformats
+          version: 6.9.3
+
+      - name: Enable Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1.13.0
+        with:
+          arch: x64
+
+      - name: Setup sccache
+        uses: hendrikmuhs/ccache-action@v1.2.22
+        with:
+          variant: sccache
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          key: sccache-build-windows-x64-6.9.3
+          restore-keys: |
+            sccache-build-windows-x64
+
+      - name: Cache conan packages
+        uses: actions/cache@v5
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-conan-user-${{ hashFiles('**/conanfile.py') }}-QT6
+          path: ~/.conan2/
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install and setup Conan
+        shell: bash
+        run: |
+          pip install conan==${{ env.CONAN_VERSION }}
+          conan --version
+          conan profile detect -f
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          mkdir build
+          cd build
+          conan install .. \
+            -s build_type=Release \
+            -c tools.cmake.cmaketoolchain:generator="Ninja" \
+            -b missing \
+            --output-folder=. \
+            -o with_openssl3=True
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cd build
+          cmake `
+            -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_TOOLCHAIN_FILE="conan_toolchain.cmake" `
+            -DUSE_PRECOMPILED_HEADERS=ON `
+            -DBUILD_WITH_CRASHPAD=OFF `
+            -DCHATTERINO_LTO=OFF `
+            -DFORCE_JSON_GENERATION=Off `
+            -DCHATTERINO_SPELLCHECK=On `
+            ..
+          ninja
+
+      - name: Package
+        working-directory: build
+        shell: pwsh
+        run: |
+          $packageDir = "Mergerino-1.0-win64"
+          if (Test-Path $packageDir) {
+            Remove-Item $packageDir -Recurse -Force
+          }
+          windeployqt bin/mergerino.exe --release --no-compiler-runtime --no-translations --no-opengl-sw --dir $packageDir --force-openssl
+          Copy-Item bin/mergerino.exe $packageDir/
+          ..\.CI\deploy-crt.ps1 $packageDir
+          if (Test-Path "Mergerino-1.0-win64.zip") {
+            Remove-Item "Mergerino-1.0-win64.zip" -Force
+          }
+          7z a Mergerino-1.0-win64.zip .\$packageDir\*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Mergerino-1.0-win64.zip
+          path: build/Mergerino-1.0-win64.zip

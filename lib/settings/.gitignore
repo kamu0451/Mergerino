@@ -1,0 +1,14 @@
+# Build directories
+/*build*
+/out
+
+compile_commands.json
+.cache/
+
+CMakeUserPresets.json
+
+# editors
+.vscode
+.vs
+.idea
+.clangd

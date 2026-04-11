@@ -1,0 +1,27 @@
+---
+name: Check formatting
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+
+concurrency:
+  group: check-formatting-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: jidicula/clang-format-action@v4.16.0
+        with:
+          clang-format-version: "15"
+
+      - uses: actionsx/prettier@v3
+        with:
+          args: --check .

@@ -1,0 +1,8 @@
+Patch Notes
+
+11/04/2026
+- Added support for Kick and YouTube live chat
+- Added platform highlights and logos for messages
+- 7TV Badges and paints update in realtime
+- Added start-up disclaimer when opening for the first time
+- Reduced YouTube reconnect timer to 3s from 30s

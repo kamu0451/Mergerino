@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows:
+      - Build
+    types:
+      - completed
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  publish-release:
+    name: Publish rolling release
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download build artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: Mergerino-1.0-win64.zip
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: release-artifact
+
+      - name: Create or update rolling release
+        uses: actions/github-script@v8
+        env:
+          ASSET_NAME: Mergerino-1.0-win64.zip
+          ASSET_PATH: release-artifact/Mergerino-1.0-win64.zip
+          RELEASE_NAME: Latest
+          RELEASE_TAG: latest
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const assetName = process.env.ASSET_NAME;
+            const assetPath = path.join(process.env.GITHUB_WORKSPACE, process.env.ASSET_PATH);
+            const headSha = context.payload.workflow_run.head_sha;
+            const releaseName = process.env.RELEASE_NAME;
+            const tag = process.env.RELEASE_TAG;
+            const body = [
+              'Rolling release for the latest successful `main` build.',
+              '',
+              'This release is replaced automatically on every successful push to `main`.',
+              '',
+              `Commit: ${headSha}`,
+              `Build: ${context.payload.workflow_run.html_url}`,
+            ].join('\n');
+
+            try {
+              await github.rest.git.getRef({
+                owner,
+                repo,
+                ref: `tags/${tag}`,
+              });
+
+              await github.rest.git.updateRef({
+                owner,
+                repo,
+                ref: `tags/${tag}`,
+                sha: headSha,
+                force: true,
+              });
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+
+              await github.rest.git.createRef({
+                owner,
+                repo,
+                ref: `refs/tags/${tag}`,
+                sha: headSha,
+              });
+            }
+
+            let release;
+
+            try {
+              release = (await github.rest.repos.getReleaseByTag({
+                owner,
+                repo,
+                tag,
+              })).data;
+
+              release = (await github.rest.repos.updateRelease({
+                owner,
+                repo,
+                release_id: release.id,
+                tag_name: tag,
+                name: releaseName,
+                body,
+                draft: false,
+                prerelease: false,
+              })).data;
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+
+              release = (await github.rest.repos.createRelease({
+                owner,
+                repo,
+                tag_name: tag,
+                target_commitish: headSha,
+                name: releaseName,
+                body,
+                draft: false,
+                prerelease: false,
+              })).data;
+            }
+
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+              owner,
+              repo,
+              release_id: release.id,
+              per_page: 100,
+            });
+
+            for (const asset of assets) {
+              if (asset.name === assetName) {
+                await github.rest.repos.deleteReleaseAsset({
+                  owner,
+                  repo,
+                  asset_id: asset.id,
+                });
+              }
+            }
+
+            const assetData = fs.readFileSync(assetPath);
+            const assetSize = fs.statSync(assetPath).size;
+
+            await github.rest.repos.uploadReleaseAsset({
+              owner,
+              repo,
+              release_id: release.id,
+              name: assetName,
+              headers: {
+                'content-length': assetSize,
+                'content-type': 'application/zip',
+              },
+              data: assetData,
+            });

@@ -22,6 +22,8 @@
 #include <QSvgRenderer>
 #include <QStringList>
 
+#include <algorithm>
+
 namespace {
 
 using namespace chatterino;
@@ -419,6 +421,9 @@ void MergedChannel::connectSourceSignals(
                          const MessagePtr &replacement) {
             this->replaceMergedMessage(previous, replacement, platform);
         });
+    connections.managedConnect(source->messagesCleared, [this, platform] {
+        this->clearMirrorsForPlatform(platform);
+    });
 
     if (auto *twitch = dynamic_cast<TwitchChannel *>(source.get()))
     {
@@ -500,7 +505,7 @@ void MergedChannel::appendMergedMessage(const MessagePtr &source,
 
     if (!key.isEmpty())
     {
-        this->mirroredMessages_[key] = merged;
+        this->insertMirror(key, merged);
     }
 
     const auto chatterName =
@@ -539,8 +544,8 @@ void MergedChannel::replaceMergedMessage(const MessagePtr &previous,
     const auto updatedKey = messageKey(replacement, platform);
     if (!updatedKey.isEmpty() && updatedKey != key)
     {
-        this->mirroredMessages_.erase(it);
-        this->mirroredMessages_[updatedKey] = updated;
+        this->eraseMirror(key);
+        this->insertMirror(updatedKey, updated);
         return;
     }
 
@@ -599,7 +604,7 @@ void MergedChannel::addYouTubeMessage(const MessagePtr &message)
 
     if (!key.isEmpty())
     {
-        this->mirroredMessages_[key] = merged;
+        this->insertMirror(key, merged);
     }
 
     const auto chatterName =
@@ -770,6 +775,47 @@ QString MergedChannel::messageKey(const MessagePtr &message,
     }
 
     return QString("%1|%2").arg(static_cast<int>(platform)).arg(key);
+}
+
+void MergedChannel::insertMirror(const QString &key, const MessagePtr &merged)
+{
+    const auto inserted =
+        this->mirroredMessages_.insert_or_assign(key, merged).second;
+    if (!inserted)
+    {
+        return;
+    }
+    this->mirroredOrder_.push_back(key);
+    while (this->mirroredOrder_.size() > MAX_MIRRORED_MESSAGES)
+    {
+        this->mirroredMessages_.erase(this->mirroredOrder_.front());
+        this->mirroredOrder_.pop_front();
+    }
+}
+
+void MergedChannel::eraseMirror(const QString &key)
+{
+    if (this->mirroredMessages_.erase(key) == 0)
+    {
+        return;
+    }
+    const auto it =
+        std::find(this->mirroredOrder_.begin(), this->mirroredOrder_.end(), key);
+    if (it != this->mirroredOrder_.end())
+    {
+        this->mirroredOrder_.erase(it);
+    }
+}
+
+void MergedChannel::clearMirrorsForPlatform(MessagePlatform platform)
+{
+    const auto prefix = QString::number(static_cast<int>(platform)) + u'|';
+    std::erase_if(this->mirroredMessages_, [&prefix](const auto &entry) {
+        return entry.first.startsWith(prefix);
+    });
+    std::erase_if(this->mirroredOrder_, [&prefix](const QString &key) {
+        return key.startsWith(prefix);
+    });
 }
 
 }  // namespace chatterino

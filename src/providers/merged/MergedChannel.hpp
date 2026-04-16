@@ -15,6 +15,7 @@
 #include <QColor>
 #include <QString>
 
+#include <deque>
 #include <memory>
 #include <unordered_map>
 
@@ -90,6 +91,12 @@ private:
     static QString messageKey(const MessagePtr &message,
                               MessagePlatform platform);
 
+    void insertMirror(const QString &key, const MessagePtr &merged);
+    void eraseMirror(const QString &key);
+    void clearMirrorsForPlatform(MessagePlatform platform);
+
+    static constexpr std::size_t MAX_MIRRORED_MESSAGES = 1000;
+
     MergedChannelConfig config_;
     QString displayName_;
     QString tooltipText_;
@@ -103,6 +110,7 @@ private:
     pajlada::Signals::SignalHolder youtubeConnections_;
 
     std::unordered_map<QString, MessagePtr> mirroredMessages_;
+    std::deque<QString> mirroredOrder_;
 
     bool twitchLive_{false};
     bool kickLive_{false};

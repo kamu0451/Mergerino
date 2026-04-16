@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: MIT
 
+// Generated from Version.hpp.in by CMake. Edit the .in template, not the
+// generated header in the build tree.
+
 #pragma once
 
 #include <QString>
@@ -34,8 +37,10 @@ namespace chatterino {
  *  - 2.4.0-alpha.2
  *  - 2.4.0-alpha
  **/
-inline const QString CHATTERINO_VERSION = QStringLiteral("1.2.0");
-inline const QString CHATTERINO_DISPLAY_VERSION = QStringLiteral("1.2");
+inline const QString CHATTERINO_VERSION =
+    QStringLiteral("@PROJECT_VERSION@");
+inline const QString CHATTERINO_DISPLAY_VERSION =
+    QStringLiteral("@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@");
 
 class Version
 {

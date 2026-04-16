@@ -1189,7 +1189,12 @@ set_target_properties(${LIBRARY_PROJECT}
 # The version project has definitions about the build.
 # To avoid recompilations because of changing preprocessor definitions,
 # this is its own project.
-set(VERSION_SOURCE_FILES common/Version.cpp common/Version.hpp)
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/common/Version.hpp.in
+    ${CMAKE_BINARY_DIR}/autogen/common/Version.hpp
+    @ONLY
+)
+set(VERSION_SOURCE_FILES common/Version.cpp)
 add_library(${VERSION_PROJECT} STATIC ${VERSION_SOURCE_FILES})
 target_compile_definitions(${VERSION_PROJECT} PRIVATE
     CHATTERINO_EXTRA_BUILD_STRING=${CHATTERINO_EXTRA_BUILD_STRING}
@@ -1199,7 +1204,7 @@ target_compile_definitions(${VERSION_PROJECT} PRIVATE
 
 # source group for IDEs
 source_group(TREE ${CMAKE_SOURCE_DIR} FILES ${VERSION_SOURCE_FILES})
-target_include_directories(${VERSION_PROJECT} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(${VERSION_PROJECT} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_BINARY_DIR}/autogen)
 target_link_libraries(${VERSION_PROJECT} PRIVATE Qt${MAJOR_QT_VERSION}::Core)
 target_compile_definitions(${VERSION_PROJECT} PRIVATE
     CHATTERINO_GIT_HASH=\"${GIT_HASH}\"

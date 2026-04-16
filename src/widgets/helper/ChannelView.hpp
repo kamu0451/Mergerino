@@ -328,10 +328,19 @@ private:
     bool canReplyToMessages() const;
 
     void updateID();
+    void refreshMessageColors();
+    bool isActivityPaneView() const;
+    const MessageColors &effectiveMessageColors() const;
+    float activityMessageScale() const;
+    float activityMessageImageScale() const;
+    std::optional<MessagePtr> transformActivityMessage(
+        const MessagePtr &message, int &pendingGiftRecipients) const;
+    void rebuildActivityMessages();
     ChannelViewID id_{};
 
     bool layoutQueued_ = false;
     bool bufferInvalidationQueued_ = false;
+    int activityGiftRecipientsToSuppress_ = 0;
 
     bool lastMessageHasAlternateBackground_ = false;
     bool lastMessageHasAlternateBackgroundReverse_ = true;
@@ -446,6 +455,7 @@ private:
     std::unordered_set<std::shared_ptr<MessageLayout>> messagesOnScreen_;
 
     MessageColors messageColors_;
+    MessageColors activityMessageColors_;
     MessagePreferences messagePreferences_;
 
     void scrollUpdateRequested();

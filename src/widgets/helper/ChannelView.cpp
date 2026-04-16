@@ -68,6 +68,7 @@
 #include <QJsonDocument>
 #include <QMessageBox>
 #include <QPainter>
+#include <QRegularExpression>
 #include <QScreen>
 #include <QStringBuilder>
 #include <QUrl>
@@ -86,6 +87,27 @@ constexpr size_t TOOLTIP_EMOTE_ENTRIES_LIMIT = 7;
 using namespace chatterino;
 
 constexpr int SCROLLBAR_PADDING = 8;
+const QRegularExpression ACTIVITY_GIFT_BOMB_SUMMARY_REGEX(
+    QStringLiteral(
+        R"(^(.+?)\s+(?:is gifting|gifted)\s+(\d+)\s+.*?\b(subs|subscriptions|memberships)\b(?:\s+to\b.*)?(?:!|\.)?(?: .*)?$)"),
+    QRegularExpression::CaseInsensitiveOption);
+const QRegularExpression ACTIVITY_GIFT_RECIPIENT_REGEX(
+    QStringLiteral(
+        R"(^.+\s+gifted\s+(?:(?:an?\s+|\d+\s+months?\s+of\s+an?\s+).*)?\b(?:sub|subscription)\b\s+to\s+.+!(?: .*)?$)"),
+    QRegularExpression::CaseInsensitiveOption);
+
+QColor blendColorTowards(const QColor &base, const QColor &target, qreal factor)
+{
+    factor = std::clamp(factor, 0.0, 1.0);
+
+    QColor result;
+    result.setRgbF(base.redF() * (1.0 - factor) + target.redF() * factor,
+                   base.greenF() * (1.0 - factor) +
+                       target.greenF() * factor,
+                   base.blueF() * (1.0 - factor) + target.blueF() * factor,
+                   base.alphaF() * (1.0 - factor) + target.alphaF() * factor);
+    return result;
+}
 
 void addEmoteContextMenuItems(QMenu *menu, const Emote &emote, QStringView kind)
 {
@@ -138,6 +160,80 @@ void addEmoteContextMenuItems(QMenu *menu, const Emote &emote, QStringView kind)
                                 QDesktopServices::openUrl(QUrl(url.string));
                             });
     }
+}
+
+bool isActivityRecipientSubgiftMessage(const Message &message)
+{
+    return message.flags.has(MessageFlag::Subscription) &&
+           message.flags.has(MessageFlag::System) &&
+           ACTIVITY_GIFT_RECIPIENT_REGEX.match(message.messageText).hasMatch();
+}
+
+QString normalizedActivityGiftUnit(const QString &rawUnit, int count)
+{
+    const auto unit = rawUnit.trimmed().toLower();
+    if (unit.contains(QStringLiteral("member")))
+    {
+        return count == 1 ? QStringLiteral("membership")
+                          : QStringLiteral("memberships");
+    }
+
+    return count == 1 ? QStringLiteral("sub") : QStringLiteral("subs");
+}
+
+QString compactActivityGiftBombText(const Message &message,
+                                    const QRegularExpressionMatch &match)
+{
+    auto name = match.captured(1).trimmed();
+    if (name.isEmpty())
+    {
+        name = message.displayName.trimmed();
+    }
+    if (name.isEmpty())
+    {
+        name = message.loginName.trimmed();
+    }
+    if (name.isEmpty())
+    {
+        name = QStringLiteral("Someone");
+    }
+
+    const int count = match.captured(2).toInt();
+    const auto unit = normalizedActivityGiftUnit(match.captured(3), count);
+    return QStringLiteral("%1 gifted %2 %3")
+        .arg(name, QString::number(count), unit);
+}
+
+MessagePtr makeActivityCompactMessage(const MessagePtr &message,
+                                      const QString &text)
+{
+    auto compact = message->clone();
+    compact->messageText = text;
+    compact->searchText = text;
+    compact->elements.clear();
+
+    bool copiedTimestamp = false;
+    for (const auto &element : message->elements)
+    {
+        if (dynamic_cast<const TimestampElement *>(element.get()) == nullptr)
+        {
+            continue;
+        }
+
+        compact->elements.emplace_back(element->clone());
+        copiedTimestamp = true;
+        break;
+    }
+
+    if (!copiedTimestamp)
+    {
+        compact->elements.emplace_back(
+            std::make_unique<TimestampElement>(message->parseTime));
+    }
+
+    compact->elements.emplace_back(std::make_unique<TextElement>(
+        text, MessageElementFlag::Text, MessageColor::System));
+    return compact;
 }
 
 void addImageContextMenuItems(QMenu *menu,
@@ -376,8 +472,7 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
                          this->queueUpdate();
                      });
 
-    this->messageColors_.applyTheme(getTheme(), this->isOverlay_,
-                                    getSettings()->overlayBackgroundOpacity);
+    this->refreshMessageColors();
     this->messagePreferences_.connectSettings(getSettings(),
                                               this->signalHolder_);
 }
@@ -609,8 +704,7 @@ void ChannelView::themeChangedEvent()
     BaseWidget::themeChangedEvent();
 
     this->setupHighlightAnimationColors();
-    this->messageColors_.applyTheme(getTheme(), this->isOverlay_,
-                                    getSettings()->overlayBackgroundOpacity);
+    this->refreshMessageColors();
     this->invalidateBuffers();
 }
 
@@ -725,12 +819,11 @@ void ChannelView::layoutVisibleMessages(
 
             redrawRequired |= message->layout(
                 {
-                    .messageColors = this->messageColors_,
+                    .messageColors = this->effectiveMessageColors(),
                     .flags = flags,
                     .width = layoutWidth,
-                    .scale = this->scale(),
-                    .imageScale = this->scale() *
-                                  static_cast<float>(this->devicePixelRatio()),
+                    .scale = this->activityMessageScale(),
+                    .imageScale = this->activityMessageImageScale(),
                 },
                 this->bufferInvalidationQueued_);
 
@@ -767,12 +860,11 @@ void ChannelView::updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
 
         message->layout(
             {
-                .messageColors = this->messageColors_,
+                .messageColors = this->effectiveMessageColors(),
                 .flags = flags,
                 .width = layoutWidth,
-                .scale = this->scale(),
-                .imageScale = this->scale() *
-                              static_cast<float>(this->devicePixelRatio()),
+                .scale = this->activityMessageScale(),
+                .imageScale = this->activityMessageImageScale(),
             },
             false);
 
@@ -822,6 +914,7 @@ void ChannelView::clearMessages()
 
     this->lastMessageHasAlternateBackground_ = false;
     this->lastMessageHasAlternateBackgroundReverse_ = true;
+    this->activityGiftRecipientsToSuppress_ = 0;
 }
 
 Scrollbar &ChannelView::getScrollBar()
@@ -938,10 +1031,128 @@ bool ChannelView::showScrollbarHighlights() const
     return this->channel_->getType() != Channel::Type::TwitchMentions;
 }
 
+void ChannelView::refreshMessageColors()
+{
+    this->messageColors_.applyTheme(getTheme(), this->isOverlay_,
+                                    getSettings()->overlayBackgroundOpacity);
+    this->activityMessageColors_ = this->messageColors_;
+    this->activityMessageColors_.systemText =
+        blendColorTowards(this->activityMessageColors_.regularText,
+                          this->activityMessageColors_.channelBackground, 0.10);
+}
+
+bool ChannelView::isActivityPaneView() const
+{
+    return this->split_ != nullptr && this->split_->isActivityPane();
+}
+
+const MessageColors &ChannelView::effectiveMessageColors() const
+{
+    return this->isActivityPaneView() ? this->activityMessageColors_
+                                      : this->messageColors_;
+}
+
+float ChannelView::activityMessageScale() const
+{
+    const auto multiplier = this->isActivityPaneView() && this->split_ != nullptr
+                                ? static_cast<float>(
+                                      this->split_->activityMessageScale())
+                                : 1.0F;
+    return this->scale() * multiplier;
+}
+
+float ChannelView::activityMessageImageScale() const
+{
+    return this->activityMessageScale() *
+           static_cast<float>(this->devicePixelRatio());
+}
+
+std::optional<MessagePtr> ChannelView::transformActivityMessage(
+    const MessagePtr &message, int &pendingGiftRecipients) const
+{
+    if (!this->isActivityPaneView())
+    {
+        return message;
+    }
+
+    const auto summaryMatch =
+        ACTIVITY_GIFT_BOMB_SUMMARY_REGEX.match(message->messageText);
+    if (summaryMatch.hasMatch())
+    {
+        pendingGiftRecipients =
+            message->platform == MessagePlatform::AnyOrTwitch
+                ? std::max(0, summaryMatch.captured(2).toInt())
+                : 0;
+        return makeActivityCompactMessage(
+            message, compactActivityGiftBombText(*message, summaryMatch));
+    }
+
+    if (pendingGiftRecipients > 0 && isActivityRecipientSubgiftMessage(*message))
+    {
+        pendingGiftRecipients--;
+        return std::nullopt;
+    }
+
+    return message;
+}
+
+void ChannelView::rebuildActivityMessages()
+{
+    auto snapshot = this->channel_->getMessageSnapshot();
+
+    this->messages_.clear();
+    this->scrollBar_->clearHighlights();
+    this->scrollBar_->resetBounds();
+    this->scrollBar_->setMaximum(0);
+    this->scrollBar_->setMinimum(0);
+    this->lastMessageHasAlternateBackground_ = false;
+    this->lastMessageHasAlternateBackgroundReverse_ = true;
+
+    int pendingGiftRecipients = 0;
+    size_t nMessagesAdded = 0;
+    for (const auto &msg : snapshot)
+    {
+        const auto transformed =
+            this->transformActivityMessage(msg, pendingGiftRecipients);
+        if (!transformed)
+        {
+            continue;
+        }
+
+        auto messageLayout = std::make_shared<MessageLayout>(*transformed);
+
+        if (this->lastMessageHasAlternateBackground_)
+        {
+            messageLayout->flags.set(MessageLayoutFlag::AlternateBackground);
+        }
+        this->lastMessageHasAlternateBackground_ =
+            !this->lastMessageHasAlternateBackground_;
+
+        if (this->channel_->shouldIgnoreHighlights())
+        {
+            messageLayout->flags.set(MessageLayoutFlag::IgnoreHighlights);
+        }
+
+        this->messages_.pushBack(messageLayout);
+        nMessagesAdded++;
+        if (this->showScrollbarHighlights())
+        {
+            this->scrollBar_->addHighlight(
+                (*transformed)->getScrollBarHighlight());
+        }
+    }
+
+    this->activityGiftRecipientsToSuppress_ = pendingGiftRecipients;
+    this->scrollBar_->setMaximum(
+        static_cast<qreal>(std::min(nMessagesAdded, this->messages_.limit())));
+    this->queueLayout();
+}
+
 void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
 {
     /// Clear connections from the last channel
     this->channelConnections_.clear();
+    this->activityGiftRecipientsToSuppress_ = 0;
 
     this->clearMessages();
     this->scrollBar_->clearHighlights();
@@ -1057,6 +1268,11 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
 
     this->scrollBar_->setMaximum(
         static_cast<qreal>(std::min(nMessagesAdded, this->messages_.limit())));
+
+    if (this->isActivityPaneView())
+    {
+        this->rebuildActivityMessages();
+    }
 
     //
     // Standard channel connections
@@ -1189,13 +1405,25 @@ bool ChannelView::hasSourceChannel() const
 void ChannelView::messageAppended(MessagePtr &message,
                                   std::optional<MessageFlags> overridingFlags)
 {
+    MessagePtr visibleMessage = message;
+    if (this->isActivityPaneView())
+    {
+        auto transformed = this->transformActivityMessage(
+            message, this->activityGiftRecipientsToSuppress_);
+        if (!transformed)
+        {
+            return;
+        }
+        visibleMessage = *transformed;
+    }
+
     auto *messageFlags = &message->flags;
     if (overridingFlags)
     {
         messageFlags = &*overridingFlags;
     }
 
-    auto messageRef = std::make_shared<MessageLayout>(message);
+    auto messageRef = std::make_shared<MessageLayout>(visibleMessage);
 
     if (this->lastMessageHasAlternateBackground_)
     {
@@ -1256,7 +1484,7 @@ void ChannelView::messageAppended(MessagePtr &message,
 
     if (this->showScrollbarHighlights())
     {
-        this->scrollBar_->addHighlight(message->getScrollBarHighlight());
+        this->scrollBar_->addHighlight(visibleMessage->getScrollBarHighlight());
     }
 
     this->queueLayout();
@@ -1264,6 +1492,12 @@ void ChannelView::messageAppended(MessagePtr &message,
 
 void ChannelView::messageAddedAtStart(std::vector<MessagePtr> &messages)
 {
+    if (this->isActivityPaneView())
+    {
+        this->rebuildActivityMessages();
+        return;
+    }
+
     std::vector<MessageLayoutPtr> messageRefs;
     messageRefs.resize(messages.size());
 
@@ -1317,6 +1551,15 @@ void ChannelView::messageAddedAtStart(std::vector<MessagePtr> &messages)
 void ChannelView::messageReplaced(size_t hint, const MessagePtr &prev,
                                   const MessagePtr &replacement)
 {
+    if (this->isActivityPaneView())
+    {
+        (void)hint;
+        (void)prev;
+        (void)replacement;
+        this->rebuildActivityMessages();
+        return;
+    }
+
     auto optItem = this->messages_.find(hint, [&](const auto &it) {
         return it->getMessagePtr() == prev;
     });
@@ -1342,6 +1585,12 @@ void ChannelView::messageReplaced(size_t hint, const MessagePtr &prev,
 
 void ChannelView::messagesUpdated()
 {
+    if (this->isActivityPaneView())
+    {
+        this->rebuildActivityMessages();
+        return;
+    }
+
     auto snapshot = this->channel_->getMessageSnapshot();
 
     this->messages_.clear();
@@ -1635,13 +1884,14 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         .painter = painter,
         .selection = this->selection_,
         .colorProvider = ColorProvider::instance(),
-        .messageColors = this->messageColors_,
+        .messageColors = this->effectiveMessageColors(),
         .preferences = this->messagePreferences_,
 
         .canvasWidth = this->width(),
         .isWindowFocused = this->window() == QApplication::activeWindow(),
         .isMentions = this->underlyingChannel_ ==
                       getApp()->getTwitch()->getMentionsChannel(),
+        .forceFlatEventHighlights = this->isActivityPaneView(),
 
         .y = -static_cast<int>(
             messagesSnapshot[start]->getHeight() *
@@ -1832,13 +2082,11 @@ void ChannelView::wheelEvent(QWheelEvent *event)
                 {
                     snapshot[i - 1]->layout(
                         {
-                            .messageColors = this->messageColors_,
+                            .messageColors = this->effectiveMessageColors(),
                             .flags = this->getFlags(),
                             .width = this->getLayoutWidth(),
-                            .scale = this->scale(),
-                            .imageScale =
-                                this->scale() *
-                                static_cast<float>(this->devicePixelRatio()),
+                            .scale = this->activityMessageScale(),
+                            .imageScale = this->activityMessageImageScale(),
                         },
                         false);
                     scrollFactor = 1;
@@ -1875,13 +2123,11 @@ void ChannelView::wheelEvent(QWheelEvent *event)
                 {
                     snapshot[i + 1]->layout(
                         {
-                            .messageColors = this->messageColors_,
+                            .messageColors = this->effectiveMessageColors(),
                             .flags = this->getFlags(),
                             .width = this->getLayoutWidth(),
-                            .scale = this->scale(),
-                            .imageScale =
-                                this->scale() *
-                                static_cast<float>(this->devicePixelRatio()),
+                            .scale = this->activityMessageScale(),
+                            .imageScale = this->activityMessageImageScale(),
                         },
                         false);
 

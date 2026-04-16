@@ -47,6 +47,8 @@ struct SplitDescriptor {
 
     // Whether "Moderation Mode" (the sword icon) is enabled in this split or not
     bool moderationMode_{false};
+    bool inputEnabled_{true};
+    qreal activityMessageScale_{0.9};
 
     std::optional<bool> spellCheckOverride;
 

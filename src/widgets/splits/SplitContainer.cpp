@@ -45,22 +45,15 @@ SplitContainer::SplitContainer(Notebook *parent)
         Split::modifierStatusChanged, [this](auto modifiers) {
             this->layout();
 
-            if (modifiers == SHOW_RESIZE_HANDLES_MODIFIERS)
+            for (auto &handle : this->resizeHandles_)
             {
-                for (auto &handle : this->resizeHandles_)
-                {
-                    handle->show();
-                    handle->raise();
-                }
-            }
-            else
-            {
-                for (auto &handle : this->resizeHandles_)
-                {
-                    handle->hide();
+                handle->show();
+                handle->raise();
 
-                    // Resize split modifier was released, ensure no resize handle has
-                    // isMouseDown_ set to true
+                // Resize split modifier was released, ensure no resize handle has
+                // isMouseDown_ set to true
+                if (modifiers != SHOW_RESIZE_HANDLES_MODIFIERS)
+                {
                     handle->isMouseDown_ = false;
                 }
             }
@@ -109,7 +102,7 @@ void SplitContainer::hideResizeHandles()
 
     for (auto &handle : this->resizeHandles_)
     {
-        handle->hide();
+        handle->isMouseDown_ = false;
     }
 }
 
@@ -137,6 +130,86 @@ Split *SplitContainer::appendNewSplit(bool openChannelNameDialog)
     }
 
     return split;
+}
+
+Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
+                                  SplitDirection direction, qreal sourceRatio,
+                                  qreal newRatio)
+{
+    assertInGuiThread();
+
+    if (!source)
+    {
+        return nullptr;
+    }
+
+    auto *sourceNodeBefore = this->baseNode_->findNodeContainingSplit(source);
+    if (!sourceNodeBefore)
+    {
+        return nullptr;
+    }
+
+    auto *originalParent = sourceNodeBefore->parent_;
+    const bool horizontalDirection = direction == SplitDirection::Left ||
+                                     direction == SplitDirection::Right;
+    const qreal originalFlex =
+        horizontalDirection ? sourceNodeBefore->flexH_ : sourceNodeBefore->flexV_;
+
+    auto *clone = new Split(this);
+    clone->setFilters(filters);
+    clone->setModerationMode(source->getModerationMode());
+    clone->setInputEnabled(source->inputEnabled());
+    clone->setActivityMessageScale(source->activityMessageScale());
+    clone->setCheckSpellingOverride(source->checkSpellingOverride());
+    clone->setChannel(source->getIndirectChannel());
+
+    this->insertSplit(clone, {
+                                 .relativeSplit = source,
+                                 .direction = direction,
+                             });
+
+    auto *sourceNodeAfter = this->baseNode_->findNodeContainingSplit(source);
+    auto *cloneNodeAfter = this->baseNode_->findNodeContainingSplit(clone);
+    if (!sourceNodeAfter || !cloneNodeAfter ||
+        sourceNodeAfter->parent_ != cloneNodeAfter->parent_)
+    {
+        return clone;
+    }
+
+    auto *parent = sourceNodeAfter->parent_;
+    if (!parent)
+    {
+        return clone;
+    }
+
+    const qreal totalRatio = std::max<qreal>(0.0001, sourceRatio + newRatio);
+    const bool preserveExistingFlex =
+        parent == originalParent &&
+        ((horizontalDirection &&
+          parent->type_ == Node::Type::HorizontalContainer) ||
+         (!horizontalDirection && parent->type_ == Node::Type::VerticalContainer));
+    const qreal baseFlex =
+        preserveExistingFlex ? std::max<qreal>(0.0001, originalFlex) : 1.0;
+
+    if (horizontalDirection &&
+        parent->type_ == Node::Type::HorizontalContainer)
+    {
+        sourceNodeAfter->flexH_ = baseFlex * sourceRatio / totalRatio;
+        cloneNodeAfter->flexH_ = baseFlex * newRatio / totalRatio;
+        sourceNodeAfter->flexV_ = 1;
+        cloneNodeAfter->flexV_ = 1;
+    }
+    else if (!horizontalDirection &&
+             parent->type_ == Node::Type::VerticalContainer)
+    {
+        sourceNodeAfter->flexV_ = baseFlex * sourceRatio / totalRatio;
+        cloneNodeAfter->flexV_ = baseFlex * newRatio / totalRatio;
+        sourceNodeAfter->flexH_ = 1;
+        cloneNodeAfter->flexH_ = 1;
+    }
+
+    this->layout();
+    return clone;
 }
 
 void SplitContainer::insertSplit(Split *split, InsertOptions &&options)
@@ -574,12 +647,8 @@ void SplitContainer::layout()
             handle->setGeometry(resizeRect.rect);
             handle->setVertical(resizeRect.vertical);
             handle->node = resizeRect.node;
-
-            if (Split::modifierStatus == SHOW_RESIZE_HANDLES_MODIFIERS)
-            {
-                handle->show();
-                handle->raise();
-            }
+            handle->show();
+            handle->raise();
 
             i++;
         }
@@ -878,7 +947,13 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
         SplitNodeDescriptor result;
         result.type_ = channelTypeToString(channelType);
         result.channelName_ = currentNode->split_->getChannel()->getName();
+        result.moderationMode_ = currentNode->split_->getModerationMode();
         result.filters_ = currentNode->split_->getFilters();
+        result.spellCheckOverride =
+            currentNode->split_->checkSpellingOverride();
+        result.inputEnabled_ = currentNode->split_->inputEnabled();
+        result.activityMessageScale_ =
+            currentNode->split_->activityMessageScale();
         return result;
     }
 
@@ -913,6 +988,8 @@ void SplitContainer::applyFromDescriptorRecursively(
         split->setModerationMode(splitNode.moderationMode_);
         split->setFilters(splitNode.filters_);
         split->setCheckSpellingOverride(splitNode.spellCheckOverride);
+        split->setInputEnabled(splitNode.inputEnabled_);
+        split->setActivityMessageScale(splitNode.activityMessageScale_);
 
         this->insertSplit(split);
 
@@ -949,6 +1026,8 @@ void SplitContainer::applyFromDescriptorRecursively(
                 split->setChannel(WindowManager::decodeChannel(splitNode));
                 split->setModerationMode(splitNode.moderationMode_);
                 split->setCheckSpellingOverride(splitNode.spellCheckOverride);
+                split->setInputEnabled(splitNode.inputEnabled_);
+                split->setActivityMessageScale(splitNode.activityMessageScale_);
 
                 auto node = std::make_shared<Node>();
                 node->parent_ = baseNode;
@@ -992,6 +1071,11 @@ void SplitContainer::refreshTabTitle()
 
     for (const auto &chatWidget : this->splits_)
     {
+        if (chatWidget->isActivityPane())
+        {
+            continue;
+        }
+
         auto channelName = chatWidget->getChannel()->getLocalizedName();
         if (channelName.isEmpty())
         {
@@ -1005,6 +1089,20 @@ void SplitContainer::refreshTabTitle()
         newTitle += channelName;
 
         first = false;
+    }
+
+    if (newTitle.isEmpty())
+    {
+        for (const auto &chatWidget : this->splits_)
+        {
+            if (!chatWidget->isActivityPane())
+            {
+                continue;
+            }
+
+            newTitle = chatWidget->activityPaneTitle();
+            break;
+        }
     }
 
     if (newTitle.isEmpty())
@@ -1631,10 +1729,11 @@ SplitContainer::ResizeHandle::ResizeHandle(SplitContainer *_parent)
 void SplitContainer::ResizeHandle::paintEvent(QPaintEvent * /*event*/)
 {
     QPainter painter(this);
-    painter.setPen(QPen(getApp()->getThemes()->splits.resizeHandle, 2));
+    QColor background = Qt::transparent;
+    QColor line = getApp()->getThemes()->splits.header.border;
+    painter.setPen(QPen(line, 1));
 
-    painter.fillRect(this->rect(),
-                     getApp()->getThemes()->splits.resizeHandleBackground);
+    painter.fillRect(this->rect(), background);
 
     if (this->vertical_)
     {

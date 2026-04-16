@@ -37,12 +37,14 @@
 #include "widgets/TooltipWidget.hpp"
 
 #include <QDrag>
+#include <QActionGroup>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMenu>
 #include <QMimeData>
 #include <QPainter>
 
+#include <array>
 #include <cmath>
 
 namespace {
@@ -354,6 +356,14 @@ void SplitHeader::initializeLayout()
         },
         this, {4, 4});
 
+    this->alertsButton_ = new SvgButton(
+        {
+            .dark = ":/buttons/alertsPane-darkMode.svg",
+            .light = ":/buttons/alertsPane-lightMode.svg",
+        },
+        this, {4, 4});
+    this->alertsButton_->setToolTip("Open donations + subs tab");
+
     this->addButton_ = new DrawnButton(DrawnButton::Symbol::Plus,
                                        {
                                            .padding = 3,
@@ -392,6 +402,8 @@ void SplitHeader::initializeLayout()
             w->hide();
             w->setMenu(this->createChatModeMenu());
         }),
+        // alerts
+        this->alertsButton_,
         // moderator
         this->moderationButton_,
         // chatter list
@@ -439,6 +451,10 @@ void SplitHeader::initializeLayout()
                      [this]() {
                          this->split_->openChatterList();
                      });
+
+    QObject::connect(this->alertsButton_, &Button::leftClicked, this, [this]() {
+        this->split_->openAlertsPane();
+    });
 
     QObject::connect(this->addButton_, &Button::leftClicked, this, [this]() {
         this->split_->addSibling();
@@ -489,6 +505,46 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
     menu->addAction("Set filters",
                     h->getDisplaySequence(HotkeyCategory::Split, "pickFilters"),
                     this->split_, &Split::setFiltersDialog);
+    if (this->split_->isActivityPane())
+    {
+        struct ActivityScaleOption {
+            const char *label;
+            qreal scale;
+        };
+        constexpr std::array<ActivityScaleOption, 8> scaleOptions{{
+            {"75%", 0.75},
+            {"80%", 0.80},
+            {"85%", 0.85},
+            {"90%", 0.90},
+            {"95%", 0.95},
+            {"100%", 1.00},
+            {"105%", 1.05},
+            {"110%", 1.10},
+        }};
+
+        auto *sizeMenu = new QMenu("Chat line size", this);
+        auto *sizeGroup = new QActionGroup(sizeMenu);
+        sizeGroup->setExclusive(true);
+
+        for (const auto &option : scaleOptions)
+        {
+            auto *action = sizeMenu->addAction(option.label);
+            action->setCheckable(true);
+            action->setActionGroup(sizeGroup);
+            QObject::connect(sizeMenu, &QMenu::aboutToShow, this,
+                             [this, action, scale = option.scale]() {
+                                 action->setChecked(qAbs(
+                                     this->split_->activityMessageScale() -
+                                     scale) < 0.0001);
+                             });
+            QObject::connect(action, &QAction::triggered, this,
+                             [this, scale = option.scale]() {
+                                 this->split_->setActivityMessageScale(scale);
+                             });
+        }
+
+        menu->addMenu(sizeMenu);
+    }
     menu->addSeparator();
 
     auto *twitchChannel =
@@ -936,6 +992,7 @@ void SplitHeader::scaleChangedEvent(float scale)
 
     this->setFixedHeight(w);
     this->dropdownButton_->setFixedWidth(w);
+    this->alertsButton_->setFixedWidth(w);
     this->moderationButton_->setFixedWidth(w);
     this->chattersButton_->setFixedWidth(w);
 
@@ -1060,7 +1117,11 @@ void SplitHeader::updateChannelText()
         }
     }
 
-    if (!title.isEmpty() && !this->split_->getFilters().empty())
+    if (this->split_->isActivityPane())
+    {
+        title = this->split_->activityPaneTitle();
+    }
+    else if (!title.isEmpty() && !this->split_->getFilters().empty())
     {
         title += " - filtered";
     }
@@ -1071,6 +1132,33 @@ void SplitHeader::updateChannelText()
 void SplitHeader::updateIcons()
 {
     auto channel = this->split_->getChannel();
+    auto activityInactive = this->theme->splits.header.text;
+    activityInactive.setAlpha(this->theme->isLightTheme() ? 120 : 150);
+    const auto activityActive = this->theme->isLightTheme()
+                                    ? QColor(24, 24, 24)
+                                    : QColor(255, 255, 255);
+
+    if (this->split_->isActivityPane())
+    {
+        this->alertsButton_->hide();
+        this->moderationButton_->hide();
+
+        if (channel->hasModRights() && channel->isTwitchChannel())
+        {
+            this->chattersButton_->show();
+        }
+        else
+        {
+            this->chattersButton_->hide();
+        }
+
+        return;
+    }
+
+    this->alertsButton_->show();
+    this->alertsButton_->setColor(this->split_->hasLinkedActivityPane()
+                                      ? std::optional<QColor>(activityActive)
+                                      : std::optional<QColor>(activityInactive));
 
     if (channel->isTwitchOrKickChannel() || channel->isMergedChannel())
     {
@@ -1256,6 +1344,7 @@ void SplitHeader::themeChangedEvent()
         .backgroundHover = bg,
     });
 
+    this->updateIcons();
     this->update();
 }
 

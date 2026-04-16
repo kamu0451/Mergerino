@@ -55,6 +55,11 @@ public:
 
     ChannelView &getChannelView();
     SplitInput &getInput();
+    bool inputEnabled() const;
+    bool isActivityPane() const;
+    bool hasLinkedActivityPane();
+    QString activityPaneTitle() const;
+    qreal activityMessageScale() const;
 
     IndirectChannel getIndirectChannel();
     ChannelPtr getChannel() const;
@@ -65,6 +70,8 @@ public:
 
     void setModerationMode(bool value);
     bool getModerationMode() const;
+    void setInputEnabled(bool enabled);
+    void setActivityMessageScale(qreal value);
 
     std::optional<bool> checkSpellingOverride() const;
     void setCheckSpellingOverride(std::optional<bool> override);
@@ -75,6 +82,7 @@ public:
                                 std::function<void(bool)> callback);
     void updateGifEmotes();
     void updateLastReadMessage();
+    void updateHeaderIcons();
     void setIsTopRightSplit(bool value);
 
     void drag();
@@ -112,6 +120,7 @@ public:
     pajlada::Signals::Signal<SplitDirection, Split *> insertSplitRequested;
 
 protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
     void paintEvent(QPaintEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
@@ -126,6 +135,7 @@ protected:
 private:
     void channelNameUpdated(const QString &newChannelName);
     void handleModifiers(Qt::KeyboardModifiers modifiers);
+    void updateInputVisibility();
     void updateInputPlaceholder();
     void addShortcuts() override;
 
@@ -158,6 +168,8 @@ private:
 
     bool moderationMode_{};
     bool isTopRightSplit_{};
+    bool inputEnabled_{true};
+    qreal activityMessageScale_{0.9};
 
     bool isMouseOver_{};
     bool isDragging_{};
@@ -188,6 +200,7 @@ public Q_SLOTS:
     void addSibling();
     void deleteFromContainer();
     void changeChannel();
+    void openAlertsPane();
     void explainMoving();
     void explainSplitting();
     void popup();

@@ -108,7 +108,7 @@ QDateTime parseTimestampUsec(const QString &timestampUsec)
 int cappedYouTubePollDelay(int timeoutMs)
 {
     constexpr int minimumDelayMs = 1000;
-    constexpr int maximumDelayMs = 1500;
+    constexpr int maximumDelayMs = 30000;
 
     if (timeoutMs <= 0)
     {
@@ -726,6 +726,7 @@ void YouTubeLiveChat::poll()
 
             const auto continuations = continuation["continuations"].toArray();
             int nextDelay = 1000;
+            bool updatedContinuation = false;
             for (const auto &continuationValue : continuations)
             {
                 auto continuationObject = continuationValue.toObject();
@@ -736,6 +737,7 @@ void YouTubeLiveChat::poll()
                     this->continuation_ = timed["continuation"].toString();
                     nextDelay = cappedYouTubePollDelay(
                         timed["timeoutMs"].toInt(nextDelay));
+                    updatedContinuation = !this->continuation_.isEmpty();
                     break;
                 }
 
@@ -748,8 +750,21 @@ void YouTubeLiveChat::poll()
                         invalidation["continuation"].toString();
                     nextDelay = cappedYouTubePollDelay(
                         invalidation["timeoutMs"].toInt(nextDelay));
+                    updatedContinuation = !this->continuation_.isEmpty();
                     break;
                 }
+            }
+
+            if (!updatedContinuation)
+            {
+                this->setLive(false);
+                this->continuation_.clear();
+                this->setStatusText(
+                    "YouTube live chat continuation expired. Reconnecting.",
+                    !this->failureReported_);
+                this->failureReported_ = true;
+                this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
+                return;
             }
 
             this->failureReported_ = false;
@@ -763,11 +778,12 @@ void YouTubeLiveChat::poll()
             }
 
             this->setLive(false);
+            this->continuation_.clear();
             this->setStatusText(
-                "YouTube live chat polling failed. Retrying shortly.",
+                "YouTube live chat polling failed. Reconnecting.",
                 !this->failureReported_);
             this->failureReported_ = true;
-            this->schedulePoll(YOUTUBE_RECONNECT_DELAY_MS);
+            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
         })
         .execute();
 }
@@ -1130,6 +1146,8 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     }
 
     QString text;
+    QJsonValue authorNameValue = renderer["authorName"];
+    QString authorId = renderer["authorExternalChannelId"].toString();
     MessageFlags flags;
 
     if (rendererName == "liveChatTextMessageRenderer")
@@ -1161,12 +1179,32 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
             text += " " + body;
         }
     }
+    else if (rendererName ==
+             "liveChatSponsorshipsGiftPurchaseAnnouncementRenderer")
+    {
+        flags.set(MessageFlag::Subscription);
+        const auto header =
+            renderer["header"].toObject()["liveChatSponsorshipsHeaderRenderer"]
+                .toObject();
+        authorNameValue = header["authorName"];
+        text = parseText(header["primaryText"]);
+        if (authorId.isEmpty())
+        {
+            authorId = header["authorExternalChannelId"].toString();
+        }
+    }
+    else if (rendererName ==
+             "liveChatSponsorshipsGiftRedemptionAnnouncementRenderer")
+    {
+        flags.set(MessageFlag::Subscription);
+        text = parseText(renderer["message"]);
+    }
     else
     {
         return nullptr;
     }
 
-    const auto author = parseText(renderer["authorName"]);
+    const auto author = parseText(authorNameValue);
     if (author.isEmpty())
     {
         return nullptr;
@@ -1179,7 +1217,7 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     builder->loginName = author;
     builder->displayName = author;
     builder->localizedName = author;
-    builder->userID = renderer["authorExternalChannelId"].toString();
+    builder->userID = authorId;
     builder->channelName = channelName;
     builder->messageText = text;
     builder->searchText = author + ": " + text;

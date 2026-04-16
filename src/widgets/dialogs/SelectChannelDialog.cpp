@@ -243,7 +243,7 @@ SelectChannelDialog::SelectChannelDialog(QWidget *parent)
     baseLayout->addRow("Tab name", ui.tabName);
     mergedLayout->addWidget(baseGroup);
 
-    auto *platformGroup = new QGroupBox("Platforms");
+    auto *platformGroup = new QGroupBox;
     auto *platformLayout = new QFormLayout(platformGroup);
 
     ui.enableTwitch = new QCheckBox("Enable Twitch");
@@ -273,6 +273,11 @@ SelectChannelDialog::SelectChannelDialog(QWidget *parent)
         "Choose whether merged messages use platform-colored rows, "
         "platform logo badges, or both.");
     platformLayout->addRow("Platform style", ui.indicatorMode);
+    ui.enableActivity = new QCheckBox("Enable activity tab");
+    ui.enableActivity->setToolTip(
+        "Open the linked activity tab for this merged tab and keep it in "
+        "sync with this channel.");
+    platformLayout->addRow(ui.enableActivity);
 
     mergedLayout->addWidget(platformGroup);
     mergedLayout->addStretch(1);
@@ -345,6 +350,7 @@ void SelectChannelDialog::setMergedDefaults()
 {
     this->ui_.notebook->select(this->ui_.mergedPage);
     this->ui_.tabName->clear();
+    this->ui_.enableActivity->setChecked(false);
     this->ui_.enableTwitch->setChecked(true);
     this->ui_.twitchName->clear();
     this->ui_.enableKick->setChecked(true);
@@ -442,9 +448,23 @@ void SelectChannelDialog::setSelectedChannel(
     }
 }
 
+void SelectChannelDialog::setActivityPaneEnabled(bool enabled)
+{
+    if (this->ui_.enableActivity)
+    {
+        this->ui_.enableActivity->setChecked(enabled);
+    }
+}
+
 IndirectChannel SelectChannelDialog::getSelectedChannel() const
 {
     return this->selectedChannel_;
+}
+
+bool SelectChannelDialog::activityPaneEnabled() const
+{
+    return this->ui_.enableActivity != nullptr &&
+           this->ui_.enableActivity->isChecked();
 }
 
 bool SelectChannelDialog::hasSeletedChannel() const

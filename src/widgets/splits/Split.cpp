@@ -10,6 +10,7 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/commands/Command.hpp"
 #include "controllers/commands/CommandController.hpp"
+#include "controllers/filters/FilterRecord.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "controllers/notifications/NotificationController.hpp"
 #include "providers/kick/KickAccount.hpp"
@@ -48,6 +49,7 @@
 #include <QDesktopServices>
 #include <QDrag>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QLabel>
 #include <QListWidget>
 #include <QMimeData>
@@ -56,10 +58,202 @@
 #include <QSet>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <functional>
 
 namespace chatterino {
 namespace {
+constexpr qreal ALERTS_PRIMARY_RATIO = 0.7;
+constexpr qreal ALERTS_SECONDARY_RATIO = 0.3;
+constexpr qreal MIN_ACTIVITY_MESSAGE_SCALE = 0.75;
+constexpr qreal MAX_ACTIVITY_MESSAGE_SCALE = 1.1;
+
+QStringList normalizedFilterIds(const QList<QUuid> &ids)
+{
+    QStringList out;
+    out.reserve(ids.size());
+    for (const auto &id : ids)
+    {
+        out.append(id.toString(QUuid::WithoutBraces));
+    }
+    out.sort(Qt::CaseInsensitive);
+    return out;
+}
+
+QJsonObject encodeChannelSignature(IndirectChannel channel)
+{
+    QJsonObject obj;
+    WindowManager::encodeChannel(std::move(channel), obj);
+    return obj;
+}
+
+std::optional<QUuid> findAlertsFilterId()
+{
+    static const auto filterText = QStringLiteral(
+        "flags.sub_message || flags.elevated_message || flags.cheer_message");
+
+    const auto filters = getSettings()->filterRecords.readOnly();
+    for (const auto &filter : *filters)
+    {
+        if (filter && filter->getFilter() == filterText)
+        {
+            return filter->getId();
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::optional<QUuid> ensureAlertsFilter()
+{
+    static const auto filterName =
+        QStringLiteral("Mergerino donations + subs");
+    if (const auto existing = findAlertsFilterId())
+    {
+        return existing;
+    }
+
+    static const auto filterText = QStringLiteral(
+        "flags.sub_message || flags.elevated_message || flags.cheer_message");
+    auto filter = std::make_shared<FilterRecord>(filterName, filterText);
+    if (!filter->valid())
+    {
+        return std::nullopt;
+    }
+
+    getSettings()->filterRecords.append(filter);
+    (void)getSettings()->requestSave();
+    return filter->getId();
+}
+
+bool splitMatchesChannelAndFilters(Split *split,
+                                   const QJsonObject &channelSignature,
+                                   const QList<QUuid> &filterIds)
+{
+    if (!split)
+    {
+        return false;
+    }
+
+    return encodeChannelSignature(split->getIndirectChannel()) ==
+               channelSignature &&
+           normalizedFilterIds(split->getFilters()) ==
+               normalizedFilterIds(filterIds);
+}
+
+Split *findLinkedActivityPane(Split *source)
+{
+    auto *container = dynamic_cast<SplitContainer *>(source->parentWidget());
+    const auto alertFilterId = findAlertsFilterId();
+    if (!container || !alertFilterId || source->getChannel()->isEmpty())
+    {
+        return nullptr;
+    }
+
+    auto filterIds = source->getFilters();
+    if (!filterIds.contains(*alertFilterId))
+    {
+        filterIds.append(*alertFilterId);
+    }
+
+    const auto channelSignature = encodeChannelSignature(
+        source->getIndirectChannel());
+    for (auto *split : container->getSplits())
+    {
+        if (split == source || !split->isActivityPane())
+        {
+            continue;
+        }
+
+        if (splitMatchesChannelAndFilters(split, channelSignature, filterIds))
+        {
+            return split;
+        }
+    }
+
+    return nullptr;
+}
+
+Split *findActivityOwnerSplit(Split *activitySplit)
+{
+    if (!activitySplit || !activitySplit->isActivityPane())
+    {
+        return activitySplit;
+    }
+
+    auto *container =
+        dynamic_cast<SplitContainer *>(activitySplit->parentWidget());
+    const auto alertFilterId = findAlertsFilterId();
+    if (!container || !alertFilterId || activitySplit->getChannel()->isEmpty())
+    {
+        return nullptr;
+    }
+
+    auto filterIds = activitySplit->getFilters();
+    filterIds.removeAll(*alertFilterId);
+
+    const auto channelSignature = encodeChannelSignature(
+        activitySplit->getIndirectChannel());
+    for (auto *split : container->getSplits())
+    {
+        if (split == activitySplit || split->isActivityPane())
+        {
+            continue;
+        }
+
+        if (splitMatchesChannelAndFilters(split, channelSignature, filterIds))
+        {
+            return split;
+        }
+    }
+
+    return nullptr;
+}
+
+void refreshActivityIcons(SplitContainer *container)
+{
+    if (!container)
+    {
+        return;
+    }
+
+    for (auto *split : container->getSplits())
+    {
+        split->updateHeaderIcons();
+    }
+}
+
+void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
+                            bool enabled)
+{
+    auto *container = dynamic_cast<SplitContainer *>(ownerSplit->parentWidget());
+    if (!container)
+    {
+        return;
+    }
+
+    if (!enabled)
+    {
+        if (activitySplit)
+        {
+            container->deleteSplit(activitySplit);
+        }
+        refreshActivityIcons(container);
+        return;
+    }
+
+    if (activitySplit)
+    {
+        activitySplit->setChannel(ownerSplit->getIndirectChannel());
+        activitySplit->setFilters(ownerSplit->getFilters());
+        activitySplit->setInputEnabled(false);
+        refreshActivityIcons(container);
+        return;
+    }
+
+    ownerSplit->openAlertsPane();
+}
+
 void showTutorialVideo(QWidget *parent, const QString &source,
                        const QString &title, const QString &description)
 {
@@ -101,6 +295,7 @@ Split::Split(QWidget *parent)
     this->view_->setPausable(true);
     this->view_->setFocusProxy(this->input_->ui_.textEdit);
     this->setFocusProxy(this->input_->ui_.textEdit);
+    this->view_->installEventFilter(this);
 
     this->vbox_->setSpacing(0);
     this->vbox_->setContentsMargins(1, 1, 1, 1);
@@ -173,40 +368,18 @@ Split::Split(QWidget *parent)
         });
 
     // this connection can be ignored since the SplitInput is owned by this Split
-    std::ignore =
-        this->input_->textChanged.connect([this](const QString &newText) {
-            if (getSettings()->showEmptyInput)
-            {
-                // We always show the input regardless of the text, so we can early out here
-                return;
-            }
-
-            if (newText.isEmpty())
-            {
-                this->input_->hide();
-            }
-            else if (this->input_->isHidden())
-            {
-                // Text updated and the input was previously hidden, show it
-                this->input_->show();
-            }
+    std::ignore = this->input_->textChanged.connect(
+        [this](const QString & /* newText */) {
+            this->updateInputVisibility();
         });
 
     getSettings()->showEmptyInput.connect(
-        [this](const bool &showEmptyInput) {
-            if (showEmptyInput)
-            {
-                this->input_->show();
-            }
-            else
-            {
-                if (this->input_->getInputText().isEmpty())
-                {
-                    this->input_->hide();
-                }
-            }
+        [this](const bool & /* showEmptyInput */) {
+            this->updateInputVisibility();
         },
         this->signalHolder_);
+
+    this->updateInputVisibility();
 
     this->header_->updateIcons();
     this->overlay_->hide();
@@ -753,6 +926,157 @@ SplitInput &Split::getInput()
     return *this->input_;
 }
 
+bool Split::inputEnabled() const
+{
+    return this->inputEnabled_;
+}
+
+bool Split::isActivityPane() const
+{
+    return !this->inputEnabled_;
+}
+
+bool Split::hasLinkedActivityPane()
+{
+    return findLinkedActivityPane(this) != nullptr;
+}
+
+QString Split::activityPaneTitle() const
+{
+    if (auto *merged = dynamic_cast<MergedChannel *>(this->getChannel().get()))
+    {
+        const auto tabName = merged->config().tabName.trimmed();
+        if (!tabName.isEmpty())
+        {
+            return tabName + "'s Activity";
+        }
+    }
+
+    auto *container = dynamic_cast<SplitContainer *>(this->parentWidget());
+    if (container)
+    {
+        auto *tab = container->getTab();
+        if (tab && tab->hasCustomTitle() && !tab->getCustomTitle().isEmpty())
+        {
+            return tab->getCustomTitle() + "'s Activity";
+        }
+
+        for (auto *split : container->getSplits())
+        {
+            if (split == this || split->isActivityPane())
+            {
+                continue;
+            }
+
+            const auto baseName = split->getChannel()->getLocalizedName();
+            if (!baseName.isEmpty())
+            {
+                return baseName + "'s Activity";
+            }
+        }
+
+        if (tab && !tab->getTitle().isEmpty())
+        {
+            return tab->getTitle() + "'s Activity";
+        }
+    }
+
+    return QStringLiteral("Activity");
+}
+
+qreal Split::activityMessageScale() const
+{
+    return this->activityMessageScale_;
+}
+
+bool Split::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == this->view_)
+    {
+        if (event->type() == QEvent::FocusIn)
+        {
+            this->focused.invoke();
+        }
+        else if (event->type() == QEvent::FocusOut)
+        {
+            this->focusLost.invoke();
+        }
+    }
+
+    return BaseWidget::eventFilter(watched, event);
+}
+
+void Split::setInputEnabled(bool enabled)
+{
+    if (this->inputEnabled_ == enabled)
+    {
+        return;
+    }
+
+    this->inputEnabled_ = enabled;
+
+    if (!enabled)
+    {
+        auto filters = this->getFilters();
+        if (const auto alertFilterId = ensureAlertsFilter())
+        {
+            if (!filters.contains(*alertFilterId))
+            {
+                filters.append(*alertFilterId);
+                this->view_->setFilters(filters);
+            }
+        }
+    }
+
+    getApp()->getWindows()->queueSave();
+    this->updateInputVisibility();
+    this->header_->updateChannelText();
+    this->actionRequested.invoke(Action::RefreshTab);
+}
+
+void Split::setActivityMessageScale(qreal value)
+{
+    const auto clamped =
+        std::clamp(value, MIN_ACTIVITY_MESSAGE_SCALE, MAX_ACTIVITY_MESSAGE_SCALE);
+    if (qFuzzyCompare(this->activityMessageScale_, clamped))
+    {
+        return;
+    }
+
+    this->activityMessageScale_ = clamped;
+    this->view_->invalidateBuffers();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::updateInputVisibility()
+{
+    if (!this->inputEnabled_)
+    {
+        this->input_->setEnabled(false);
+        this->input_->hide();
+        this->view_->setFocusProxy(nullptr);
+        this->setFocusProxy(this->view_);
+        if (this->input_->ui_.textEdit->hasFocus())
+        {
+            this->view_->setFocus(Qt::OtherFocusReason);
+        }
+        return;
+    }
+
+    this->input_->setEnabled(true);
+    this->view_->setFocusProxy(this->input_->ui_.textEdit);
+    this->setFocusProxy(this->input_->ui_.textEdit);
+
+    if (getSettings()->showEmptyInput || !this->input_->getInputText().isEmpty())
+    {
+        this->input_->show();
+    }
+    else
+    {
+        this->input_->hide();
+    }
+}
+
 void Split::updateInputPlaceholder()
 {
     if (auto *merged = dynamic_cast<MergedChannel *>(this->getChannel().get()))
@@ -1010,27 +1334,42 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
         return;
     }
 
+    QPointer<Split> activityOwnerSplit =
+        this->isActivityPane() ? findActivityOwnerSplit(this) : this;
+    QPointer<Split> linkedActivityPane =
+        activityOwnerSplit ? findLinkedActivityPane(activityOwnerSplit) : nullptr;
+
     auto *dialog = new SelectChannelDialog(this);
     if (!empty)
     {
-        dialog->setSelectedChannel(this->getIndirectChannel());
+        dialog->setSelectedChannel(activityOwnerSplit
+                                       ? activityOwnerSplit->getIndirectChannel()
+                                       : this->getIndirectChannel());
     }
     else
     {
         dialog->setSelectedChannel({});
     }
+    dialog->setActivityPaneEnabled(linkedActivityPane != nullptr);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(dialogTitle);
     dialog->show();
     // We can safely ignore this signal connection since the dialog will be closed before
     // this Split is closed
     std::ignore = dialog->closed.connect([=, this] {
-        if (dialog->hasSeletedChannel())
+        const bool didSelectChannel = dialog->hasSeletedChannel();
+        if (didSelectChannel && activityOwnerSplit)
         {
-            this->setChannel(dialog->getSelectedChannel());
+            activityOwnerSplit->setChannel(dialog->getSelectedChannel());
         }
 
-        callback(dialog->hasSeletedChannel());
+        callback(didSelectChannel);
+
+        if (didSelectChannel && activityOwnerSplit)
+        {
+            syncLinkedActivityPane(activityOwnerSplit, linkedActivityPane,
+                                   dialog->activityPaneEnabled());
+        }
     });
     this->selectChannelDialog_ = dialog;
 }
@@ -1043,6 +1382,11 @@ void Split::updateGifEmotes()
 void Split::updateLastReadMessage()
 {
     this->view_->updateLastReadMessage();
+}
+
+void Split::updateHeaderIcons()
+{
+    this->header_->updateIcons();
 }
 
 void Split::paintEvent(QPaintEvent *)
@@ -1156,6 +1500,74 @@ void Split::changeChannel()
         });
 }
 
+void Split::openAlertsPane()
+{
+    auto *container = dynamic_cast<SplitContainer *>(this->parentWidget());
+    if (!container || this->getChannel()->isEmpty())
+    {
+        return;
+    }
+
+    if (this->isActivityPane())
+    {
+        container->deleteSplit(this);
+        for (auto *split : container->getSplits())
+        {
+            split->header_->updateIcons();
+        }
+        return;
+    }
+
+    const auto alertFilterId = ensureAlertsFilter();
+    if (!alertFilterId)
+    {
+        return;
+    }
+
+    auto filterIds = this->getFilters();
+    if (!filterIds.contains(*alertFilterId))
+    {
+        filterIds.append(*alertFilterId);
+    }
+
+    const auto channelSignature = encodeChannelSignature(
+        this->getIndirectChannel());
+    for (auto *split : container->getSplits())
+    {
+        if (split == this)
+        {
+            continue;
+        }
+
+        if (splitMatchesChannelAndFilters(split, channelSignature, filterIds) &&
+            split->isActivityPane())
+        {
+            container->deleteSplit(split);
+            for (auto *other : container->getSplits())
+            {
+                other->header_->updateIcons();
+            }
+            return;
+        }
+    }
+
+    auto *alertsSplit = container->cloneSplit(
+        this, filterIds, SplitDirection::Right, ALERTS_PRIMARY_RATIO,
+        ALERTS_SECONDARY_RATIO);
+    if (!alertsSplit)
+    {
+        return;
+    }
+
+    alertsSplit->setInputEnabled(false);
+    container->setSelected(alertsSplit);
+    alertsSplit->setFocus(Qt::OtherFocusReason);
+    for (auto *split : container->getSplits())
+    {
+        split->header_->updateIcons();
+    }
+}
+
 void Split::explainMoving()
 {
     showTutorialVideo(this, ":/examples/moving.gif", "Moving",
@@ -1178,6 +1590,8 @@ void Split::popup()
     split->setChannel(this->getIndirectChannel());
     split->setModerationMode(this->getModerationMode());
     split->setFilters(this->getFilters());
+    split->setInputEnabled(this->inputEnabled());
+    split->setActivityMessageScale(this->activityMessageScale());
 
     window.getNotebook().getOrAddSelectedPage()->insertSplit(split);
     window.show();
@@ -1329,7 +1743,19 @@ void Split::setFiltersDialog()
 
 void Split::setFilters(const QList<QUuid> ids)
 {
-    this->view_->setFilters(ids);
+    auto filterIds = ids;
+    if (!this->inputEnabled_)
+    {
+        if (const auto alertFilterId = ensureAlertsFilter())
+        {
+            if (!filterIds.contains(*alertFilterId))
+            {
+                filterIds.append(*alertFilterId);
+            }
+        }
+    }
+
+    this->view_->setFilters(filterIds);
     this->header_->updateChannelText();
 }
 

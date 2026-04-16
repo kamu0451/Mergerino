@@ -42,7 +42,9 @@ public:
     SelectChannelDialog(QWidget *parent = nullptr);
 
     void setSelectedChannel(std::optional<IndirectChannel> channel_);
+    void setActivityPaneEnabled(bool enabled);
     IndirectChannel getSelectedChannel() const;
+    bool activityPaneEnabled() const;
     bool hasSeletedChannel() const;
 
     pajlada::Signals::NoArgSignal closed;
@@ -58,6 +60,7 @@ private:
 
         QWidget *mergedPage{};
         QLineEdit *tabName{};
+        QCheckBox *enableActivity{};
         QCheckBox *enableTwitch{};
         QLineEdit *twitchName{};
         QCheckBox *enableKick{};

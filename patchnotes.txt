@@ -1,5 +1,9 @@
 Patch Notes
 
+16/04/2026
+- Added Activity Tab to display subscriptions and donations separately
+- Improved YouTube chat connection stability
+
 11/04/2026
 - Added support for Kick and YouTube live chat
 - Added platform highlights and logos for messages

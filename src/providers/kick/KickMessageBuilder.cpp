@@ -822,6 +822,7 @@ MessagePtrMut KickMessageBuilder::makeRewardRedeemedMessage(
 
     KickMessageBuilder builder(channel, QDateTime::currentDateTime());
     builder->flags.set(MessageFlag::RedeemedChannelPointReward);
+    builder->flags.set(MessageFlag::CheerMessage);
 
     QString text;
     if (userInput.isEmpty())

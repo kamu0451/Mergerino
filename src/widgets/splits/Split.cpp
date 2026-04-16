@@ -87,16 +87,47 @@ QJsonObject encodeChannelSignature(IndirectChannel channel)
     return obj;
 }
 
-static const auto ALERTS_FILTER_TEXT = QStringLiteral(
-    "flags.sub_message || flags.elevated_message || flags.cheer_message || "
-    "flags.watch_streak || flags.raid_message");
+static const auto ALERTS_FILTER_NAME = QStringLiteral("Mergerino events");
+
+QString buildAlertsFilterText()
+{
+    auto *s = getSettings();
+    QStringList terms;
+    if (s->activityShowSubs)
+    {
+        terms.append(QStringLiteral("flags.sub_message"));
+    }
+    if (s->activityShowElevated)
+    {
+        terms.append(QStringLiteral("flags.elevated_message"));
+    }
+    if (s->activityShowCheers)
+    {
+        terms.append(QStringLiteral("flags.cheer_message"));
+    }
+    if (s->activityShowWatchStreaks)
+    {
+        terms.append(QStringLiteral("flags.watch_streak"));
+    }
+    if (s->activityShowRaids)
+    {
+        terms.append(QStringLiteral("flags.raid_message"));
+    }
+    if (terms.isEmpty())
+    {
+        // Never-matches sentinel so the filter stays valid when every event
+        // type has been disabled.
+        return QStringLiteral("false");
+    }
+    return terms.join(QStringLiteral(" || "));
+}
 
 std::optional<QUuid> findAlertsFilterId()
 {
     const auto filters = getSettings()->filterRecords.readOnly();
     for (const auto &filter : *filters)
     {
-        if (filter && filter->getFilter() == ALERTS_FILTER_TEXT)
+        if (filter && filter->getName() == ALERTS_FILTER_NAME)
         {
             return filter->getId();
         }
@@ -111,7 +142,6 @@ std::optional<QUuid> migrateLegacyAlertsFilter()
         "flags.sub_message || flags.elevated_message || flags.cheer_message");
     static const auto legacyFilterName =
         QStringLiteral("Mergerino donations + subs");
-    static const auto filterName = QStringLiteral("Mergerino events");
 
     QUuid legacyId;
     int legacyIndex = -1;
@@ -139,8 +169,8 @@ std::optional<QUuid> migrateLegacyAlertsFilter()
         return std::nullopt;
     }
 
-    auto migrated = std::make_shared<FilterRecord>(filterName,
-                                                   ALERTS_FILTER_TEXT, legacyId);
+    auto migrated = std::make_shared<FilterRecord>(
+        ALERTS_FILTER_NAME, buildAlertsFilterText(), legacyId);
     if (!migrated->valid())
     {
         return std::nullopt;
@@ -154,18 +184,66 @@ std::optional<QUuid> migrateLegacyAlertsFilter()
 
 std::optional<QUuid> ensureAlertsFilter()
 {
-    static const auto filterName = QStringLiteral("Mergerino events");
-    if (const auto existing = findAlertsFilterId())
+    static bool signalsWired = false;
+    if (!signalsWired)
     {
-        return existing;
+        signalsWired = true;
+        auto *s = getSettings();
+        auto rebuild = [](bool) {
+            (void)ensureAlertsFilter();
+        };
+        s->activityShowSubs.connect(rebuild, false);
+        s->activityShowElevated.connect(rebuild, false);
+        s->activityShowCheers.connect(rebuild, false);
+        s->activityShowWatchStreaks.connect(rebuild, false);
+        s->activityShowRaids.connect(rebuild, false);
     }
+
+    const auto targetText = buildAlertsFilterText();
+
+    int existingIndex = -1;
+    QUuid existingId;
+    QString existingText;
+    {
+        const auto filters = getSettings()->filterRecords.readOnly();
+        for (std::size_t i = 0; i < filters->size(); ++i)
+        {
+            const auto &filter = (*filters)[i];
+            if (filter && filter->getName() == ALERTS_FILTER_NAME)
+            {
+                existingIndex = static_cast<int>(i);
+                existingId = filter->getId();
+                existingText = filter->getFilter();
+                break;
+            }
+        }
+    }
+
+    if (existingIndex >= 0)
+    {
+        if (existingText == targetText)
+        {
+            return existingId;
+        }
+        auto updated = std::make_shared<FilterRecord>(ALERTS_FILTER_NAME,
+                                                      targetText, existingId);
+        if (!updated->valid())
+        {
+            return std::nullopt;
+        }
+        getSettings()->filterRecords.removeAt(existingIndex);
+        getSettings()->filterRecords.append(updated);
+        (void)getSettings()->requestSave();
+        return existingId;
+    }
+
     if (const auto migrated = migrateLegacyAlertsFilter())
     {
         return migrated;
     }
 
     auto filter =
-        std::make_shared<FilterRecord>(filterName, ALERTS_FILTER_TEXT);
+        std::make_shared<FilterRecord>(ALERTS_FILTER_NAME, targetText);
     if (!filter->valid())
     {
         return std::nullopt;

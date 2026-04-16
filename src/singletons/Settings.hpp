@@ -306,6 +306,15 @@ public:
         "/appearance/messages/platformEventHighlightCustomColor",
         "#5a9146ff",
     };
+
+    // Which event types the auto-managed "Mergerino events" filter includes.
+    // Changing any of these regenerates the filter expression in place.
+    BoolSetting activityShowSubs = {"/mergerino/activity/subs", true};
+    BoolSetting activityShowElevated = {"/mergerino/activity/elevated", true};
+    BoolSetting activityShowCheers = {"/mergerino/activity/cheers", true};
+    BoolSetting activityShowRaids = {"/mergerino/activity/raids", true};
+    BoolSetting activityShowWatchStreaks = {
+        "/mergerino/activity/watchStreaks", true};
     BoolSetting findAllUsernames = {"/appearance/messages/findAllUsernames",
                                     false};
     // BoolSetting customizable splitheader

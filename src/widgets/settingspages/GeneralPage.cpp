@@ -596,6 +596,39 @@ void GeneralPage::initLayout(GeneralPageView &layout)
 
     SettingWidget::colorButton("Line color", s.lastMessageColor)->addTo(layout);
 
+    layout.addTitle("Activity tab");
+
+    SettingWidget::checkbox("Subscriptions and memberships",
+                            s.activityShowSubs)
+        ->setTooltip("Include Twitch/Kick subs, gift subs, resubs, and "
+                     "YouTube channel memberships.")
+        ->addKeywords({"activity", "subscription", "sub", "resub",
+                       "membership", "gift", "youtube"})
+        ->addTo(layout);
+
+    SettingWidget::checkbox("Elevated / paid messages",
+                            s.activityShowElevated)
+        ->setTooltip("Include Twitch Hype Chat, YouTube Super Chat and "
+                     "Super Sticker, and Kick Kicks.")
+        ->addKeywords({"activity", "elevated", "paid", "hype chat",
+                       "super chat", "super sticker", "kicks"})
+        ->addTo(layout);
+
+    SettingWidget::checkbox("Cheers (bits)", s.activityShowCheers)
+        ->setTooltip("Include Twitch bit cheers.")
+        ->addKeywords({"activity", "cheer", "bits", "twitch"})
+        ->addTo(layout);
+
+    SettingWidget::checkbox("Raids and hosts", s.activityShowRaids)
+        ->setTooltip("Include incoming Twitch raids and Kick hosts.")
+        ->addKeywords({"activity", "raid", "host", "twitch", "kick"})
+        ->addTo(layout);
+
+    SettingWidget::checkbox("Watch streaks", s.activityShowWatchStreaks)
+        ->setTooltip("Include viewer watch streak notifications.")
+        ->addKeywords({"activity", "watch streak", "streak"})
+        ->addTo(layout);
+
     layout.addTitle("Emotes");
 
     SettingWidget::checkbox("Enable", s.enableEmoteImages)->addTo(layout);

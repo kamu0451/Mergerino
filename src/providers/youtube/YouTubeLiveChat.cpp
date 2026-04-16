@@ -686,6 +686,8 @@ void YouTubeLiveChat::poll()
             }
 
             auto actions = continuation["actions"].toArray();
+            std::vector<MessagePtr> pendingBatch;
+            pendingBatch.reserve(static_cast<std::size_t>(actions.size()));
             for (const auto &actionValue : actions)
             {
                 auto action = actionValue.toObject();
@@ -721,7 +723,7 @@ void YouTubeLiveChat::poll()
                     continue;
                 }
 
-                this->messageReceived.invoke(message);
+                pendingBatch.push_back(std::move(message));
             }
 
             this->skipInitialBacklog_ = false;
@@ -771,6 +773,38 @@ void YouTubeLiveChat::poll()
 
             this->failureReported_ = false;
             this->setLive(true);
+
+            // Stagger the batch so messages flow in rather than landing in a
+            // single burst on each poll. Window = half the next-poll gap,
+            // capped at 1000ms; interval per-message clamped to [50ms, 300ms].
+            if (!pendingBatch.empty())
+            {
+                const int batchSize = static_cast<int>(pendingBatch.size());
+                if (batchSize == 1)
+                {
+                    this->messageReceived.invoke(pendingBatch.front());
+                }
+                else
+                {
+                    const int windowMs = std::min(nextDelay / 2, 1000);
+                    const int intervalMs =
+                        std::clamp(windowMs / batchSize, 50, 300);
+                    this->messageReceived.invoke(pendingBatch.front());
+                    for (int i = 1; i < batchSize; ++i)
+                    {
+                        auto msg = pendingBatch[static_cast<std::size_t>(i)];
+                        QTimer::singleShot(
+                            i * intervalMs, [this, weak, msg = std::move(msg)]() {
+                                if (!weak.lock() || !this->running_)
+                                {
+                                    return;
+                                }
+                                this->messageReceived.invoke(msg);
+                            });
+                    }
+                }
+            }
+
             this->schedulePoll(nextDelay);
         })
         .onError([this, weak](NetworkResult) {
@@ -1200,6 +1234,29 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     {
         flags.set(MessageFlag::Subscription);
         text = parseText(renderer["message"]);
+    }
+    else if (rendererName == "giftMessageViewModel")
+    {
+        // YouTube Jewels gift: authorName/text use {content, styleRuns}
+        // rather than the standard runs/simpleText shape, so wrap the content
+        // in a simpleText object so parseText() handles it uniformly below.
+        flags.set(MessageFlag::ElevatedMessage);
+        auto authorContent =
+            renderer["authorName"].toObject()["content"].toString().trimmed();
+        if (authorContent.startsWith(u'@'))
+        {
+            authorContent = authorContent.mid(1);
+        }
+        authorNameValue = QJsonObject{{"simpleText", authorContent}};
+        text = renderer["text"].toObject()["content"].toString().trimmed();
+    }
+    else if (rendererName == "liveChatPlaceholderItemRenderer" ||
+             rendererName == "liveChatViewerEngagementMessageRenderer")
+    {
+        // Placeholder items are filler slots that precede a real message;
+        // engagement renderers are YouTube's welcome/rules system notices.
+        // Neither belongs in merged chat.
+        return nullptr;
     }
     else
     {

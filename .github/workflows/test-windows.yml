@@ -63,6 +63,7 @@ jobs:
         with:
           variant: sccache
           save: ${{ github.event_name == 'push' }}
+          max-size: 2G
           key: sccache-test-${{ matrix.os }}-${{ matrix.qt-version }}-${{ matrix.skip-crashpad }}
           restore-keys: |
             sccache-test-${{ matrix.os }}-${{ matrix.qt-version }}

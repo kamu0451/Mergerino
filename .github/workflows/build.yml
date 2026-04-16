@@ -43,6 +43,7 @@ jobs:
         with:
           variant: sccache
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          max-size: 2G
           key: sccache-build-windows-x64-6.9.3
           restore-keys: |
             sccache-build-windows-x64

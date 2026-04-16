@@ -57,9 +57,6 @@ jobs:
               'Rolling release for the latest successful `main` build.',
               '',
               'This release is replaced automatically on every successful push to `main`.',
-              '',
-              `Commit: ${headSha}`,
-              `Build: ${context.payload.workflow_run.html_url}`,
             ].join('\n');
 
             try {

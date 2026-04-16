@@ -79,6 +79,8 @@ struct MessagePaintContext {
     const bool isWindowFocused{};
     // whether the painting should be treated as if this view is the special mentions view
     const bool isMentions{};
+    // whether automatic event overlays should be rendered as solid fills
+    const bool forceFlatEventHighlights{};
 
     // y coordinate we're currently painting at
     int y{};

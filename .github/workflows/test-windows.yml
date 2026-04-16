@@ -136,6 +136,19 @@ jobs:
           cd ..\pubsub-server-test
           ./server 127.0.0.1:9050 127.0.0.1:9052 &
           cd ..\build-test
+          foreach ($port in 9050, 9051) {
+              $ready = $false
+              for ($i = 0; $i -lt 60; $i++) {
+                  try {
+                      (New-Object System.Net.Sockets.TcpClient('127.0.0.1', $port)).Close()
+                      $ready = $true
+                      break
+                  } catch {
+                      Start-Sleep -Milliseconds 500
+                  }
+              }
+              if (-not $ready) { throw "Test service on port $port did not start in time" }
+          }
           ctest --repeat until-pass:4 --output-on-failure
         working-directory: build-test
 

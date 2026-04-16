@@ -27,7 +27,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v5
         with:
-          name: Mergerino-1.2-win64.zip
+          name: Mergerino-1.3-win64.zip
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           run-id: ${{ github.event.workflow_run.id }}
@@ -36,8 +36,8 @@ jobs:
       - name: Create or update rolling release
         uses: actions/github-script@v8
         env:
-          ASSET_NAME: Mergerino-1.2-win64.zip
-          ASSET_PATH: release-artifact/Mergerino-1.2-win64.zip
+          ASSET_NAME: Mergerino-1.3-win64.zip
+          ASSET_PATH: release-artifact/Mergerino-1.3-win64.zip
           RELEASE_NAME: Latest
           RELEASE_TAG: latest
         with:

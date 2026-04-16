@@ -105,12 +105,63 @@ std::optional<QUuid> findAlertsFilterId()
     return std::nullopt;
 }
 
+std::optional<QUuid> migrateLegacyAlertsFilter()
+{
+    static const auto legacyFilterText = QStringLiteral(
+        "flags.sub_message || flags.elevated_message || flags.cheer_message");
+    static const auto legacyFilterName =
+        QStringLiteral("Mergerino donations + subs");
+    static const auto filterName = QStringLiteral("Mergerino events");
+
+    QUuid legacyId;
+    int legacyIndex = -1;
+    {
+        const auto filters = getSettings()->filterRecords.readOnly();
+        for (std::size_t i = 0; i < filters->size(); ++i)
+        {
+            const auto &filter = (*filters)[i];
+            if (!filter)
+            {
+                continue;
+            }
+            if (filter->getFilter() == legacyFilterText ||
+                filter->getName() == legacyFilterName)
+            {
+                legacyId = filter->getId();
+                legacyIndex = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+
+    if (legacyIndex < 0)
+    {
+        return std::nullopt;
+    }
+
+    auto migrated = std::make_shared<FilterRecord>(filterName,
+                                                   ALERTS_FILTER_TEXT, legacyId);
+    if (!migrated->valid())
+    {
+        return std::nullopt;
+    }
+
+    getSettings()->filterRecords.removeAt(legacyIndex);
+    getSettings()->filterRecords.append(migrated);
+    (void)getSettings()->requestSave();
+    return legacyId;
+}
+
 std::optional<QUuid> ensureAlertsFilter()
 {
     static const auto filterName = QStringLiteral("Mergerino events");
     if (const auto existing = findAlertsFilterId())
     {
         return existing;
+    }
+    if (const auto migrated = migrateLegacyAlertsFilter())
+    {
+        return migrated;
     }
 
     auto filter =

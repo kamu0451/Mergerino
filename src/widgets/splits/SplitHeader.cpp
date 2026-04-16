@@ -362,7 +362,7 @@ void SplitHeader::initializeLayout()
             .light = ":/buttons/alertsPane-lightMode.svg",
         },
         this, {4, 4});
-    this->alertsButton_->setToolTip("Open donations + subs tab");
+    this->alertsButton_->setToolTip("Open activity tab");
 
     this->addButton_ = new DrawnButton(DrawnButton::Symbol::Plus,
                                        {

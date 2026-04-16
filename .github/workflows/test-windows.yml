@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4.3.0
@@ -71,6 +71,8 @@ jobs:
         uses: actions/cache@v5
         with:
           key: ${{ runner.os }}-${{ runner.arch }}-conan-user-${{ hashFiles('**/conanfile.py') }}-QT6
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-conan-user-
           path: ~/.conan2/
 
       - name: Install Conan
@@ -89,7 +91,7 @@ jobs:
           cd build-test
           conan install .. `
               -s build_type=RelWithDebInfo `
-              -c tools.cmake.cmaketoolchain:generator="NMake Makefiles" `
+              -c tools.cmake.cmaketoolchain:generator="Ninja" `
               -b missing `
               --output-folder=. `
               -o with_openssl3="$Env:C2_USE_OPENSSL3"
@@ -109,7 +111,7 @@ jobs:
       - name: Build
         run: |
           cmake `
-              -G"NMake Makefiles" `
+              -G Ninja `
               -DCMAKE_BUILD_TYPE=RelWithDebInfo `
               -DBUILD_TESTS=On `
               -DBUILD_APP=OFF `
@@ -118,8 +120,7 @@ jobs:
               -DBUILD_WITH_CRASHPAD="$Env:C2_ENABLE_CRASHPAD" `
               -DCHATTERINO_SPELLCHECK=On `
               ..
-          set cl=/MP
-          nmake /S /NOLOGO
+          ninja
         working-directory: build-test
 
       - name: Download and extract Twitch PubSub Server Test
@@ -151,6 +152,3 @@ jobs:
           }
           ctest --repeat until-pass:4 --output-on-failure
         working-directory: build-test
-
-      - name: Clean Conan cache
-        run: conan cache clean --source --build --download "*"

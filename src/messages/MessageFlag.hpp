@@ -77,6 +77,8 @@ enum class MessageFlag : std::int64_t {
     /// Note: If this message is inside a reply thread, the root must not have the flag either.
     InvalidReplyTarget = (1LL << 42),
     WatchStreak = (1LL << 43),
+    /// A cross-platform "raid"/"host" announcement (Twitch raid, Kick stream host)
+    Raid = (1LL << 44),
 };
 using MessageFlags = FlagsEnum<MessageFlag>;
 

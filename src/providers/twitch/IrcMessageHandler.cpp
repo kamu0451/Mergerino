@@ -914,6 +914,10 @@ void IrcMessageHandler::parseUserNoticeMessageInto(Communi::IrcMessage *message,
         {
             msg->flags.set(MessageFlag::WatchStreak);
         }
+        else if (msgType == u"raid")
+        {
+            msg->flags.set(MessageFlag::Raid);
+        }
         else
         {
             msg->flags.set(MessageFlag::Subscription);

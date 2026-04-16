@@ -87,15 +87,16 @@ QJsonObject encodeChannelSignature(IndirectChannel channel)
     return obj;
 }
 
+static const auto ALERTS_FILTER_TEXT = QStringLiteral(
+    "flags.sub_message || flags.elevated_message || flags.cheer_message || "
+    "flags.watch_streak || flags.raid_message");
+
 std::optional<QUuid> findAlertsFilterId()
 {
-    static const auto filterText = QStringLiteral(
-        "flags.sub_message || flags.elevated_message || flags.cheer_message");
-
     const auto filters = getSettings()->filterRecords.readOnly();
     for (const auto &filter : *filters)
     {
-        if (filter && filter->getFilter() == filterText)
+        if (filter && filter->getFilter() == ALERTS_FILTER_TEXT)
         {
             return filter->getId();
         }
@@ -106,16 +107,14 @@ std::optional<QUuid> findAlertsFilterId()
 
 std::optional<QUuid> ensureAlertsFilter()
 {
-    static const auto filterName =
-        QStringLiteral("Mergerino donations + subs");
+    static const auto filterName = QStringLiteral("Mergerino events");
     if (const auto existing = findAlertsFilterId())
     {
         return existing;
     }
 
-    static const auto filterText = QStringLiteral(
-        "flags.sub_message || flags.elevated_message || flags.cheer_message");
-    auto filter = std::make_shared<FilterRecord>(filterName, filterText);
+    auto filter =
+        std::make_shared<FilterRecord>(filterName, ALERTS_FILTER_TEXT);
     if (!filter->valid())
     {
         return std::nullopt;

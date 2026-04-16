@@ -694,6 +694,7 @@ MessagePtrMut KickMessageBuilder::makeHostMessage(KickChannel *channel,
     const auto viewers = data["number_viewers"].toUint64();
     KickMessageBuilder builder(systemMessage, channel,
                                QDateTime::currentDateTime());
+    builder->flags.set(MessageFlag::Raid);
     QString text;
     builder.appendMentionedUser(user, text);
     builder.appendOrEmplaceSystemTextAndUpdate(
@@ -870,6 +871,7 @@ MessagePtrMut KickMessageBuilder::makeKicksGiftedMessage(KickChannel *channel,
 
     KickMessageBuilder builder(channel, QDateTime::currentDateTime());
     builder->flags.set(MessageFlag::RedeemedChannelPointReward);
+    builder->flags.set(MessageFlag::ElevatedMessage);
 
     QString text;
     if (userInput.isEmpty())

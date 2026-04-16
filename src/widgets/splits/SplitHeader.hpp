@@ -86,6 +86,7 @@ private:
     QAction *modeActionSetR9k{};
     QAction *modeActionSetFollowers{};
 
+    SvgButton *alertsButton_{};
     SvgButton *moderationButton_{};
     SvgButton *chattersButton_{};
     DrawnButton *addButton_{};

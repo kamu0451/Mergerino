@@ -182,6 +182,9 @@ public:
     SplitContainer(Notebook *parent);
 
     Split *appendNewSplit(bool openChannelNameDialog);
+    Split *cloneSplit(Split *source, const QList<QUuid> &filters,
+                      SplitDirection direction = SplitDirection::Right,
+                      qreal sourceRatio = 0.7, qreal newRatio = 0.3);
 
     struct InsertOptions {
         /// Position must be set alone, as if it's set it will override direction & relativeNode with its underlying values

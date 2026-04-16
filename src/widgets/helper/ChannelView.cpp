@@ -215,14 +215,17 @@ MessagePtr makeActivityCompactMessage(const MessagePtr &message,
     bool copiedTimestamp = false;
     for (const auto &element : message->elements)
     {
-        if (dynamic_cast<const TimestampElement *>(element.get()) == nullptr)
+        if (element->getFlags().has(MessageElementFlag::PlatformBadge))
         {
+            compact->elements.emplace_back(element->clone());
             continue;
         }
-
-        compact->elements.emplace_back(element->clone());
-        copiedTimestamp = true;
-        break;
+        if (!copiedTimestamp &&
+            dynamic_cast<const TimestampElement *>(element.get()) != nullptr)
+        {
+            compact->elements.emplace_back(element->clone());
+            copiedTimestamp = true;
+        }
     }
 
     if (!copiedTimestamp)

@@ -125,3 +125,6 @@ aqtinstall.log
 
 # sccache (CI)
 .sccache
+
+# Local build wrapper (developer-specific, not for CI)
+.local-build.bat

@@ -10,7 +10,9 @@
 #include "messages/MessageElement.hpp"
 
 #include <QDateTime>
+#include <QDebug>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
 #include <QTimer>
@@ -1201,6 +1203,9 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     }
     else
     {
+        qWarning().nospace() << "YouTube: unhandled live chat renderer: "
+                             << rendererName;
+        qWarning() << QJsonDocument(renderer).toJson(QJsonDocument::Compact);
         return nullptr;
     }
 

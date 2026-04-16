@@ -2970,8 +2970,7 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
             }
         }
 
-        if (const auto &messagePtr = layout->getMessagePtr();
-            messagePtr->replyThread != nullptr)
+        if (messagePtr->replyThread != nullptr)
         {
             menu->addAction("View &thread", [this, &messagePtr] {
                 this->showReplyThreadPopup(messagePtr);

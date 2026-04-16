@@ -169,18 +169,11 @@ void Version::generateRunningString()
     this->runningString_ = s;
 }
 
-#define STRINGIFY(x) #x
-// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define STRINGIFY2(x) STRINGIFY(x)
-
 void Version::generateExtraString()
 {
     this->extraString_ =
-        QStringLiteral(STRINGIFY2(CHATTERINO_EXTRA_BUILD_STRING)).trimmed();
+        QStringLiteral(CHATTERINO_EXTRA_BUILD_STRING).trimmed();
 }
-
-#undef STRINGIFY2
-#undef STRINGIFY
 
 #ifdef Q_OS_WIN
 const std::wstring &Version::appUserModelID() const

@@ -435,6 +435,13 @@ int NotebookTab::normalTabWidthForHeight(int height) const
                                  (16 / compactDivider * scale));
     }
 
+    if (!this->avatar_.isNull())
+    {
+        int avatarSize = static_cast<int>(16 * scale);
+        int avatarPadding = static_cast<int>(4 * scale);
+        width += avatarSize + avatarPadding;
+    }
+
     if (static_cast<float>(height) > 150 * scale)
     {
         width = height;
@@ -705,6 +712,16 @@ bool NotebookTab::setLive(bool isLive)
 bool NotebookTab::isLive() const
 {
     return this->isLive_;
+}
+
+void NotebookTab::setAvatar(const QPixmap &pixmap)
+{
+    if (this->avatar_.cacheKey() == pixmap.cacheKey())
+    {
+        return;
+    }
+    this->avatar_ = pixmap;
+    this->tabSizeChanged();
 }
 
 HighlightState NotebookTab::highlightState() const
@@ -997,6 +1014,20 @@ void NotebookTab::paintEvent(QPaintEvent *)
     if (this->shouldDrawXButton())
     {
         textRect.setRight(textRect.right() - this->height() / 2);
+    }
+
+    // draw avatar (left of the text) and reserve room in textRect
+    if (!this->avatar_.isNull())
+    {
+        int avatarSize = static_cast<int>(16 * scale);
+        int avatarPadding = static_cast<int>(4 * scale);
+        QRect avatarRect(offset, (height - avatarSize) / 2, avatarSize,
+                         avatarSize);
+        translateRectForLocation(avatarRect, this->tabLocation_,
+                                 this->selected_ ? -1 : -2);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        painter.drawPixmap(avatarRect, this->avatar_);
+        textRect.setLeft(textRect.left() + avatarSize + avatarPadding);
     }
 
     int width = metrics.horizontalAdvance(this->getTitle());

@@ -9,6 +9,11 @@
 #include "common/QLogging.hpp"
 #include "common/WindowDescriptors.hpp"
 #include "debug/AssertInGuiThread.hpp"
+#include "providers/kick/KickApi.hpp"
+#include "providers/kick/KickChannel.hpp"
+#include "providers/merged/MergedChannel.hpp"
+#include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
@@ -22,15 +27,191 @@
 #include "widgets/Window.hpp"
 
 #include <QApplication>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMimeData>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPointer>
 
 #include <algorithm>
 
 namespace chatterino {
+
+namespace {
+
+struct TabAvatarRequest {
+    QString twitchLogin;
+    QString kickSlug;
+    QString youtubeKey;
+};
+
+QHash<QString, QPixmap> &tabAvatarCache()
+{
+    static QHash<QString, QPixmap> cache;
+    return cache;
+}
+
+QNetworkAccessManager *tabAvatarNetworkManager()
+{
+    static auto *manager = new QNetworkAccessManager();
+    return manager;
+}
+
+void downloadAvatarInto(const QString &cacheKey, const QString &url,
+                        QPointer<NotebookTab> tab,
+                        std::function<void()> onFallback)
+{
+    QNetworkRequest req{QUrl(url)};
+    req.setHeader(QNetworkRequest::UserAgentHeader, "Mergerino");
+    auto *reply = tabAvatarNetworkManager()->get(req);
+    QObject::connect(
+        reply, &QNetworkReply::finished,
+        [reply, cacheKey, tab, onFallback = std::move(onFallback)]() mutable {
+            reply->deleteLater();
+            QPixmap pixmap;
+            if (reply->error() != QNetworkReply::NoError ||
+                !pixmap.loadFromData(reply->readAll()))
+            {
+                if (onFallback)
+                {
+                    onFallback();
+                }
+                return;
+            }
+            tabAvatarCache().insert(cacheKey, pixmap);
+            if (!tab.isNull())
+            {
+                tab->setAvatar(pixmap);
+            }
+        });
+}
+
+// Forward declare so platform loaders can fall through to later ones.
+void loadAvatarForTab(const TabAvatarRequest &request,
+                      QPointer<NotebookTab> tab, int stage = 0);
+
+void tryTwitchAvatar(const TabAvatarRequest &request,
+                     QPointer<NotebookTab> tab, int nextStage)
+{
+    const auto login = request.twitchLogin;
+    if (login.isEmpty())
+    {
+        loadAvatarForTab(request, tab, nextStage);
+        return;
+    }
+
+    const auto cacheKey = QStringLiteral("twitch:") + login.toLower();
+    auto &cache = tabAvatarCache();
+    if (auto it = cache.constFind(cacheKey); it != cache.constEnd())
+    {
+        if (!tab.isNull())
+        {
+            tab->setAvatar(it.value());
+        }
+        return;
+    }
+
+    auto fallback = [request, tab, nextStage]() {
+        loadAvatarForTab(request, tab, nextStage);
+    };
+
+    getHelix()->getUserByName(
+        login,
+        [cacheKey, tab, fallback](const HelixUser &user) mutable {
+            if (user.profileImageUrl.isEmpty())
+            {
+                fallback();
+                return;
+            }
+            downloadAvatarInto(cacheKey, user.profileImageUrl, tab, fallback);
+        },
+        [fallback] {
+            fallback();
+        });
+}
+
+void tryKickAvatar(const TabAvatarRequest &request,
+                   QPointer<NotebookTab> tab, int nextStage)
+{
+    const auto slug = request.kickSlug;
+    if (slug.isEmpty())
+    {
+        loadAvatarForTab(request, tab, nextStage);
+        return;
+    }
+
+    const auto cacheKey = QStringLiteral("kick:") + slug.toLower();
+    auto &cache = tabAvatarCache();
+    if (auto it = cache.constFind(cacheKey); it != cache.constEnd())
+    {
+        if (!tab.isNull())
+        {
+            tab->setAvatar(it.value());
+        }
+        return;
+    }
+
+    auto fallback = [request, tab, nextStage]() {
+        loadAvatarForTab(request, tab, nextStage);
+    };
+
+    KickApi::privateChannelInfo(
+        slug,
+        [cacheKey, tab, fallback](
+            const ExpectedStr<KickPrivateChannelInfo> &result) mutable {
+            if (!result.has_value() ||
+                !result.value().user.profilePictureURL.has_value() ||
+                result.value().user.profilePictureURL->isEmpty())
+            {
+                fallback();
+                return;
+            }
+            downloadAvatarInto(cacheKey,
+                               *result.value().user.profilePictureURL, tab,
+                               fallback);
+        });
+}
+
+void tryYouTubeAvatar(const TabAvatarRequest &request,
+                      QPointer<NotebookTab> tab, int nextStage)
+{
+    // TODO: YouTube channel avatar requires extracting the channelId from the
+    // watch page (og:image or externalId) — not yet implemented. Fall through
+    // for now so YouTube-only tabs simply show no avatar.
+    loadAvatarForTab(request, tab, nextStage);
+}
+
+void loadAvatarForTab(const TabAvatarRequest &request,
+                      QPointer<NotebookTab> tab, int stage)
+{
+    if (tab.isNull())
+    {
+        return;
+    }
+
+    switch (stage)
+    {
+        case 0:
+            tryTwitchAvatar(request, tab, 1);
+            return;
+        case 1:
+            tryKickAvatar(request, tab, 2);
+            return;
+        case 2:
+            tryYouTubeAvatar(request, tab, 3);
+            return;
+        default:
+            tab->setAvatar({});
+            return;
+    }
+}
+
+}  // namespace
 
 SplitContainer::SplitContainer(Notebook *parent)
     : BaseWidget(parent)
@@ -856,6 +1037,7 @@ void SplitContainer::refreshTab()
 {
     this->refreshTabTitle();
     this->refreshTabLiveStatus();
+    this->refreshTabAvatar();
 }
 
 std::vector<Split *> SplitContainer::getSplits() const
@@ -1145,6 +1327,76 @@ void SplitContainer::refreshTabLiveStatus()
             notebook->refresh();
         }
     }
+}
+
+void SplitContainer::refreshTabAvatar()
+{
+    if (this->tab_ == nullptr)
+    {
+        return;
+    }
+
+    TabAvatarRequest request;
+
+    for (const auto &split : this->splits_)
+    {
+        if (split->isActivityPane())
+        {
+            continue;
+        }
+
+        auto channel = split->getChannel();
+        if (!channel)
+        {
+            continue;
+        }
+
+        if (auto *merged = dynamic_cast<MergedChannel *>(channel.get()))
+        {
+            if (request.twitchLogin.isEmpty())
+            {
+                if (auto twitch = merged->twitchChannel())
+                {
+                    request.twitchLogin = twitch->getName();
+                }
+            }
+            if (request.kickSlug.isEmpty())
+            {
+                if (auto kick = merged->kickChannel())
+                {
+                    request.kickSlug = kick->getName();
+                }
+            }
+            if (request.youtubeKey.isEmpty() &&
+                merged->config().youtubeEnabled)
+            {
+                request.youtubeKey = merged->config().youtubeStreamUrl;
+            }
+        }
+        else if (auto *twitch = dynamic_cast<TwitchChannel *>(channel.get()))
+        {
+            if (request.twitchLogin.isEmpty())
+            {
+                request.twitchLogin = twitch->getName();
+            }
+        }
+        else if (auto *kick = dynamic_cast<KickChannel *>(channel.get()))
+        {
+            if (request.kickSlug.isEmpty())
+            {
+                request.kickSlug = kick->getName();
+            }
+        }
+    }
+
+    if (request.twitchLogin.isEmpty() && request.kickSlug.isEmpty() &&
+        request.youtubeKey.isEmpty())
+    {
+        this->tab_->setAvatar({});
+        return;
+    }
+
+    loadAvatarForTab(request, QPointer<NotebookTab>(this->tab_));
 }
 
 //

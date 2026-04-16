@@ -91,6 +91,13 @@ public:
     void growWidth(int width);
     int normalTabWidth() const;
 
+    /**
+     * @brief Sets the small avatar drawn at the left of the tab.
+     *
+     * Pass a null pixmap to clear.
+     */
+    void setAvatar(const QPixmap &pixmap);
+
 protected:
     void themeChangedEvent() override;
 
@@ -160,6 +167,8 @@ private:
 
     bool isLive_{};
     bool isRerun_{};
+
+    QPixmap avatar_;
 
     int growWidth_ = 0;
 

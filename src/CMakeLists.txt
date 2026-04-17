@@ -524,6 +524,9 @@ set(SOURCE_FILES
         providers/twitch/TwitchUser.cpp
         providers/youtube/YouTubeLiveChat.cpp
         providers/youtube/YouTubeLiveChat.hpp
+        providers/tiktok/TikTokInjectScript.hpp
+        providers/tiktok/TikTokLiveChat.cpp
+        providers/tiktok/TikTokLiveChat.hpp
         providers/twitch/TwitchUser.hpp
         providers/twitch/TwitchUsers.cpp
         providers/twitch/TwitchUsers.hpp
@@ -1000,6 +1003,7 @@ target_link_libraries(${LIBRARY_PROJECT}
         LRUCache
         MagicEnum
         $<$<BOOL:${WIN32}>:Wtsapi32>
+        $<$<BOOL:${WIN32}>:Mergerino::WebView2>
         twitch-eventsub-ws
         BoostCertify
         )

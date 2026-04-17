@@ -5,8 +5,12 @@
 
 #include "messages/Message.hpp"
 #include "messages/MessageBuilder.hpp"
+#include "messages/MessageElement.hpp"
+#include "providers/tiktok/TikTokFrameDecoder.hpp"
 #include "providers/tiktok/TikTokInjectScript.hpp"
 
+#include <QByteArray>
+#include <QDateTime>
 #include <QDir>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -392,6 +396,42 @@ void TikTokLiveChat::emitSystemMessage(const QString &text)
     this->systemMessageReceived.invoke(makeSystemMessage(text));
 }
 
+MessagePtr TikTokLiveChat::buildChatMessage(const tiktok::DecodedChatMessage &chat) const
+{
+    const QString displayName = !chat.user.nickname.isEmpty()
+                                    ? chat.user.nickname
+                                    : chat.user.uniqueId;
+    const QString loginName = !chat.user.uniqueId.isEmpty()
+                                  ? chat.user.uniqueId
+                                  : chat.user.nickname;
+
+    MessageBuilder b;
+    b->platform = MessagePlatform::TikTok;
+    if (chat.msgId != 0)
+    {
+        b->id = QString::number(chat.msgId);
+    }
+    b->loginName = loginName;
+    b->displayName = displayName;
+    b->localizedName = displayName;
+    if (chat.user.userId != 0)
+    {
+        b->userID = QString::number(chat.user.userId);
+    }
+    b->channelName = this->username_;
+    b->messageText = chat.content;
+    b->searchText = displayName + QStringLiteral(": ") + chat.content;
+    b->serverReceivedTime = QDateTime::currentDateTime();
+
+    b.emplace<TimestampElement>(b->serverReceivedTime.toLocalTime().time());
+    b.emplace<TextElement>(
+         displayName + QStringLiteral(":"), MessageElementFlag::Username,
+         MessageColor::Text, FontStyle::ChatMediumBold)
+        ->setLink({Link::UserInfo, displayName});
+    b.emplace<TextElement>(chat.content, MessageElementFlag::Text);
+    return b.release();
+}
+
 void TikTokLiveChat::handleWebMessage(const QString &json)
 {
     QJsonParseError err{};
@@ -421,9 +461,26 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         this->setStatusText(QStringLiteral("TikTok live chat error"), true);
         return;
     }
-    // ws-binary / ws-text: protobuf decode lives in a follow-up task.
-    // The frame is deliberately dropped here - emitting placeholder chat
-    // rows would be noise until real decoding is in place.
+    if (kind == QStringLiteral("ws-binary"))
+    {
+        const QString base64 = obj.value(QStringLiteral("base64")).toString();
+        if (base64.isEmpty())
+        {
+            return;
+        }
+        const QByteArray raw =
+            QByteArray::fromBase64(base64.toLatin1(),
+                                   QByteArray::Base64ForgivingDecoding);
+        if (raw.isEmpty())
+        {
+            return;
+        }
+        const auto frame = tiktok::decodeWebcastPushFrame(raw);
+        for (const auto &chat : frame.chatMessages)
+        {
+            this->messageReceived.invoke(this->buildChatMessage(chat));
+        }
+    }
 }
 
 }  // namespace chatterino

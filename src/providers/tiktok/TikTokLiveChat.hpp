@@ -12,6 +12,10 @@
 
 namespace chatterino {
 
+namespace tiktok {
+struct DecodedChatMessage;
+}  // namespace tiktok
+
 // Reads a TikTok LIVE room by hosting a hidden WebView2 that runs TikTok's
 // own webapp. TikTok's signing stack (X-Bogus, X-Gnarly, msToken) rotates
 // often and no open-source library signs natively; running the real page
@@ -65,6 +69,7 @@ private:
     void setLive(bool live);
     void handleWebMessage(const QString &json);
     void emitSystemMessage(const QString &text);
+    MessagePtr buildChatMessage(const tiktok::DecodedChatMessage &chat) const;
 };
 
 }  // namespace chatterino

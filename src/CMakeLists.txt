@@ -524,6 +524,9 @@ set(SOURCE_FILES
         providers/twitch/TwitchUser.cpp
         providers/youtube/YouTubeLiveChat.cpp
         providers/youtube/YouTubeLiveChat.hpp
+        providers/tiktok/ProtobufReader.hpp
+        providers/tiktok/TikTokFrameDecoder.cpp
+        providers/tiktok/TikTokFrameDecoder.hpp
         providers/tiktok/TikTokInjectScript.hpp
         providers/tiktok/TikTokLiveChat.cpp
         providers/tiktok/TikTokLiveChat.hpp

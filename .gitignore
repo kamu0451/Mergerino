@@ -87,6 +87,16 @@ tools/tiktok-spike/.venv/
 .idea
 dependencies
 .cache
+
+# AI assistant artifacts (CLAUDE.md at repo root is kept as project docs)
+.claude/
+HANDOFF.md
+.aider*
+.cursor/
+.cursorrules
+.continue/
+.codeium/
+.github/copilot-instructions.md
 .editorconfig
 vim.log
 

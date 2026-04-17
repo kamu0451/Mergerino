@@ -6,7 +6,7 @@ Mergerino is a desktop chat client that combines a Chatterino-style multi-channe
 
 This repository is separate from the upstream Chatterino project. It keeps the source here and ships installable Windows builds through GitHub Releases.
 
-[![Download Windows Build](https://img.shields.io/badge/Download-Windows%20Build-2ea44f?style=for-the-badge)](https://github.com/Fixlation/Mergerino/releases/latest/download/Mergerino-1.4-win64.zip)
+[![Download Windows Build](https://img.shields.io/badge/Download-Windows%20Build-2ea44f?style=for-the-badge)](https://github.com/Fixlation/Mergerino/releases/latest/download/Mergerino-1.5-win64.zip)
 [![All Releases](https://img.shields.io/badge/GitHub-Releases-1f6feb?style=for-the-badge)](https://github.com/Fixlation/Mergerino/releases)
 
 ## What Is Mergerino?
@@ -23,7 +23,7 @@ If you just want to install the app, do not download the source code zip from th
 Use the latest GitHub release instead:
 
 - Open [the releases page](https://github.com/Fixlation/Mergerino/releases)
-- Download [Mergerino-1.4-win64.zip](https://github.com/Fixlation/Mergerino/releases/latest/download/Mergerino-1.4-win64.zip)
+- Download [Mergerino-1.5-win64.zip](https://github.com/Fixlation/Mergerino/releases/latest/download/Mergerino-1.5-win64.zip)
 - Extract it somewhere you want to keep it
 - Open `mergerino.exe` from inside the extracted folder
 
@@ -31,9 +31,9 @@ Use the latest GitHub release instead:
 
 ### Windows
 
-1. Download `Mergerino-1.4-win64.zip`
+1. Download `Mergerino-1.5-win64.zip`
 2. Extract the zip
-3. Open the extracted `Mergerino-1.4-win64` folder
+3. Open the extracted `Mergerino-1.5-win64` folder
 4. Run `mergerino.exe`
 5. Keep the `.exe` inside that folder with the bundled files
 

@@ -8,6 +8,7 @@
 #include "common/Channel.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "providers/merged/MergedChannel.hpp"
+#include "providers/tiktok/TikTokLiveChat.hpp"
 #include "singletons/Settings.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Fonts.hpp"
@@ -265,6 +266,13 @@ SelectChannelDialog::SelectChannelDialog(QWidget *parent)
     ui.youtubeUrl = new QLineEdit();
     ui.youtubeUrl->setPlaceholderText("@handle or any YouTube video link");
     platformLayout->addRow("YouTube", ui.youtubeUrl);
+
+    ui.enableTikTok = new QCheckBox("Enable TikTok");
+    platformLayout->addRow(ui.enableTikTok);
+    ui.tiktokInput = new QLineEdit();
+    ui.tiktokInput->setPlaceholderText("@username or /@user/live URL");
+    platformLayout->addRow("TikTok", ui.tiktokInput);
+
     ui.indicatorMode = new QComboBox();
     ui.indicatorMode->addItem("Highlights");
     ui.indicatorMode->addItem("Logos");
@@ -287,6 +295,8 @@ SelectChannelDialog::SelectChannelDialog(QWidget *parent)
     QObject::connect(ui.enableKick, &QCheckBox::toggled, this,
                      [this](bool) { this->syncMergedFieldState(); });
     QObject::connect(ui.enableYouTube, &QCheckBox::toggled, this,
+                     [this](bool) { this->syncMergedFieldState(); });
+    QObject::connect(ui.enableTikTok, &QCheckBox::toggled, this,
                      [this](bool) { this->syncMergedFieldState(); });
 
     ui.notebook->addPage(ui.mergedPage, "Merged");
@@ -357,6 +367,8 @@ void SelectChannelDialog::setMergedDefaults()
     this->ui_.kickName->clear();
     this->ui_.enableYouTube->setChecked(false);
     this->ui_.youtubeUrl->clear();
+    this->ui_.enableTikTok->setChecked(false);
+    this->ui_.tiktokInput->clear();
     this->ui_.indicatorMode->setCurrentIndex(indicatorModeIndex(
         getSettings()->mergedPlatformIndicatorMode));
 }
@@ -387,6 +399,8 @@ void SelectChannelDialog::loadMergedDefaultsFromChannel(
             normalizeYouTubeSource(config.youtubeStreamUrl).isEmpty()
                 ? config.youtubeStreamUrl
                 : normalizeYouTubeSource(config.youtubeStreamUrl));
+        this->ui_.enableTikTok->setChecked(config.tiktokEnabled);
+        this->ui_.tiktokInput->setText(config.tiktokUsername);
     }
     else if (indirectChannel.getType() == Channel::Type::Twitch)
     {
@@ -477,11 +491,14 @@ void SelectChannelDialog::syncMergedFieldState()
     this->ui_.twitchName->setEnabled(this->ui_.enableTwitch->isChecked());
     this->ui_.kickName->setEnabled(this->ui_.enableKick->isChecked());
     this->ui_.youtubeUrl->setEnabled(this->ui_.enableYouTube->isChecked());
+    this->ui_.tiktokInput->setEnabled(this->ui_.enableTikTok->isChecked());
 }
 
 bool SelectChannelDialog::buildMergedSelection()
 {
     const auto youtubeChannel = normalizeYouTubeSource(this->ui_.youtubeUrl->text());
+    const auto tiktokUsername =
+        TikTokLiveChat::normalizeSource(this->ui_.tiktokInput->text());
     getSettings()->mergedPlatformIndicatorMode.setValue(
         qmagicenum::enumNameString(
             indicatorModeFromIndex(this->ui_.indicatorMode->currentIndex()))
@@ -494,9 +511,12 @@ bool SelectChannelDialog::buildMergedSelection()
         .kickChannelName = this->ui_.kickName->text().trimmed(),
         .youtubeEnabled = this->ui_.enableYouTube->isChecked(),
         .youtubeStreamUrl = youtubeChannel,
+        .tiktokEnabled = this->ui_.enableTikTok->isChecked(),
+        .tiktokUsername = tiktokUsername,
     };
 
-    if (!config.twitchEnabled && !config.kickEnabled && !config.youtubeEnabled)
+    if (!config.twitchEnabled && !config.kickEnabled &&
+        !config.youtubeEnabled && !config.tiktokEnabled)
     {
         QMessageBox::warning(this, "Select a platform",
                              "Enable at least one platform for this merged tab.");
@@ -525,6 +545,15 @@ bool SelectChannelDialog::buildMergedSelection()
             this, "Missing YouTube source",
             "Enter the streamer's YouTube @handle or any video link from the "
             "desired channel before enabling YouTube.");
+        return false;
+    }
+
+    if (config.tiktokEnabled && config.tiktokUsername.isEmpty())
+    {
+        QMessageBox::warning(
+            this, "Missing TikTok username",
+            "Enter the streamer's TikTok @username or their /@user/live URL "
+            "before enabling TikTok.");
         return false;
     }
 
@@ -585,6 +614,7 @@ void SelectChannelDialog::scaleChangedEvent(float newScale)
     this->ui_.twitchName->setFont(uiFont);
     this->ui_.kickName->setFont(uiFont);
     this->ui_.youtubeUrl->setFont(uiFont);
+    this->ui_.tiktokInput->setFont(uiFont);
 }
 
 void SelectChannelDialog::addShortcuts()

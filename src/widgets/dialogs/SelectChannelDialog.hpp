@@ -67,6 +67,8 @@ private:
         QLineEdit *kickName{};
         QCheckBox *enableYouTube{};
         QLineEdit *youtubeUrl{};
+        QCheckBox *enableTikTok{};
+        QLineEdit *tiktokInput{};
         QComboBox *indicatorMode{};
 
         QWidget *specialPage{};

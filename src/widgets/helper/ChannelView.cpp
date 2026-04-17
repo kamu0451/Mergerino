@@ -3294,7 +3294,8 @@ void ChannelView::showUserInfoPopup(const QString &userName,
         return;
     }
 
-    if (platform == MessagePlatform::YouTube)
+    if (platform == MessagePlatform::YouTube ||
+        platform == MessagePlatform::TikTok)
     {
         return;
     }

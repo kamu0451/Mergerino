@@ -22,6 +22,7 @@
 namespace chatterino {
 
 class YouTubeLiveChat;
+class TikTokLiveChat;
 
 struct MergedChannelConfig {
     QString tabName;
@@ -31,6 +32,8 @@ struct MergedChannelConfig {
     QString kickChannelName;
     bool youtubeEnabled{false};
     QString youtubeStreamUrl;
+    bool tiktokEnabled{false};
+    QString tiktokUsername;
 
     QString displayName() const;
     QString effectiveTwitchChannelName() const;
@@ -79,6 +82,7 @@ private:
     std::shared_ptr<Message> createMergedMessage(const MessagePtr &source,
                                                  MessagePlatform platform) const;
     void addYouTubeMessage(const MessagePtr &message);
+    void addTikTokMessage(const MessagePtr &message);
     void addSystemStatusMessage(const MessagePtr &message);
     void addSystemStatusMessage(const QString &message);
     void announceJoinedLiveChat(MessagePlatform platform,
@@ -104,10 +108,12 @@ private:
     ChannelPtr twitchChannel_;
     ChannelPtr kickChannel_;
     std::unique_ptr<YouTubeLiveChat> youtubeLiveChat_;
+    std::unique_ptr<TikTokLiveChat> tiktokLiveChat_;
 
     pajlada::Signals::SignalHolder twitchConnections_;
     pajlada::Signals::SignalHolder kickConnections_;
     pajlada::Signals::SignalHolder youtubeConnections_;
+    pajlada::Signals::SignalHolder tiktokConnections_;
 
     std::unordered_map<QString, MessagePtr> mirroredMessages_;
     std::deque<QString> mirroredOrder_;
@@ -115,8 +121,10 @@ private:
     bool twitchLive_{false};
     bool kickLive_{false};
     bool youtubeLive_{false};
+    bool tiktokLive_{false};
     bool twitchLiveJoinAnnounced_{false};
     bool kickLiveJoinAnnounced_{false};
+    bool tiktokLiveJoinAnnounced_{false};
 };
 
 }  // namespace chatterino

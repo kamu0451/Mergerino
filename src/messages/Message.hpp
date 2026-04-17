@@ -31,6 +31,7 @@ enum class MessagePlatform : uint8_t {
     AnyOrTwitch,
     Kick,
     YouTube,
+    TikTok,
 };
 
 struct Message;

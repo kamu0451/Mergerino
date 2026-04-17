@@ -522,6 +522,7 @@ std::pair<bool, HighlightResult> HighlightController::check(
         }
         break;
         case MessagePlatform::YouTube:
+        case MessagePlatform::TikTok:
             self = false;
             break;
     }

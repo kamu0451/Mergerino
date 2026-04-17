@@ -13,6 +13,7 @@
 #include "providers/kick/KickChannel.hpp"
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "providers/tiktok/TikTokLiveChat.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/youtube/YouTubeLiveChat.hpp"
 #include "util/QStringHash.hpp"
@@ -51,6 +52,8 @@ QString platformName(MessagePlatform platform)
             return "Kick";
         case MessagePlatform::YouTube:
             return "YouTube";
+        case MessagePlatform::TikTok:
+            return "TikTok";
         case MessagePlatform::AnyOrTwitch:
         default:
             return "Twitch";
@@ -65,6 +68,8 @@ QString platformIconPath(MessagePlatform platform)
             return ":/platforms/kick.svg";
         case MessagePlatform::YouTube:
             return ":/platforms/youtube.svg";
+        case MessagePlatform::TikTok:
+            return ":/platforms/tiktok.svg";
         case MessagePlatform::AnyOrTwitch:
         default:
             return ":/platforms/twitch.svg";
@@ -110,6 +115,11 @@ QString MergedChannelConfig::displayName() const
         {
             return kick;
         }
+    }
+
+    if (this->tiktokEnabled && !this->tiktokUsername.trimmed().isEmpty())
+    {
+        return this->tiktokUsername.trimmed();
     }
 
     return "Merged chat";
@@ -243,7 +253,8 @@ bool MergedChannel::hasModRights() const
 
 bool MergedChannel::isLive() const
 {
-    return this->twitchLive_ || this->kickLive_ || this->youtubeLive_;
+    return this->twitchLive_ || this->kickLive_ || this->youtubeLive_ ||
+           this->tiktokLive_;
 }
 
 bool MergedChannel::isRerun() const
@@ -295,6 +306,10 @@ QString MergedChannel::statusSuffix() const
     if (this->youtubeLive_)
     {
         livePlatforms.append("YouTube");
+    }
+    if (this->tiktokLive_)
+    {
+        livePlatforms.append("TikTok");
     }
 
     if (livePlatforms.isEmpty())
@@ -398,6 +413,52 @@ void MergedChannel::initializeSources()
                 this->streamStatusChanged.invoke();
             });
         this->youtubeLiveChat_->start();
+    }
+
+    if (this->config_.tiktokEnabled &&
+        !this->config_.tiktokUsername.trimmed().isEmpty())
+    {
+        this->tiktokLiveChat_ =
+            std::make_unique<TikTokLiveChat>(this->config_.tiktokUsername);
+        this->tiktokConnections_.managedConnect(
+            this->tiktokLiveChat_->messageReceived,
+            [this](const MessagePtr &message) {
+                this->addTikTokMessage(message);
+            });
+        this->tiktokConnections_.managedConnect(
+            this->tiktokLiveChat_->sourceResolved,
+            [this](const QString &username) {
+                if (!username.isEmpty())
+                {
+                    this->config_.tiktokUsername = username;
+                }
+            });
+        this->tiktokConnections_.managedConnect(
+            this->tiktokLiveChat_->systemMessageReceived,
+            [this](const MessagePtr &message) {
+                this->addSystemStatusMessage(message);
+                this->refreshStatusText();
+            });
+        this->tiktokConnections_.managedConnect(
+            this->tiktokLiveChat_->liveStatusChanged, [this] {
+                this->tiktokLive_ = this->tiktokLiveChat_->isLive();
+                if (this->tiktokLive_)
+                {
+                    if (!this->tiktokLiveJoinAnnounced_)
+                    {
+                        this->announceJoinedLiveChat(
+                            MessagePlatform::TikTok,
+                            this->tiktokLiveChat_->liveTitle());
+                    }
+                }
+                else
+                {
+                    this->tiktokLiveJoinAnnounced_ = false;
+                }
+                this->refreshStatusText();
+                this->streamStatusChanged.invoke();
+            });
+        this->tiktokLiveChat_->start();
     }
 }
 
@@ -617,6 +678,35 @@ void MergedChannel::addYouTubeMessage(const MessagePtr &message)
     this->addMessage(merged, MessageContext::Repost);
 }
 
+void MergedChannel::addTikTokMessage(const MessagePtr &message)
+{
+    const auto key = messageKey(message, MessagePlatform::TikTok);
+    if (!key.isEmpty() && this->mirroredMessages_.contains(key))
+    {
+        return;
+    }
+
+    auto merged = this->createMergedMessage(message, MessagePlatform::TikTok);
+    if (!merged)
+    {
+        return;
+    }
+
+    if (!key.isEmpty())
+    {
+        this->insertMirror(key, merged);
+    }
+
+    const auto chatterName =
+        !merged->loginName.isEmpty() ? merged->loginName : merged->displayName;
+    if (!chatterName.isEmpty())
+    {
+        this->addRecentChatter(chatterName);
+    }
+
+    this->addMessage(merged, MessageContext::Repost);
+}
+
 bool MergedChannel::shouldMirrorSourceMessage(const MessagePtr &message)
 {
     if (!message)
@@ -664,6 +754,10 @@ void MergedChannel::announceJoinedLiveChat(MessagePlatform platform,
     else if (platform == MessagePlatform::AnyOrTwitch)
     {
         this->twitchLiveJoinAnnounced_ = true;
+    }
+    else if (platform == MessagePlatform::TikTok)
+    {
+        this->tiktokLiveJoinAnnounced_ = true;
     }
 
     this->addSystemStatusMessage(message);
@@ -717,6 +811,18 @@ void MergedChannel::refreshStatusText()
         }
         lines.append(QString("YouTube: %1").arg(youtubeStatus));
     }
+    if (this->config_.tiktokEnabled)
+    {
+        QString tiktokStatus =
+            this->tiktokLive_ ? QStringLiteral("live")
+                              : QStringLiteral("waiting for live chat");
+        if (this->tiktokLiveChat_ &&
+            !this->tiktokLiveChat_->statusText().trimmed().isEmpty())
+        {
+            tiktokStatus = this->tiktokLiveChat_->statusText();
+        }
+        lines.append(QString("TikTok: %1").arg(tiktokStatus));
+    }
 
     this->tooltipText_ = lines.join("<br>");
 }
@@ -729,6 +835,8 @@ QColor MergedChannel::platformAccent(MessagePlatform platform)
             return QColor(83, 252, 24, 36);
         case MessagePlatform::YouTube:
             return QColor(255, 48, 64, 60);
+        case MessagePlatform::TikTok:
+            return QColor(254, 44, 85, 50);
         case MessagePlatform::AnyOrTwitch:
         default:
             return QColor(145, 70, 255, 36);

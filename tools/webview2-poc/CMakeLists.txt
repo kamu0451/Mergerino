@@ -1,4 +1,7 @@
-add_executable(webview2-poc main.cpp)
+add_executable(webview2-poc
+    main.cpp
+    inject_script.hpp
+)
 
 target_link_libraries(webview2-poc PRIVATE
     Mergerino::WebView2

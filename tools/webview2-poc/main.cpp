@@ -1,13 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Mergerino
 // SPDX-License-Identifier: MIT
 //
-// Hidden WebView2 host that navigates to a TikTok live page and prints
-// the rendered document title, then exits. Proves the SDK + Windows 11
-// Runtime are wired end-to-end before we bake WebView2 into mergerino.exe.
+// Hidden WebView2 host that navigates to a TikTok live page, injects a
+// WebSocket-interception script, and prints every forwarded frame from
+// TikTok's /webcast/ socket. Proves the SDK + Windows 11 Runtime + our
+// JS hook can deliver raw chat frames to a C++ process end-to-end.
 //
 // Usage:
 //   webview2-poc                                                  (default URL)
 //   webview2-poc https://www.tiktok.com/@some_user/live           (override)
+//
+// Exits after --max-messages binary frames land (default 20), or after the
+// timeout. Meant to be inspected manually from the CI artifact.
 
 #include <atomic>
 #include <cstdio>
@@ -18,17 +22,21 @@
 #include <wrl.h>
 #include <WebView2.h>
 
+#include "inject_script.hpp"
+
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
 
 namespace {
 
-constexpr wchar_t kDefaultUrl[] = L"https://www.tiktok.com/@gevad1ch/live";
-constexpr wchar_t kClassName[]  = L"MergerinoWebView2Poc";
-constexpr UINT_PTR kTimeoutId   = 1;
-constexpr UINT     kTimeoutMs   = 30'000;
+constexpr wchar_t kDefaultUrl[]   = L"https://www.tiktok.com/@gevad1ch/live";
+constexpr wchar_t kClassName[]    = L"MergerinoWebView2Poc";
+constexpr UINT_PTR kTimeoutId     = 1;
+constexpr UINT     kTimeoutMs     = 60'000;
+constexpr int      kMaxMessages   = 20;
 
 std::atomic<int> g_exitCode{0};
+std::atomic<int> g_binaryMessages{0};
 HWND             g_host{};
 std::wstring     g_targetUrl;
 
@@ -37,7 +45,8 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     switch (msg) {
         case WM_TIMER:
             if (wp == kTimeoutId) {
-                std::puts("[timeout] 30s elapsed without completion");
+                std::printf("[timeout] %ums elapsed (messages=%d)\n",
+                            kTimeoutMs, g_binaryMessages.load());
                 g_exitCode = 99;
                 DestroyWindow(hwnd);
             }
@@ -54,7 +63,7 @@ void requestShutdown()
     PostMessageW(g_host, WM_CLOSE, 0, 0);
 }
 
-void printWide(const wchar_t *label, const std::wstring &value)
+void printWide(const char *label, const std::wstring &value)
 {
     std::fputs(label, stdout);
     int required = WideCharToMultiByte(CP_UTF8, 0, value.data(),
@@ -66,6 +75,43 @@ void printWide(const wchar_t *label, const std::wstring &value)
     std::fwrite(utf8.data(), 1, utf8.size(), stdout);
     std::fputc('\n', stdout);
     std::fflush(stdout);
+}
+
+HRESULT installWebMessageHandler(ICoreWebView2 *webview)
+{
+    EventRegistrationToken token{};
+    return webview->add_WebMessageReceived(
+        Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+            [](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
+                LPWSTR json = nullptr;
+                if (FAILED(args->get_WebMessageAsJson(&json)) || json == nullptr) {
+                    return S_OK;
+                }
+                std::wstring msg(json);
+                CoTaskMemFree(json);
+
+                const bool isBinary = msg.find(L"\"ws-binary\"") != std::wstring::npos;
+                if (isBinary) {
+                    int n = g_binaryMessages.fetch_add(1) + 1;
+                    std::printf("[ws-binary %d] ", n);
+                    // Trim the base64 blob for readability
+                    auto pos = msg.find(L"\"base64\"");
+                    if (pos != std::wstring::npos) {
+                        msg = msg.substr(0, pos) + L"\"base64\":\"...\"}";
+                    }
+                    printWide("", msg);
+                    if (n >= kMaxMessages) {
+                        std::puts("[done] reached max messages");
+                        g_exitCode = 0;
+                        requestShutdown();
+                    }
+                } else {
+                    printWide("[ws-event] ", msg);
+                }
+                return S_OK;
+            })
+            .Get(),
+        &token);
 }
 
 HRESULT installNavigationHandler(ICoreWebView2 *webview)
@@ -86,26 +132,19 @@ HRESULT installNavigationHandler(ICoreWebView2 *webview)
                     requestShutdown();
                     return S_OK;
                 }
-                std::puts("[navigation] ok");
+                std::puts("[navigation] ok - waiting for ws traffic");
                 sender->ExecuteScript(
                     L"document.title",
                     Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
                         [](HRESULT hr, LPCWSTR result) -> HRESULT {
-                            if (FAILED(hr) || result == nullptr) {
-                                std::printf("[title] ExecuteScript failed 0x%08lx\n",
-                                            hr);
-                                g_exitCode = 2;
-                                requestShutdown();
-                                return S_OK;
+                            if (SUCCEEDED(hr) && result != nullptr) {
+                                std::wstring s(result);
+                                if (s.size() >= 2 && s.front() == L'"' &&
+                                    s.back() == L'"') {
+                                    s = s.substr(1, s.size() - 2);
+                                }
+                                printWide("[title] ", s);
                             }
-                            std::wstring s(result);
-                            if (s.size() >= 2 && s.front() == L'"' &&
-                                s.back() == L'"') {
-                                s = s.substr(1, s.size() - 2);
-                            }
-                            printWide(L"[title] ", s);
-                            g_exitCode = 0;
-                            requestShutdown();
                             return S_OK;
                         })
                         .Get());
@@ -113,6 +152,23 @@ HRESULT installNavigationHandler(ICoreWebView2 *webview)
             })
             .Get(),
         &token);
+}
+
+HRESULT installInjectScript(ICoreWebView2 *webview)
+{
+    return webview->AddScriptToExecuteOnDocumentCreated(
+        std::wstring(mergerino::poc::kInjectScript).c_str(),
+        Callback<ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
+            [](HRESULT hr, LPCWSTR /*scriptId*/) -> HRESULT {
+                if (FAILED(hr)) {
+                    std::printf("[inject] AddScriptToExecuteOnDocumentCreated failed 0x%08lx\n",
+                                hr);
+                } else {
+                    std::puts("[inject] ws-hook registered");
+                }
+                return S_OK;
+            })
+            .Get());
 }
 
 HRESULT onControllerReady(HRESULT hr, ICoreWebView2Controller *controller)
@@ -133,7 +189,9 @@ HRESULT onControllerReady(HRESULT hr, ICoreWebView2Controller *controller)
         return S_OK;
     }
     installNavigationHandler(webview.Get());
-    printWide(L"[navigate] ", g_targetUrl);
+    installWebMessageHandler(webview.Get());
+    installInjectScript(webview.Get());
+    printWide("[navigate] ", g_targetUrl);
     webview->Navigate(g_targetUrl.c_str());
     return S_OK;
 }

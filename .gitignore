@@ -77,6 +77,10 @@ Thumbs.db
 # I HATE MAC
 .DS_Store
 
+# TikTok spike output (captured html/json/frames - do not commit)
+tools/tiktok-spike/out/
+tools/tiktok-spike/.venv/
+
 # Other editors/IDEs
 .vscode
 .vs

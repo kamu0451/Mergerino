@@ -488,9 +488,7 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         {
             return;
         }
-        const QByteArray raw =
-            QByteArray::fromBase64(base64.toLatin1(),
-                                   QByteArray::Base64ForgivingDecoding);
+        const QByteArray raw = QByteArray::fromBase64(base64.toLatin1());
         if (raw.isEmpty())
         {
             return;

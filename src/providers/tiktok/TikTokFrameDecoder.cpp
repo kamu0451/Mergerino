@@ -80,6 +80,217 @@ bool decodeUser(std::span<const std::uint8_t> bytes, DecodedUser &out)
     return true;
 }
 
+bool decodeLikeMessage(std::span<const std::uint8_t> bytes,
+                       DecodedLikeEvent &out)
+{
+    Reader r = Reader::fromSpan(bytes);
+    std::uint32_t field{};
+    WireType wire{};
+    while (r.hasMore())
+    {
+        if (!r.readTag(field, wire))
+        {
+            return false;
+        }
+        switch (field)
+        {
+            case 2: {  // count (int32)
+                std::uint64_t v{};
+                if (!r.readVarint(v))
+                {
+                    return false;
+                }
+                out.count = static_cast<qint32>(v);
+                break;
+            }
+            case 3: {  // total (int64)
+                std::uint64_t v{};
+                if (!r.readVarint(v))
+                {
+                    return false;
+                }
+                out.total = static_cast<qint64>(v);
+                break;
+            }
+            case 5: {  // user (User)
+                std::span<const std::uint8_t> sub;
+                if (!r.readLengthDelimited(sub))
+                {
+                    return false;
+                }
+                if (!decodeUser(sub, out.user))
+                {
+                    return false;
+                }
+                break;
+            }
+            default:
+                if (!r.skip(wire))
+                {
+                    return false;
+                }
+                break;
+        }
+    }
+    return true;
+}
+
+bool decodeMemberMessage(std::span<const std::uint8_t> bytes,
+                         DecodedMemberEvent &out)
+{
+    Reader r = Reader::fromSpan(bytes);
+    std::uint32_t field{};
+    WireType wire{};
+    while (r.hasMore())
+    {
+        if (!r.readTag(field, wire))
+        {
+            return false;
+        }
+        switch (field)
+        {
+            case 2: {  // user (User)
+                std::span<const std::uint8_t> sub;
+                if (!r.readLengthDelimited(sub))
+                {
+                    return false;
+                }
+                if (!decodeUser(sub, out.user))
+                {
+                    return false;
+                }
+                break;
+            }
+            case 9: {  // enter_type (int32)
+                std::uint64_t v{};
+                if (!r.readVarint(v))
+                {
+                    return false;
+                }
+                out.enterType = static_cast<qint32>(v);
+                break;
+            }
+            default:
+                if (!r.skip(wire))
+                {
+                    return false;
+                }
+                break;
+        }
+    }
+    return true;
+}
+
+bool decodeSocialMessage(std::span<const std::uint8_t> bytes,
+                         DecodedSocialEvent &out)
+{
+    Reader r = Reader::fromSpan(bytes);
+    std::uint32_t field{};
+    WireType wire{};
+    while (r.hasMore())
+    {
+        if (!r.readTag(field, wire))
+        {
+            return false;
+        }
+        switch (field)
+        {
+            case 2: {  // user (User)
+                std::span<const std::uint8_t> sub;
+                if (!r.readLengthDelimited(sub))
+                {
+                    return false;
+                }
+                if (!decodeUser(sub, out.user))
+                {
+                    return false;
+                }
+                break;
+            }
+            case 4: {  // action (int64)
+                std::uint64_t v{};
+                if (!r.readVarint(v))
+                {
+                    return false;
+                }
+                out.action = static_cast<qint64>(v);
+                break;
+            }
+            case 6: {  // follow_count (int64)
+                std::uint64_t v{};
+                if (!r.readVarint(v))
+                {
+                    return false;
+                }
+                out.followCount = static_cast<qint64>(v);
+                break;
+            }
+            default:
+                if (!r.skip(wire))
+                {
+                    return false;
+                }
+                break;
+        }
+    }
+    return true;
+}
+
+bool decodeGiftMessage(std::span<const std::uint8_t> bytes,
+                       DecodedGiftEvent &out)
+{
+    Reader r = Reader::fromSpan(bytes);
+    std::uint32_t field{};
+    WireType wire{};
+    while (r.hasMore())
+    {
+        if (!r.readTag(field, wire))
+        {
+            return false;
+        }
+        switch (field)
+        {
+            case 5: {  // repeat_count (int32)
+                std::uint64_t v{};
+                if (!r.readVarint(v))
+                {
+                    return false;
+                }
+                out.repeatCount = static_cast<qint32>(v);
+                break;
+            }
+            case 7: {  // from_user (User)
+                std::span<const std::uint8_t> sub;
+                if (!r.readLengthDelimited(sub))
+                {
+                    return false;
+                }
+                if (!decodeUser(sub, out.fromUser))
+                {
+                    return false;
+                }
+                break;
+            }
+            case 9: {  // repeat_end (int32)
+                std::uint64_t v{};
+                if (!r.readVarint(v))
+                {
+                    return false;
+                }
+                out.repeatEnd = static_cast<qint32>(v);
+                break;
+            }
+            default:
+                if (!r.skip(wire))
+                {
+                    return false;
+                }
+                break;
+        }
+    }
+    return true;
+}
+
 bool decodeChatMessage(std::span<const std::uint8_t> bytes,
                        DecodedChatMessage &out)
 {
@@ -175,7 +386,12 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
                 break;
         }
     }
-    if (method == QStringLiteral("WebcastChatMessage") && !payload.empty())
+    if (payload.empty())
+    {
+        return true;
+    }
+
+    if (method == QStringLiteral("WebcastChatMessage"))
     {
         DecodedChatMessage chat;
         chat.msgId = msgId;
@@ -184,7 +400,40 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
             out.chatMessages.push_back(std::move(chat));
         }
     }
-    // Gift / like / member / social decoding lands in a follow-up task.
+    else if (method == QStringLiteral("WebcastLikeMessage"))
+    {
+        DecodedLikeEvent ev;
+        if (decodeLikeMessage(payload, ev))
+        {
+            out.likeEvents.push_back(std::move(ev));
+        }
+    }
+    else if (method == QStringLiteral("WebcastMemberMessage"))
+    {
+        DecodedMemberEvent ev;
+        if (decodeMemberMessage(payload, ev))
+        {
+            out.memberEvents.push_back(std::move(ev));
+        }
+    }
+    else if (method == QStringLiteral("WebcastSocialMessage"))
+    {
+        DecodedSocialEvent ev;
+        if (decodeSocialMessage(payload, ev))
+        {
+            out.socialEvents.push_back(std::move(ev));
+        }
+    }
+    else if (method == QStringLiteral("WebcastGiftMessage"))
+    {
+        DecodedGiftEvent ev;
+        if (decodeGiftMessage(payload, ev))
+        {
+            out.giftEvents.push_back(std::move(ev));
+        }
+    }
+    // Other methods (room user sequence, control, room notify, ...) are left
+    // for follow-up work and ignored here.
     return true;
 }
 

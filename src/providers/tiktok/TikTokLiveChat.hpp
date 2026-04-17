@@ -14,6 +14,10 @@ namespace chatterino {
 
 namespace tiktok {
 struct DecodedChatMessage;
+struct DecodedLikeEvent;
+struct DecodedMemberEvent;
+struct DecodedSocialEvent;
+struct DecodedGiftEvent;
 }  // namespace tiktok
 
 // Reads a TikTok LIVE room by hosting a hidden WebView2 that runs TikTok's
@@ -70,6 +74,15 @@ private:
     void handleWebMessage(const QString &json);
     void emitSystemMessage(const QString &text);
     MessagePtr buildChatMessage(const tiktok::DecodedChatMessage &chat) const;
+    MessagePtr buildActivityMessage(const QString &text,
+                                    const QString &loginName = {}) const;
+
+    void handleLike(const tiktok::DecodedLikeEvent &ev);
+    void handleMember(const tiktok::DecodedMemberEvent &ev);
+    void handleSocial(const tiktok::DecodedSocialEvent &ev);
+    void handleGift(const tiktok::DecodedGiftEvent &ev);
+    void flushPendingLikes();
+    void flushPendingJoins();
 };
 
 }  // namespace chatterino

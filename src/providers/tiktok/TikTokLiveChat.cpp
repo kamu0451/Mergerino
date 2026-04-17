@@ -17,7 +17,9 @@
 #include <QJsonParseError>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QTimer>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
 
@@ -80,6 +82,16 @@ struct TikTokLiveChat::Impl {
     ComPtr<ICoreWebView2> webview;
     EventRegistrationToken navToken{};
     EventRegistrationToken msgToken{};
+
+    // Activity-event aggregation. TikTok likes / joins can burst at tens per
+    // second; we accumulate and flush on a debounce timer.
+    QTimer likeTimer;
+    QTimer joinTimer;
+    qint32 pendingLikeCount{0};
+    qint64 pendingLikeTotal{0};
+    QString pendingLikeUser;
+    qint32 pendingJoinCount{0};
+    QString pendingJoinUser;
 
     ~Impl()
     {
@@ -145,6 +157,14 @@ void TikTokLiveChat::start()
 
     ensureWindowClass();
     this->impl_ = std::make_unique<Impl>();
+    this->impl_->likeTimer.setSingleShot(true);
+    this->impl_->likeTimer.setInterval(1000);
+    this->impl_->joinTimer.setSingleShot(true);
+    this->impl_->joinTimer.setInterval(1500);
+    QObject::connect(&this->impl_->likeTimer, &QTimer::timeout,
+                     [this]() { this->flushPendingLikes(); });
+    QObject::connect(&this->impl_->joinTimer, &QTimer::timeout,
+                     [this]() { this->flushPendingJoins(); });
     this->impl_->host = CreateWindowExW(
         0, kWindowClass, L"mergerino-tiktok-host", WS_POPUP, 0, 0, 1, 1,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -480,7 +500,194 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         {
             this->messageReceived.invoke(this->buildChatMessage(chat));
         }
+        for (const auto &ev : frame.likeEvents)
+        {
+            this->handleLike(ev);
+        }
+        for (const auto &ev : frame.memberEvents)
+        {
+            this->handleMember(ev);
+        }
+        for (const auto &ev : frame.socialEvents)
+        {
+            this->handleSocial(ev);
+        }
+        for (const auto &ev : frame.giftEvents)
+        {
+            this->handleGift(ev);
+        }
     }
+}
+
+MessagePtr TikTokLiveChat::buildActivityMessage(const QString &text,
+                                                const QString &loginName) const
+{
+    MessageBuilder b;
+    b->platform = MessagePlatform::TikTok;
+    b->flags.set(MessageFlag::System);
+    b->flags.set(MessageFlag::Subscription);
+    b->flags.set(MessageFlag::DoNotTriggerNotification);
+    b->channelName = this->username_;
+    if (!loginName.isEmpty())
+    {
+        b->loginName = loginName;
+        b->displayName = loginName;
+        b->localizedName = loginName;
+    }
+    b->messageText = text;
+    b->searchText = text;
+    b->serverReceivedTime = QDateTime::currentDateTime();
+    b.emplace<TimestampElement>(b->serverReceivedTime.toLocalTime().time());
+    b.emplace<TextElement>(text, MessageElementFlag::Text, MessageColor::System);
+    return b.release();
+}
+
+void TikTokLiveChat::handleLike(const tiktok::DecodedLikeEvent &ev)
+{
+    if (!this->impl_)
+    {
+        return;
+    }
+    const qint32 inc = std::max<qint32>(ev.count, 1);
+    this->impl_->pendingLikeCount += inc;
+    if (ev.total > this->impl_->pendingLikeTotal)
+    {
+        this->impl_->pendingLikeTotal = ev.total;
+    }
+    const QString name = !ev.user.nickname.isEmpty() ? ev.user.nickname
+                                                     : ev.user.uniqueId;
+    if (!name.isEmpty())
+    {
+        this->impl_->pendingLikeUser = name;
+    }
+    if (!this->impl_->likeTimer.isActive())
+    {
+        this->impl_->likeTimer.start();
+    }
+}
+
+void TikTokLiveChat::handleMember(const tiktok::DecodedMemberEvent &ev)
+{
+    if (!this->impl_)
+    {
+        return;
+    }
+    // enter_type == 1 is "entered the room". Other action values carry
+    // admin / block / kick semantics we don't route to activity for now.
+    if (ev.enterType != 1 && ev.enterType != 0)
+    {
+        return;
+    }
+    this->impl_->pendingJoinCount++;
+    const QString name = !ev.user.nickname.isEmpty() ? ev.user.nickname
+                                                     : ev.user.uniqueId;
+    if (!name.isEmpty())
+    {
+        this->impl_->pendingJoinUser = name;
+    }
+    if (!this->impl_->joinTimer.isActive())
+    {
+        this->impl_->joinTimer.start();
+    }
+}
+
+void TikTokLiveChat::handleSocial(const tiktok::DecodedSocialEvent &ev)
+{
+    const QString name = !ev.user.nickname.isEmpty() ? ev.user.nickname
+                                                     : ev.user.uniqueId;
+    if (name.isEmpty())
+    {
+        return;
+    }
+    QString text;
+    switch (ev.action)
+    {
+        case 1:
+            text = QStringLiteral("%1 followed the streamer").arg(name);
+            break;
+        case 3:
+            text = QStringLiteral("%1 shared the stream").arg(name);
+            break;
+        default:
+            return;  // unknown social actions are dropped
+    }
+    this->messageReceived.invoke(this->buildActivityMessage(text, name));
+}
+
+void TikTokLiveChat::handleGift(const tiktok::DecodedGiftEvent &ev)
+{
+    // Suppress intermediate combo frames; only emit on the final frame.
+    if (ev.repeatEnd != 1)
+    {
+        return;
+    }
+    const QString name = !ev.fromUser.nickname.isEmpty()
+                             ? ev.fromUser.nickname
+                             : ev.fromUser.uniqueId;
+    if (name.isEmpty())
+    {
+        return;
+    }
+    const int count = std::max(1, static_cast<int>(ev.repeatCount));
+    const QString text = count > 1
+                             ? QStringLiteral("%1 sent a gift x%2")
+                                   .arg(name)
+                                   .arg(count)
+                             : QStringLiteral("%1 sent a gift").arg(name);
+    this->messageReceived.invoke(this->buildActivityMessage(text, name));
+}
+
+void TikTokLiveChat::flushPendingLikes()
+{
+    if (!this->impl_ || this->impl_->pendingLikeCount <= 0)
+    {
+        return;
+    }
+    const qint32 count = this->impl_->pendingLikeCount;
+    const qint64 total = this->impl_->pendingLikeTotal;
+    const QString user = this->impl_->pendingLikeUser;
+    this->impl_->pendingLikeCount = 0;
+    this->impl_->pendingLikeTotal = 0;
+    this->impl_->pendingLikeUser.clear();
+
+    QString text;
+    if (count == 1 && !user.isEmpty())
+    {
+        text = QStringLiteral("%1 liked the stream").arg(user);
+    }
+    else if (total > 0)
+    {
+        text = QStringLiteral("%1 likes (%2 total)")
+                   .arg(QString::number(count), QString::number(total));
+    }
+    else
+    {
+        text = QStringLiteral("%1 likes").arg(QString::number(count));
+    }
+    this->messageReceived.invoke(this->buildActivityMessage(text, user));
+}
+
+void TikTokLiveChat::flushPendingJoins()
+{
+    if (!this->impl_ || this->impl_->pendingJoinCount <= 0)
+    {
+        return;
+    }
+    const qint32 count = this->impl_->pendingJoinCount;
+    const QString user = this->impl_->pendingJoinUser;
+    this->impl_->pendingJoinCount = 0;
+    this->impl_->pendingJoinUser.clear();
+
+    QString text;
+    if (count == 1 && !user.isEmpty())
+    {
+        text = QStringLiteral("%1 joined").arg(user);
+    }
+    else
+    {
+        text = QStringLiteral("%1 viewers joined").arg(QString::number(count));
+    }
+    this->messageReceived.invoke(this->buildActivityMessage(text, user));
 }
 
 }  // namespace chatterino

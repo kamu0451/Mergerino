@@ -34,9 +34,39 @@ struct DecodedChatMessage {
     qint64 msgId{0};
 };
 
+struct DecodedLikeEvent {
+    DecodedUser user;
+    qint32 count{0};   // likes delivered in this frame (often 1)
+    qint64 total{0};   // running total for the room
+};
+
+// TikTok bundles join / admin-set / block events into WebcastMemberMessage.
+// enter_type=1 is the common "user entered the room" case.
+struct DecodedMemberEvent {
+    DecodedUser user;
+    qint32 enterType{0};
+};
+
+// action: 1 = follow, 3 = share (per community-decoded values).
+struct DecodedSocialEvent {
+    DecodedUser user;
+    qint64 action{0};
+    qint64 followCount{0};
+};
+
+struct DecodedGiftEvent {
+    DecodedUser fromUser;
+    qint32 repeatCount{0};
+    qint32 repeatEnd{0};  // 1 = final frame of a gift combo; earlier frames = still comboing
+};
+
 struct DecodedFrame {
     QString payloadType;
     std::vector<DecodedChatMessage> chatMessages;
+    std::vector<DecodedLikeEvent> likeEvents;
+    std::vector<DecodedMemberEvent> memberEvents;
+    std::vector<DecodedSocialEvent> socialEvents;
+    std::vector<DecodedGiftEvent> giftEvents;
 };
 
 DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes);

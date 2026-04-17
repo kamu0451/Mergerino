@@ -171,6 +171,7 @@ message(STATUS "Qt version: ${Qt${MAJOR_QT_VERSION}_VERSION}")
 if(WIN32)
     add_subdirectory(lib/WinToast EXCLUDE_FROM_ALL)
     include(${CMAKE_CURRENT_LIST_DIR}/cmake/WebView2.cmake)
+    add_subdirectory(tools/webview2-poc)
 endif()
 
 # Find boost on the system

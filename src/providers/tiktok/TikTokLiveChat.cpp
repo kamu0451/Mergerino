@@ -143,6 +143,9 @@ void TikTokLiveChat::start()
     this->running_ = true;
     this->sourceResolved.invoke(this->username_);
     this->setStatusText(QStringLiteral("Connecting to TikTok..."), false);
+    this->emitSystemMessage(
+        QStringLiteral("[TikTok diag] start() entered for @%1")
+            .arg(this->username_));
 
     HRESULT hrCo = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hrCo) && hrCo != RPC_E_CHANGED_MODE)
@@ -206,6 +209,9 @@ void TikTokLiveChat::start()
                     return S_OK;
                 }
                 this->impl_->env = env;
+                this->emitSystemMessage(QStringLiteral(
+                    "[TikTok diag] WebView2 environment ready, creating "
+                    "controller"));
 
                 return env->CreateCoreWebView2Controller(
                     this->impl_->host,
@@ -238,6 +244,9 @@ void TikTokLiveChat::start()
                                 this->running_ = false;
                                 return S_OK;
                             }
+                            this->emitSystemMessage(QStringLiteral(
+                                "[TikTok diag] Controller + webview ready, "
+                                "wiring handlers"));
 
                             // NavigationCompleted: detect page load state
                             this->impl_->webview->add_NavigationCompleted(
@@ -253,6 +262,15 @@ void TikTokLiveChat::start()
                                         }
                                         BOOL ok = FALSE;
                                         args->get_IsSuccess(&ok);
+                                        COREWEBVIEW2_WEB_ERROR_STATUS status{};
+                                        args->get_WebErrorStatus(&status);
+                                        this->emitSystemMessage(
+                                            QStringLiteral(
+                                                "[TikTok diag] "
+                                                "NavigationCompleted "
+                                                "(ok=%1, status=%2)")
+                                                .arg(ok ? "true" : "false")
+                                                .arg(static_cast<int>(status)));
                                         if (!ok)
                                         {
                                             this->setStatusText(
@@ -308,8 +326,21 @@ void TikTokLiveChat::start()
                             const QString url =
                                 QStringLiteral("https://www.tiktok.com/@%1/live")
                                     .arg(this->username_);
-                            this->impl_->webview->Navigate(
+                            this->emitSystemMessage(
+                                QStringLiteral(
+                                    "[TikTok diag] Navigating to %1")
+                                    .arg(url));
+                            HRESULT navHr = this->impl_->webview->Navigate(
                                 toWide(url).c_str());
+                            if (FAILED(navHr))
+                            {
+                                this->emitSystemMessage(
+                                    QStringLiteral(
+                                        "[TikTok diag] Navigate() call "
+                                        "failed synchronously (0x%1)")
+                                        .arg(static_cast<quint32>(navHr), 8,
+                                             16, QChar('0')));
+                            }
                             return S_OK;
                         })
                         .Get());

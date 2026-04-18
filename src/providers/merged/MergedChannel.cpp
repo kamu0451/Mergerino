@@ -32,7 +32,10 @@ namespace {
 using namespace chatterino;
 
 constexpr qint64 VIEWER_DELTA_WINDOW_MS = 5 * 60 * 1000;
-constexpr qint64 VIEWER_DELTA_MIN_SPAN_MS = 30 * 1000;
+// Don't show the delta until we actually have 5 minutes of history,
+// otherwise the first few samples produce wild percentages as viewer
+// counts stabilize after a stream is joined.
+constexpr qint64 VIEWER_DELTA_MIN_SPAN_MS = 5 * 60 * 1000;
 
 QString normalizeChannelName(QString value)
 {

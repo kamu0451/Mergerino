@@ -63,6 +63,7 @@ public:
 
     QString statusSuffix() const;
     QString tooltipText() const;
+    unsigned totalViewerCount() const;
 
     ChannelPtr twitchChannel() const;
     ChannelPtr kickChannel() const;

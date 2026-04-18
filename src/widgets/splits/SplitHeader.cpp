@@ -1114,6 +1114,14 @@ void SplitHeader::updateChannelText()
         if (this->isLive_)
         {
             title += mergedChannel->statusSuffix();
+            if (getSettings()->headerViewerCount)
+            {
+                const auto totalViewers = mergedChannel->totalViewerCount();
+                if (totalViewers > 0)
+                {
+                    title += " - " + localizeNumbers(totalViewers);
+                }
+            }
         }
     }
 

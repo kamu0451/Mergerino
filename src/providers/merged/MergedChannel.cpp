@@ -325,6 +325,29 @@ QString MergedChannel::tooltipText() const
     return this->tooltipText_;
 }
 
+unsigned MergedChannel::totalViewerCount() const
+{
+    unsigned total = 0;
+    if (this->twitchLive_ && this->twitchChannel_)
+    {
+        if (auto *twitch =
+                dynamic_cast<TwitchChannel *>(this->twitchChannel_.get()))
+        {
+            total += twitch->accessStreamStatus()->viewerCount;
+        }
+    }
+    if (this->kickLive_ && this->kickChannel_)
+    {
+        if (auto *kick =
+                dynamic_cast<KickChannel *>(this->kickChannel_.get()))
+        {
+            total +=
+                static_cast<unsigned>(kick->streamData().viewerCount);
+        }
+    }
+    return total;
+}
+
 ChannelPtr MergedChannel::twitchChannel() const
 {
     return this->twitchChannel_;
@@ -534,6 +557,9 @@ void MergedChannel::connectSourceSignals(
                 this->kickLiveJoinAnnounced_ = false;
             }
             this->refreshStatusText();
+            this->streamStatusChanged.invoke();
+        });
+        connections.managedConnect(kick->streamDataChanged, [this] {
             this->streamStatusChanged.invoke();
         });
     }

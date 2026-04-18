@@ -1198,7 +1198,6 @@ add_library(${VERSION_PROJECT} STATIC ${VERSION_SOURCE_FILES})
 target_compile_definitions(${VERSION_PROJECT} PRIVATE
     CHATTERINO_EXTRA_BUILD_STRING=${CHATTERINO_EXTRA_BUILD_STRING}
     $<$<BOOL:${WIN32}>:USEWINSDK>
-    $<$<BOOL:${BUILD_WITH_CRASHPAD}>:CHATTERINO_WITH_CRASHPAD>
 )
 
 # source group for IDEs
@@ -1332,11 +1331,6 @@ if (LIBRT)
         ${LIBRT}
         )
 endif ()
-
-if (BUILD_WITH_CRASHPAD)
-    target_compile_definitions(${LIBRARY_PROJECT} PUBLIC CHATTERINO_WITH_CRASHPAD)
-    target_link_libraries(${LIBRARY_PROJECT} PUBLIC crashpad::client)
-endif()
 
 # Configure compiler warnings
 if (MSVC)

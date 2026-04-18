@@ -14,7 +14,7 @@ env:
   HTTPBOX_TAG: v0.2.1
   QT_QPA_PLATFORM: minimal
   CONAN_VERSION: 2.11.0
-  C2_ENABLE_CRASHPAD: OFF
+  CHATTERINO_SKIP_GIT_GEN: 1
 
 concurrency:
   group: test-windows-${{ github.ref }}
@@ -28,8 +28,6 @@ jobs:
       matrix:
         os: [windows-latest]
         qt-version: [6.9.3]
-        skip-artifact: [false]
-        skip-crashpad: [true]
       fail-fast: false
     env:
       QT_MODULES: qtimageformats
@@ -37,15 +35,10 @@ jobs:
       C2_CONAN_CACHE_SUFFIX: ${{ case(startsWith(matrix.qt-version, '6.'), '-QT6', '') }}
 
     steps:
-      - name: Set Crashpad
-        if: matrix.skip-crashpad == false
-        run: |
-          echo "C2_ENABLE_CRASHPAD=ON" >> "$Env:GITHUB_ENV"
-
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install Qt
         uses: jurplel/install-qt-action@v4.3.0
@@ -62,10 +55,11 @@ jobs:
         uses: hendrikmuhs/ccache-action@v1.2.22
         with:
           variant: sccache
-          save: ${{ github.event_name == 'push' }}
-          key: sccache-test-${{ matrix.os }}-${{ matrix.qt-version }}-${{ matrix.skip-crashpad }}
+          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          key: sccache-test-${{ matrix.os }}-${{ matrix.qt-version }}
           restore-keys: |
             sccache-test-${{ matrix.os }}-${{ matrix.qt-version }}
+            sccache-build-windows-x64
 
       - name: Cache conan packages
         uses: actions/cache@v5
@@ -95,7 +89,7 @@ jobs:
           mkdir build-test
           cd build-test
           conan install .. `
-              -s build_type=RelWithDebInfo `
+              -s build_type=Release `
               -c tools.cmake.cmaketoolchain:generator="Ninja" `
               -b missing `
               --output-folder=. `
@@ -106,7 +100,15 @@ jobs:
           mkdir -Force build-test/bin
           cp "$((ls $Env:VCToolsRedistDir/onecore/x64 -Filter '*.CRT')[0].FullName)/*" build-test/bin
 
+      - name: Cache httpbox
+        id: cache-httpbox
+        uses: actions/cache@v5
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-httpbox-${{ env.HTTPBOX_TAG }}
+          path: httpbox
+
       - name: Install httpbox
+        if: steps.cache-httpbox.outputs.cache-hit != 'true'
         run: |
           mkdir httpbox
           Invoke-WebRequest -Uri "https://github.com/Chatterino/httpbox/releases/download/${{ env.HTTPBOX_TAG }}/httpbox-x86_64-pc-windows-msvc.zip" -outfile "httpbox.zip"
@@ -117,23 +119,45 @@ jobs:
         run: |
           cmake `
               -G Ninja `
-              -DCMAKE_BUILD_TYPE=RelWithDebInfo `
+              -DCMAKE_BUILD_TYPE=Release `
               -DBUILD_TESTS=On `
               -DBUILD_APP=OFF `
               -DCMAKE_TOOLCHAIN_FILE="conan_toolchain.cmake" `
               -DUSE_PRECOMPILED_HEADERS=On `
-              -DBUILD_WITH_CRASHPAD="$Env:C2_ENABLE_CRASHPAD" `
-              -DCHATTERINO_SPELLCHECK=On `
+              -DCHATTERINO_SPELLCHECK=Off `
               ..
           cmake --build . --parallel
         working-directory: build-test
 
+      - name: Cache Twitch PubSub Server Test
+        id: cache-pubsub-server
+        uses: actions/cache@v5
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-pubsub-server-${{ env.TWITCH_PUBSUB_SERVER_TAG }}
+          path: pubsub-server-test
+
       - name: Download and extract Twitch PubSub Server Test
+        if: steps.cache-pubsub-server.outputs.cache-hit != 'true'
         run: |
           mkdir pubsub-server-test
           Invoke-WebRequest -Uri "https://github.com/Chatterino/twitch-pubsub-server-test/releases/download/${{ env.TWITCH_PUBSUB_SERVER_TAG }}/server-${{ env.TWITCH_PUBSUB_SERVER_TAG }}-windows-amd64.zip" -outfile "pubsub-server.zip"
           Expand-Archive pubsub-server.zip -DestinationPath pubsub-server-test
           rm pubsub-server.zip
+
+      - name: Set test retry policy
+        run: |
+          if ("${{ github.event_name }}" -eq "pull_request" -or "${{ github.event_name }}" -eq "merge_group")
+          {
+            "CTEST_REPEAT_COUNT=2" >> $Env:GITHUB_ENV
+          }
+          elseif ("${{ github.event_name }}" -eq "push" -and "${{ github.ref }}" -eq "refs/heads/main")
+          {
+            "CTEST_REPEAT_COUNT=3" >> $Env:GITHUB_ENV
+          }
+          else
+          {
+            "CTEST_REPEAT_COUNT=3" >> $Env:GITHUB_ENV
+          }
 
       - name: Test
         timeout-minutes: 30
@@ -142,7 +166,7 @@ jobs:
           cd ..\pubsub-server-test
           ./server 127.0.0.1:9050 127.0.0.1:9052 &
           cd ..\build-test
-          ctest --repeat until-pass:4 --output-on-failure
+          ctest --repeat until-pass:$Env:CTEST_REPEAT_COUNT --output-on-failure
         working-directory: build-test
 
       - name: Clean Conan cache

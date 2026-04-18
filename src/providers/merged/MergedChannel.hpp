@@ -31,6 +31,8 @@ struct MergedChannelConfig {
     bool youtubeEnabled{false};
     QString youtubeStreamUrl;
 
+    bool operator==(const MergedChannelConfig &) const = default;
+
     QString displayName() const;
     QString effectiveTwitchChannelName() const;
     QString effectiveKickChannelName() const;

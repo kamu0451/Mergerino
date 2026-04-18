@@ -89,7 +89,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="conan_toolchain.cmake" `
             -DUSE_PRECOMPILED_HEADERS=ON `
-            -DBUILD_WITH_CRASHPAD=OFF `
             -DCHATTERINO_LTO=OFF `
             -DFORCE_JSON_GENERATION=Off `
             -DCHATTERINO_SPELLCHECK=On `

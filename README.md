@@ -41,11 +41,6 @@ Use the latest GitHub release instead:
 
 Mergerino currently supports Windows only.
 
-Use one of the Windows build guides in this repository:
-
-- [Building on Windows](./BUILDING_ON_WINDOWS.md)
-- [Building on Windows with vcpkg](./BUILDING_ON_WINDOWS_WITH_VCPKG.md)
-
 Clone with submodules:
 
 ```shell

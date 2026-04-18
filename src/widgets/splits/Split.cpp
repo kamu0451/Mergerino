@@ -230,6 +230,37 @@ void refreshActivityIcons(SplitContainer *container)
     }
 }
 
+bool areEquivalentIndirectChannels(const IndirectChannel &lhs,
+                                  const IndirectChannel &rhs)
+{
+    if (lhs.getType() != rhs.getType())
+    {
+        return false;
+    }
+
+    const auto left = lhs.get();
+    const auto right = rhs.get();
+    if (left == right)
+    {
+        return true;
+    }
+
+    if (!left || !right)
+    {
+        return left == right;
+    }
+
+    if (lhs.getType() == Channel::Type::Merged)
+    {
+        const auto leftMerged = std::dynamic_pointer_cast<MergedChannel>(left);
+        const auto rightMerged = std::dynamic_pointer_cast<MergedChannel>(right);
+        return leftMerged != nullptr && rightMerged != nullptr &&
+               leftMerged->config() == rightMerged->config();
+    }
+
+    return left->getName() == right->getName();
+}
+
 void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
                             bool enabled)
 {
@@ -1392,17 +1423,30 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
     // We can safely ignore this signal connection since the dialog will be closed before
     // this Split is closed
     std::ignore = dialog->closed.connect([=, this] {
-        const bool didSelectChannel = dialog->hasSeletedChannel();
-        if (didSelectChannel && activityOwnerSplit)
+        const bool acceptedChanges = dialog->hasSeletedChannel();
+        bool didChangeChannel = false;
+
+        if (acceptedChanges && activityOwnerSplit)
         {
-            activityOwnerSplit->setChannel(dialog->getSelectedChannel());
+            const auto selectedChannel = dialog->getSelectedChannel();
+            didChangeChannel = !areEquivalentIndirectChannels(
+                activityOwnerSplit->getIndirectChannel(), selectedChannel);
+            if (didChangeChannel)
+            {
+                activityOwnerSplit->setChannel(selectedChannel);
+            }
             activityOwnerSplit->setPlatformIndicatorMode(
                 dialog->platformIndicatorMode());
         }
 
-        callback(didSelectChannel);
+        callback(acceptedChanges);
 
-        if (didSelectChannel && activityOwnerSplit)
+        const bool didToggleActivityPane =
+            activityOwnerSplit != nullptr &&
+            (linkedActivityPane != nullptr) != dialog->activityPaneEnabled();
+
+        if (acceptedChanges && activityOwnerSplit &&
+            (didChangeChannel || didToggleActivityPane))
         {
             syncLinkedActivityPane(activityOwnerSplit, linkedActivityPane,
                                    dialog->activityPaneEnabled());

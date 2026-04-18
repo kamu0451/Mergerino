@@ -1,3 +1,0 @@
-# Ignore openssl issues
-leak:libcrypto.so.3
-leak:CRYPTO_zalloc

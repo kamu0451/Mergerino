@@ -96,6 +96,15 @@ jobs:
             core.setOutput('head_sha', run.head_sha);
             core.setOutput('head_branch', run.head_branch);
 
+      # Checkout first so actions/checkout's workspace clean doesn't
+      # wipe the downloaded artifact. Needed for the git-tag-push step
+      # below.
+      - name: Checkout for tag push
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
       - name: Download build artifact
         uses: actions/download-artifact@v5
         with:
@@ -109,12 +118,6 @@ jobs:
       # update-ref endpoint returns 403 on workflow_dispatch invocations
       # (unclear why - workflow_run with identical permissions works),
       # but a plain `git push --force` using GITHUB_TOKEN succeeds.
-      - name: Checkout for tag push
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          persist-credentials: true
-
       - name: Force-update latest tag
         env:
           HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}

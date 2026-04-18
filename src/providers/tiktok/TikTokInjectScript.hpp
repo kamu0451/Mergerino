@@ -8,15 +8,22 @@
 namespace chatterino::tiktok {
 
 // Runs before any TikTok page script via AddScriptToExecuteOnDocumentCreated.
-// Monkey-patches window.WebSocket so every /webcast/ socket's events are
-// forwarded to the C++ host through window.chrome.webview.postMessage. Binary
-// frames are base64-encoded; text frames pass through as UTF-8.
+// Monkey-patches window.WebSocket so every chat-socket's events are forwarded
+// to the C++ host through window.chrome.webview.postMessage. Binary frames
+// are base64-encoded; text frames pass through as UTF-8.
 //
-// Diagnostics: also reports every WebSocket URL the page opens (kind:
-// 'ws-probe'), every /webcast|im\/fetch/ HTTP request (kind: 'http-probe'),
-// and the final navigated URL on DOMContentLoaded (kind: 'nav-end'). These
-// surface as system messages so we can diagnose why a live page isn't
-// producing a chat WebSocket.
+// Chat socket identification: TikTok's live chat currently flows over
+//   wss://im-ws.tiktok.com/ws/v2?service=33554513&...
+// Older endpoints used /webcast/ URLs; we match either.
+//
+// Also wraps window.fetch to capture the response body of
+// /webcast/room/(enter|info) requests so we can surface the current
+// viewer count (rendered by the page as room.user_count) without running
+// our own poll or scraping the DOM.
+//
+// postMessage takes the payload object directly; do NOT call JSON.stringify -
+// the C++ side reads via get_WebMessageAsJson which fails with E_INVALIDARG
+// on string payloads.
 constexpr std::wstring_view kInjectScript = LR"JS(
 (function () {
     const Native = window.WebSocket;
@@ -24,9 +31,6 @@ constexpr std::wstring_view kInjectScript = LR"JS(
 
     const post = function (payload) {
         try {
-            // Post the object directly. WebView2 serializes and C++
-            // reads via get_WebMessageAsJson - that call fails with
-            // E_INVALIDARG if we hand it an already-stringified value.
             window.chrome.webview.postMessage(payload);
         } catch (e) { /* host gone - ignore */ }
     };
@@ -41,19 +45,12 @@ constexpr std::wstring_view kInjectScript = LR"JS(
     };
 
     const isChatSocket = function (u) {
-        // TikTok's live chat uses their general IM WebSocket rather than a
-        // "/webcast/" URL. Observed endpoint:
-        //   wss://im-ws.tiktok.com/ws/v2?service=33554513&...
-        // Keep /webcast/ as a fallback in case older pops show up.
         return /im-ws\.tiktok\.com\/ws|webcast/i.test(u);
     };
 
     const Patched = function (url, protocols) {
         const ws = new Native(url, protocols);
         const u = String(url);
-
-        post({ kind: 'ws-probe', url: u });
-
         if (!isChatSocket(u)) { return ws; }
 
         post({ kind: 'ws-open', url: u });
@@ -89,8 +86,8 @@ constexpr std::wstring_view kInjectScript = LR"JS(
 
     window.WebSocket = Patched;
 
-    const isInterestingHttp = function (u) {
-        return /webcast|im\/fetch|im\/push/i.test(String(u));
+    const isRoomInfoRequest = function (u) {
+        return /webcast\/room\/(enter|info|check_alive)/i.test(String(u));
     };
 
     const NativeFetch = window.fetch;
@@ -100,39 +97,18 @@ constexpr std::wstring_view kInjectScript = LR"JS(
             try {
                 u = typeof input === 'string' ? input : (input && input.url) || '';
             } catch (e) { /* ignore */ }
-            if (isInterestingHttp(u)) {
-                post({ kind: 'http-probe', via: 'fetch', url: String(u) });
+            const promise = NativeFetch.apply(this, arguments);
+            if (isRoomInfoRequest(u)) {
+                promise.then(function (resp) {
+                    return resp.clone().json();
+                }).then(function (json) {
+                    post({ kind: 'room-info', url: String(u), data: json });
+                }).catch(function () { /* ignore */ });
             }
-            return NativeFetch.apply(this, arguments);
+            return promise;
         };
         PatchedFetch.__mergerinoPatched = true;
         window.fetch = PatchedFetch;
-    }
-
-    const XHRopen = window.XMLHttpRequest && window.XMLHttpRequest.prototype
-        && window.XMLHttpRequest.prototype.open;
-    if (XHRopen && !XHRopen.__mergerinoPatched) {
-        window.XMLHttpRequest.prototype.open = function (method, url) {
-            try {
-                if (isInterestingHttp(url)) {
-                    post({ kind: 'http-probe', via: 'xhr', url: String(url) });
-                }
-            } catch (e) { /* ignore */ }
-            return XHRopen.apply(this, arguments);
-        };
-        window.XMLHttpRequest.prototype.open.__mergerinoPatched = true;
-    }
-
-    const reportNav = function () {
-        try {
-            post({ kind: 'nav-end', url: String(window.location.href),
-                   title: String(document.title || '') });
-        } catch (e) { /* ignore */ }
-    };
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', reportNav, { once: true });
-    } else {
-        reportNav();
     }
 })();
 )JS";

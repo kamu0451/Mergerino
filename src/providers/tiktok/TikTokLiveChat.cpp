@@ -12,9 +12,11 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QDir>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QJsonValue>
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTimer>
@@ -143,9 +145,6 @@ void TikTokLiveChat::start()
     this->running_ = true;
     this->sourceResolved.invoke(this->username_);
     this->setStatusText(QStringLiteral("Connecting to TikTok..."), false);
-    this->emitSystemMessage(
-        QStringLiteral("[TikTok diag] start() entered for @%1")
-            .arg(this->username_));
 
     HRESULT hrCo = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hrCo) && hrCo != RPC_E_CHANGED_MODE)
@@ -209,9 +208,6 @@ void TikTokLiveChat::start()
                     return S_OK;
                 }
                 this->impl_->env = env;
-                this->emitSystemMessage(QStringLiteral(
-                    "[TikTok diag] WebView2 environment ready, creating "
-                    "controller"));
 
                 return env->CreateCoreWebView2Controller(
                     this->impl_->host,
@@ -244,9 +240,6 @@ void TikTokLiveChat::start()
                                 this->running_ = false;
                                 return S_OK;
                             }
-                            this->emitSystemMessage(QStringLiteral(
-                                "[TikTok diag] Controller + webview ready, "
-                                "wiring handlers"));
 
                             // NavigationCompleted: detect page load state
                             this->impl_->webview->add_NavigationCompleted(
@@ -262,95 +255,12 @@ void TikTokLiveChat::start()
                                         }
                                         BOOL ok = FALSE;
                                         args->get_IsSuccess(&ok);
-                                        COREWEBVIEW2_WEB_ERROR_STATUS status{};
-                                        args->get_WebErrorStatus(&status);
-                                        this->emitSystemMessage(
-                                            QStringLiteral(
-                                                "[TikTok diag] "
-                                                "NavigationCompleted "
-                                                "(ok=%1, status=%2)")
-                                                .arg(ok ? "true" : "false")
-                                                .arg(static_cast<int>(status)));
                                         if (!ok)
                                         {
                                             this->setStatusText(
                                                 QStringLiteral(
                                                     "TikTok: navigation failed"),
                                                 true);
-                                            return S_OK;
-                                        }
-                                        // Post-nav sanity probe. Uses
-                                        // ExecuteScript's result callback
-                                        // rather than postMessage so we get
-                                        // the answer even if chrome.webview
-                                        // IPC is wedged. Returns a JSON
-                                        // string that C++ parses below.
-                                        const wchar_t *postNavProbe = L"(function(){"
-                                            L"try{"
-                                            L"return JSON.stringify({"
-                                            L"url:String(location.href),"
-                                            L"title:String(document.title||''),"
-                                            L"readyState:String(document.readyState),"
-                                            L"chromeWebview:"
-                                            L"!!(window.chrome&&window.chrome.webview),"
-                                            L"wsPatched:!!(window.WebSocket&&window.WebSocket.__mergerinoPatched),"
-                                            L"fetchPatched:!!(window.fetch&&window.fetch.__mergerinoPatched)"
-                                            L"});"
-                                            L"}catch(e){return JSON.stringify({error:String(e)});}"
-                                            L"})()";
-                                        HRESULT execHr =
-                                            this->impl_->webview->ExecuteScript(
-                                                postNavProbe,
-                                                Callback<
-                                                    ICoreWebView2ExecuteScriptCompletedHandler>(
-                                                    [this, guard](
-                                                        HRESULT errorCode,
-                                                        LPCWSTR resultJson)
-                                                        -> HRESULT {
-                                                        if (guard.expired())
-                                                        {
-                                                            return S_OK;
-                                                        }
-                                                        if (FAILED(errorCode))
-                                                        {
-                                                            this->emitSystemMessage(
-                                                                QStringLiteral(
-                                                                    "[TikTok "
-                                                                    "diag] "
-                                                                    "ExecuteScript "
-                                                                    "failed "
-                                                                    "(0x%1)")
-                                                                    .arg(
-                                                                        static_cast<
-                                                                            quint32>(
-                                                                            errorCode),
-                                                                        8, 16,
-                                                                        QChar(
-                                                                            '0')));
-                                                            return S_OK;
-                                                        }
-                                                        this->emitSystemMessage(
-                                                            QStringLiteral(
-                                                                "[TikTok diag] "
-                                                                "ExecuteScript "
-                                                                "result: %1")
-                                                                .arg(fromWide(
-                                                                    resultJson)));
-                                                        return S_OK;
-                                                    })
-                                                    .Get());
-                                        if (FAILED(execHr))
-                                        {
-                                            this->emitSystemMessage(
-                                                QStringLiteral(
-                                                    "[TikTok diag] "
-                                                    "ExecuteScript dispatch "
-                                                    "failed synchronously "
-                                                    "(0x%1)")
-                                                    .arg(
-                                                        static_cast<quint32>(
-                                                            execHr),
-                                                        8, 16, QChar('0')));
                                         }
                                         return S_OK;
                                     })
@@ -393,6 +303,12 @@ void TikTokLiveChat::start()
                             // /@user/live SPA never navigates again, so we'd
                             // miss every WebSocket. Navigate from inside the
                             // completion handler instead.
+                            // AddScriptToExecuteOnDocumentCreated is async;
+                            // the script is only registered when its
+                            // completion callback fires. Navigate from
+                            // inside the callback so the WebSocket hook is
+                            // guaranteed to be in place before TikTok's
+                            // page JS opens its chat socket.
                             const QString url =
                                 QStringLiteral("https://www.tiktok.com/@%1/live")
                                     .arg(this->username_);
@@ -401,48 +317,15 @@ void TikTokLiveChat::start()
                                     std::wstring(tiktok::kInjectScript).c_str(),
                                     Callback<
                                         ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
-                                        [this, guard, url](
-                                            HRESULT addHr,
-                                            LPCWSTR) -> HRESULT {
-                                            if (guard.expired())
+                                        [this, guard, url](HRESULT addHr,
+                                                           LPCWSTR) -> HRESULT {
+                                            if (guard.expired() ||
+                                                FAILED(addHr))
                                             {
                                                 return S_OK;
                                             }
-                                            if (FAILED(addHr))
-                                            {
-                                                this->emitSystemMessage(
-                                                    QStringLiteral(
-                                                        "[TikTok diag] "
-                                                        "AddScriptToExecuteOnDocumentCreated "
-                                                        "failed (0x%1)")
-                                                        .arg(
-                                                            static_cast<
-                                                                quint32>(addHr),
-                                                            8, 16, QChar('0')));
-                                                return S_OK;
-                                            }
-                                            this->emitSystemMessage(
-                                                QStringLiteral(
-                                                    "[TikTok diag] "
-                                                    "Script registered, "
-                                                    "navigating to %1")
-                                                    .arg(url));
-                                            HRESULT navHr =
-                                                this->impl_->webview->Navigate(
-                                                    toWide(url).c_str());
-                                            if (FAILED(navHr))
-                                            {
-                                                this->emitSystemMessage(
-                                                    QStringLiteral(
-                                                        "[TikTok diag] "
-                                                        "Navigate() failed "
-                                                        "synchronously "
-                                                        "(0x%1)")
-                                                        .arg(
-                                                            static_cast<
-                                                                quint32>(navHr),
-                                                            8, 16, QChar('0')));
-                                            }
+                                            this->impl_->webview->Navigate(
+                                                toWide(url).c_str());
                                             return S_OK;
                                         })
                                         .Get());
@@ -495,6 +378,11 @@ const QString &TikTokLiveChat::liveTitle() const
     return this->liveTitle_;
 }
 
+unsigned TikTokLiveChat::viewerCount() const
+{
+    return this->viewerCount_;
+}
+
 QString TikTokLiveChat::normalizeSource(const QString &ref)
 {
     QString s = ref.trimmed();
@@ -544,7 +432,105 @@ void TikTokLiveChat::setLive(bool live)
         return;
     }
     this->live_ = live;
+    if (!live)
+    {
+        this->setViewerCount(0);
+    }
     this->liveStatusChanged.invoke();
+}
+
+void TikTokLiveChat::setViewerCount(unsigned count)
+{
+    if (this->viewerCount_ == count)
+    {
+        return;
+    }
+    this->viewerCount_ = count;
+    this->viewerCountChanged.invoke();
+}
+
+void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
+{
+    // TikTok's /webcast/room/(enter|info|check_alive) responses wrap the
+    // useful data in a nested "data" object. Different endpoints put the
+    // user count under slightly different paths; probe the ones we've seen
+    // in the wild.
+    const auto data = root.value(QStringLiteral("data")).toObject();
+    if (data.isEmpty())
+    {
+        return;
+    }
+
+    unsigned count = 0;
+    const auto extract = [&count](const QJsonValue &v) {
+        if (count > 0)
+        {
+            return;
+        }
+        const auto n = v.toDouble(-1);
+        if (n >= 0)
+        {
+            count = static_cast<unsigned>(n);
+        }
+    };
+
+    // webcast/room/enter and webcast/room/info: data.user_count / total_user
+    extract(data.value(QStringLiteral("user_count")));
+    extract(data.value(QStringLiteral("total_user")));
+
+    // webcast/room/info variant: data.room.user_count
+    const auto room = data.value(QStringLiteral("room")).toObject();
+    if (!room.isEmpty())
+    {
+        extract(room.value(QStringLiteral("user_count")));
+        extract(room.value(QStringLiteral("total_user")));
+    }
+
+    // webcast/room/check_alive: data.data[0].alive_state / user_count
+    const auto inner = data.value(QStringLiteral("data")).toArray();
+    if (!inner.isEmpty())
+    {
+        const auto first = inner.first().toObject();
+        extract(first.value(QStringLiteral("user_count")));
+    }
+
+    if (count > 0)
+    {
+        this->setViewerCount(count);
+    }
+
+    // liveTitle is displayed in tooltips; room title may also be here.
+    if (this->liveTitle_.isEmpty())
+    {
+        QString title;
+        if (!room.isEmpty())
+        {
+            title = room.value(QStringLiteral("title")).toString();
+        }
+        if (title.isEmpty())
+        {
+            title = data.value(QStringLiteral("title")).toString();
+        }
+        if (!title.isEmpty())
+        {
+            this->liveTitle_ = title;
+        }
+    }
+
+    // Some check_alive responses include room_id; cache if we haven't got it
+    // via another path yet.
+    if (this->roomId_.isEmpty())
+    {
+        const auto rid = data.value(QStringLiteral("id_str")).toString();
+        if (!rid.isEmpty())
+        {
+            this->roomId_ = rid;
+        }
+        else if (!room.isEmpty())
+        {
+            this->roomId_ = room.value(QStringLiteral("id_str")).toString();
+        }
+    }
 }
 
 void TikTokLiveChat::emitSystemMessage(const QString &text)
@@ -617,45 +603,9 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         this->setStatusText(QStringLiteral("TikTok live chat error"), true);
         return;
     }
-    if (kind == QStringLiteral("ws-probe"))
+    if (kind == QStringLiteral("room-info"))
     {
-        const QString url = obj.value(QStringLiteral("url")).toString();
-        this->emitSystemMessage(
-            QStringLiteral("[TikTok diag] WebSocket opened: %1").arg(url));
-        return;
-    }
-    if (kind == QStringLiteral("http-probe"))
-    {
-        const QString url = obj.value(QStringLiteral("url")).toString();
-        const QString via = obj.value(QStringLiteral("via")).toString();
-        this->emitSystemMessage(
-            QStringLiteral("[TikTok diag] %1 request: %2").arg(via, url));
-        return;
-    }
-    if (kind == QStringLiteral("nav-end"))
-    {
-        const QString url = obj.value(QStringLiteral("url")).toString();
-        const QString title = obj.value(QStringLiteral("title")).toString();
-        this->emitSystemMessage(
-            QStringLiteral("[TikTok diag] Navigated to %1 (title: %2)")
-                .arg(url, title));
-        return;
-    }
-    if (kind == QStringLiteral("exec-probe"))
-    {
-        const QString url = obj.value(QStringLiteral("url")).toString();
-        const QString title = obj.value(QStringLiteral("title")).toString();
-        const QString readyState =
-            obj.value(QStringLiteral("readyState")).toString();
-        const bool chromeWebview =
-            obj.value(QStringLiteral("chromeWebviewAvailable")).toBool();
-        const bool wsPatched = obj.value(QStringLiteral("wsPatched")).toBool();
-        this->emitSystemMessage(
-            QStringLiteral(
-                "[TikTok diag] ExecuteScript probe: url=%1, title=%2, "
-                "readyState=%3, chrome.webview=%4, ws-patched=%5")
-                .arg(url, title, readyState,
-                     chromeWebview ? "yes" : "no", wsPatched ? "yes" : "no"));
+        this->handleRoomInfo(obj.value(QStringLiteral("data")).toObject());
         return;
     }
     if (kind == QStringLiteral("ws-binary"))

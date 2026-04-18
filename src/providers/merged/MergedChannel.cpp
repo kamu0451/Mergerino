@@ -363,6 +363,10 @@ unsigned MergedChannel::totalViewerCount() const
     {
         total += this->youtubeLiveChat_->viewerCount();
     }
+    if (this->tiktokLive_ && this->tiktokLiveChat_)
+    {
+        total += this->tiktokLiveChat_->viewerCount();
+    }
     return total;
 }
 
@@ -552,6 +556,11 @@ void MergedChannel::initializeSources()
                 {
                     this->tiktokLiveJoinAnnounced_ = false;
                 }
+                this->refreshStatusText();
+                this->streamStatusChanged.invoke();
+            });
+        this->tiktokConnections_.managedConnect(
+            this->tiktokLiveChat_->viewerCountChanged, [this] {
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
             });
@@ -1008,8 +1017,17 @@ void MergedChannel::refreshStatusText()
         QString tiktokStatus =
             this->tiktokLive_ ? QStringLiteral("live")
                               : QStringLiteral("waiting for live chat");
-        if (this->tiktokLiveChat_ &&
-            !this->tiktokLiveChat_->statusText().trimmed().isEmpty())
+        if (this->tiktokLive_ && this->tiktokLiveChat_)
+        {
+            const auto viewers = this->tiktokLiveChat_->viewerCount();
+            if (viewers > 0)
+            {
+                tiktokStatus = QStringLiteral("live - %1 viewers")
+                                   .arg(localizeNumbers(viewers));
+            }
+        }
+        else if (this->tiktokLiveChat_ &&
+                 !this->tiktokLiveChat_->statusText().trimmed().isEmpty())
         {
             tiktokStatus = this->tiktokLiveChat_->statusText();
         }

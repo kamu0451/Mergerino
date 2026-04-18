@@ -10,6 +10,8 @@
 
 #include <memory>
 
+class QJsonObject;
+
 namespace chatterino {
 
 namespace tiktok {
@@ -45,6 +47,7 @@ public:
     const QString &username() const;
     const QString &statusText() const;
     const QString &liveTitle() const;
+    unsigned viewerCount() const;
 
     // Reduces @user / full /@user/live URL / bare username to bare username.
     // Strips TikTok tracking params (enter_from_merge, enter_method, etc.).
@@ -54,6 +57,7 @@ public:
     pajlada::Signals::Signal<MessagePtr> messageReceived;
     pajlada::Signals::Signal<MessagePtr> systemMessageReceived;
     pajlada::Signals::NoArgSignal liveStatusChanged;
+    pajlada::Signals::NoArgSignal viewerCountChanged;
 
 private:
     struct Impl;
@@ -64,6 +68,7 @@ private:
     QString roomId_;
     QString statusText_;
     QString liveTitle_;
+    unsigned viewerCount_{0};
     bool live_{false};
     bool running_{false};
 
@@ -71,7 +76,9 @@ private:
 
     void setStatusText(QString text, bool notifyAsSystemMessage = false);
     void setLive(bool live);
+    void setViewerCount(unsigned count);
     void handleWebMessage(const QString &json);
+    void handleRoomInfo(const QJsonObject &root);
     void emitSystemMessage(const QString &text);
     MessagePtr buildChatMessage(const tiktok::DecodedChatMessage &chat) const;
     MessagePtr buildActivityMessage(const QString &text,

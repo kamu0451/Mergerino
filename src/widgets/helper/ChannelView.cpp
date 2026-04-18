@@ -3294,19 +3294,21 @@ void ChannelView::showUserInfoPopup(const QString &userName,
         return;
     }
 
-    if (platform == MessagePlatform::YouTube ||
-        platform == MessagePlatform::TikTok)
-    {
-        return;
-    }
-
     auto *userPopup =
         new UserInfoPopup(getSettings()->autoCloseUserPopup, this->split_);
 
     auto openingChannel = this->hasSourceChannel() ? this->sourceChannel_
                                                    : this->underlyingChannel_;
     ChannelPtr contextChannel;
-    if (openingChannel && platform == MessagePlatform::Kick)
+    if (platform == MessagePlatform::YouTube ||
+        platform == MessagePlatform::TikTok)
+    {
+        // Neither Twitch Helix nor Kick's REST knows this user; fall through
+        // to the opening channel so the popup can still show the username
+        // header and filtered latest messages from the merged buffer.
+        contextChannel = Channel::getEmpty();
+    }
+    else if (openingChannel && platform == MessagePlatform::Kick)
     {
         contextChannel =
             getApp()->getKickChatServer()->findBySlug(alternativePopoutChannel);

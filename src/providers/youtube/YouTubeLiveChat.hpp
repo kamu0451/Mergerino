@@ -33,11 +33,13 @@ public:
     const QString &videoId() const;
     const QString &statusText() const;
     const QString &liveTitle() const;
+    unsigned viewerCount() const;
 
     pajlada::Signals::Signal<QString> sourceResolved;
     pajlada::Signals::Signal<MessagePtr> messageReceived;
     pajlada::Signals::Signal<MessagePtr> systemMessageReceived;
     pajlada::Signals::NoArgSignal liveStatusChanged;
+    pajlada::Signals::NoArgSignal viewerCountChanged;
 
 private:
     void resolveVideoId();
@@ -52,6 +54,9 @@ private:
     void poll();
     void schedulePoll(int delayMs);
     void scheduleResolve(int delayMs);
+    void pollViewerCount();
+    void scheduleViewerCountPoll(int delayMs);
+    void setViewerCount(unsigned count);
     void waitForNextLive(QString text, int retryDelayMs);
     void setLive(bool live);
     void setStatusText(QString text, bool notifyAsSystemMessage = false);
@@ -81,14 +86,18 @@ private:
     QString clientVersion_;
     QString visitorData_;
     QString continuation_;
+    QString metadataContinuation_;
     QString statusText_;
     QString liveTitle_;
+
+    unsigned viewerCount_{0};
 
     bool running_{false};
     bool live_{false};
     bool failureReported_{false};
     bool skipInitialBacklog_{false};
     bool immediateSourceProbePending_{false};
+    bool viewerCountPollScheduled_{false};
 
     std::shared_ptr<bool> lifetimeGuard_;
     std::unordered_set<QString> seenMessageIds_;

@@ -1120,6 +1120,13 @@ void SplitHeader::updateChannelText()
                 if (totalViewers > 0)
                 {
                     title += " - " + localizeNumbers(totalViewers);
+                    const auto delta = mergedChannel->viewerCountDeltaPercent();
+                    if (delta.has_value() && std::abs(*delta) >= 0.1)
+                    {
+                        title += QString(" (%1%2%)")
+                                     .arg(*delta >= 0 ? "+" : "")
+                                     .arg(*delta, 0, 'f', 1);
+                    }
                 }
             }
         }

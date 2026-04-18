@@ -952,7 +952,7 @@ void UserInfoPopup::setData(const QString &name,
     auto type = this->channel_->getType();
     if (type == Channel::Type::TwitchLive ||
         type == Channel::Type::TwitchWhispers || type == Channel::Type::Misc ||
-        type == Channel::Type::Kick)
+        type == Channel::Type::Kick || type == Channel::Type::Merged)
     {
         // not a normal twitch channel, the url opened by the button will be invalid, so hide the button
         this->ui_.usercardLabel->hide();

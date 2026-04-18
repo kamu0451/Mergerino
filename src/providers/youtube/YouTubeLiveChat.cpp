@@ -607,6 +607,12 @@ void YouTubeLiveChat::fetchLiveChatPage()
             // on join. Subsequent polls only contain new live messages.
             this->skipInitialBacklog_ = false;
             this->poll();
+            this->metadataContinuation_.clear();
+            if (!this->viewerCountPollScheduled_)
+            {
+                this->viewerCountPollScheduled_ = true;
+                this->pollViewerCount();
+            }
         })
         .onError([this, weak](NetworkResult) {
             if (!weak.lock() || !this->running_)
@@ -838,6 +844,155 @@ void YouTubeLiveChat::schedulePoll(int delayMs)
     });
 }
 
+void YouTubeLiveChat::pollViewerCount()
+{
+    if (!this->running_ || !this->live_ || this->videoId_.isEmpty() ||
+        this->apiKey_.isEmpty())
+    {
+        this->viewerCountPollScheduled_ = false;
+        return;
+    }
+
+    const auto url =
+        QString("https://www.youtube.com/youtubei/v1/updated_metadata"
+                "?prettyPrint=false&key=%1")
+            .arg(this->apiKey_);
+
+    QJsonObject body{
+        {"context",
+         QJsonObject{{"client", makeYoutubeClientContext(this->clientVersion_)}}},
+    };
+    if (this->metadataContinuation_.isEmpty())
+    {
+        body["videoId"] = this->videoId_;
+    }
+    else
+    {
+        body["continuation"] = this->metadataContinuation_;
+    }
+
+    auto request = NetworkRequest(url.toStdString())
+                       .type(NetworkRequestType::Post)
+                       .headerList(youtubeHeaders())
+                       .json(body)
+                       .header("Referer",
+                               QString("https://www.youtube.com/watch?v=%1")
+                                   .arg(this->videoId_));
+    if (!this->visitorData_.isEmpty())
+    {
+        request = std::move(request).header("X-Goog-Visitor-Id",
+                                            this->visitorData_);
+    }
+
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    std::move(request)
+        .onSuccess([this, weak](const NetworkResult &result) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            auto json = result.parseJson();
+            const auto actions = json["actions"].toArray();
+            for (const auto &actionValue : actions)
+            {
+                const auto viewership =
+                    actionValue.toObject()["updateViewershipAction"]
+                        .toObject()["viewCount"]
+                        .toObject()["videoViewCountRenderer"]
+                        .toObject();
+                if (viewership.isEmpty())
+                {
+                    continue;
+                }
+                const auto raw =
+                    viewership["originalViewCount"].toString();
+                bool ok = false;
+                auto count = raw.toUInt(&ok);
+                if (ok)
+                {
+                    this->setViewerCount(count);
+                    break;
+                }
+                // Fallback: parse digits from a localized simpleText like
+                // "1,234 watching now".
+                const auto simple = viewership["viewCount"]
+                                        .toObject()["simpleText"]
+                                        .toString();
+                QString digits;
+                for (QChar ch : simple)
+                {
+                    if (ch.isDigit())
+                    {
+                        digits.append(ch);
+                    }
+                }
+                if (!digits.isEmpty())
+                {
+                    this->setViewerCount(digits.toUInt());
+                }
+                break;
+            }
+
+            int nextDelay = 5000;
+            const auto continuationValue =
+                json["continuation"]
+                    .toObject()["timedContinuationData"]
+                    .toObject();
+            if (!continuationValue.isEmpty())
+            {
+                this->metadataContinuation_ =
+                    continuationValue["continuation"].toString();
+                nextDelay =
+                    std::max(nextDelay,
+                             continuationValue["timeoutMs"].toInt(nextDelay));
+            }
+            else
+            {
+                // No continuation returned; restart from videoId next time.
+                this->metadataContinuation_.clear();
+            }
+            this->scheduleViewerCountPoll(nextDelay);
+        })
+        .onError([this, weak](NetworkResult) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+            this->metadataContinuation_.clear();
+            this->scheduleViewerCountPoll(30000);
+        })
+        .execute();
+}
+
+void YouTubeLiveChat::scheduleViewerCountPoll(int delayMs)
+{
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    QTimer::singleShot(delayMs, [this, weak] {
+        if (!weak.lock() || !this->running_ || !this->live_)
+        {
+            this->viewerCountPollScheduled_ = false;
+            return;
+        }
+        this->pollViewerCount();
+    });
+}
+
+void YouTubeLiveChat::setViewerCount(unsigned count)
+{
+    if (this->viewerCount_ == count)
+    {
+        return;
+    }
+    this->viewerCount_ = count;
+    this->viewerCountChanged.invoke();
+}
+
+unsigned YouTubeLiveChat::viewerCount() const
+{
+    return this->viewerCount_;
+}
+
 void YouTubeLiveChat::scheduleResolve(int delayMs)
 {
     auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
@@ -872,6 +1027,11 @@ void YouTubeLiveChat::setLive(bool live)
     }
 
     this->live_ = live;
+    if (!live)
+    {
+        this->metadataContinuation_.clear();
+        this->setViewerCount(0);
+    }
     this->liveStatusChanged.invoke();
 }
 

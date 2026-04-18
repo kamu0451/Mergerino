@@ -19,6 +19,7 @@
 #include "util/Helpers.hpp"
 #include "util/QStringHash.hpp"
 
+#include <QDateTime>
 #include <QPainter>
 #include <QPixmap>
 #include <QSvgRenderer>
@@ -29,6 +30,9 @@
 namespace {
 
 using namespace chatterino;
+
+constexpr qint64 VIEWER_DELTA_WINDOW_MS = 5 * 60 * 1000;
+constexpr qint64 VIEWER_DELTA_MIN_SPAN_MS = 30 * 1000;
 
 QString normalizeChannelName(QString value)
 {
@@ -346,7 +350,47 @@ unsigned MergedChannel::totalViewerCount() const
                 static_cast<unsigned>(kick->streamData().viewerCount);
         }
     }
+    if (this->youtubeLive_ && this->youtubeLiveChat_)
+    {
+        total += this->youtubeLiveChat_->viewerCount();
+    }
     return total;
+}
+
+std::optional<double> MergedChannel::viewerCountDeltaPercent() const
+{
+    const auto now = QDateTime::currentMSecsSinceEpoch();
+    const auto current = this->totalViewerCount();
+
+    // Prune samples older than the window, then record a fresh sample.
+    while (!this->viewerCountHistory_.empty() &&
+           now - this->viewerCountHistory_.front().first >
+               VIEWER_DELTA_WINDOW_MS)
+    {
+        this->viewerCountHistory_.pop_front();
+    }
+    if (this->viewerCountHistory_.empty() ||
+        this->viewerCountHistory_.back().second != current)
+    {
+        this->viewerCountHistory_.emplace_back(now, current);
+    }
+
+    if (this->viewerCountHistory_.size() < 2)
+    {
+        return std::nullopt;
+    }
+    const auto &oldest = this->viewerCountHistory_.front();
+    if (now - oldest.first < VIEWER_DELTA_MIN_SPAN_MS)
+    {
+        return std::nullopt;
+    }
+    if (oldest.second == 0)
+    {
+        return std::nullopt;
+    }
+    const double delta = static_cast<double>(current) -
+                         static_cast<double>(oldest.second);
+    return (delta / static_cast<double>(oldest.second)) * 100.0;
 }
 
 ChannelPtr MergedChannel::twitchChannel() const
@@ -433,6 +477,11 @@ void MergedChannel::initializeSources()
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->liveStatusChanged, [this] {
                 this->youtubeLive_ = this->youtubeLiveChat_->isLive();
+                this->refreshStatusText();
+                this->streamStatusChanged.invoke();
+            });
+        this->youtubeConnections_.managedConnect(
+            this->youtubeLiveChat_->viewerCountChanged, [this] {
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
             });
@@ -917,8 +966,18 @@ void MergedChannel::refreshStatusText()
     }
     if (this->config_.youtubeEnabled)
     {
-        lines.append(QString("YouTube: %1")
-                         .arg(this->youtubeLive_ ? "live" : "offline"));
+        QString status = this->youtubeLive_ ? QStringLiteral("live")
+                                            : QStringLiteral("offline");
+        if (this->youtubeLive_ && this->youtubeLiveChat_)
+        {
+            const auto viewers = this->youtubeLiveChat_->viewerCount();
+            if (viewers > 0)
+            {
+                status = QStringLiteral("live - %1 viewers")
+                             .arg(localizeNumbers(viewers));
+            }
+        }
+        lines.append(QString("YouTube: %1").arg(status));
     }
     if (this->config_.tiktokEnabled)
     {

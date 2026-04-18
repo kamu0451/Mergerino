@@ -17,6 +17,7 @@
 
 #include <deque>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 
 namespace chatterino {
@@ -64,6 +65,7 @@ public:
     QString statusSuffix() const;
     QString tooltipText() const;
     unsigned totalViewerCount() const;
+    std::optional<double> viewerCountDeltaPercent() const;
 
     ChannelPtr twitchChannel() const;
     ChannelPtr kickChannel() const;
@@ -120,6 +122,10 @@ private:
 
     std::unordered_map<QString, MessagePtr> mirroredMessages_;
     std::deque<QString> mirroredOrder_;
+
+    // Sliding window of (msEpoch, totalViewerCount) samples for computing
+    // the 5-minute delta shown in the header.
+    mutable std::deque<std::pair<qint64, unsigned>> viewerCountHistory_;
 
     bool twitchLive_{false};
     bool kickLive_{false};

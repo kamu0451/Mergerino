@@ -58,20 +58,26 @@ jobs:
             }
 
             if (!runId) {
+              // Default to the latest successful Build on the ref this
+              // dispatch was triggered from - so dispatching from main
+              // picks a main Build, and dispatching from a feature branch
+              // picks that branch's Build (whose artifact filename matches
+              // that branch's release.yml).
+              const branch = process.env.GITHUB_REF_NAME;
               const { data } = await github.rest.actions.listWorkflowRuns({
                 owner,
                 repo,
                 workflow_id: 'build.yml',
-                branch: 'main',
+                branch,
                 status: 'success',
                 per_page: 1,
               });
               if (data.workflow_runs.length === 0) {
-                core.setFailed('No successful main-branch Build runs found.');
+                core.setFailed(`No successful Build runs found on branch '${branch}'.`);
                 return;
               }
               runId = String(data.workflow_runs[0].id);
-              core.info(`No run_id provided; defaulting to latest successful main Build: ${runId}`);
+              core.info(`No run_id provided; defaulting to latest successful Build on '${branch}': ${runId}`);
             }
 
             const { data: run } = await github.rest.actions.getWorkflowRun({

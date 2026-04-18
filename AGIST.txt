@@ -1,9 +1,0 @@
-# Instructions and context for this project - Mergerino
-
-You are working on Mergerino, a desktop chat application fork.
-
-- After every successful prompt before finishing rebuild the app and update `D:\MergeDisc\Mergerino-1.1` from the current source build.
-- Do not stray away from instructions, if you feel confused, not confident etc then just ask me to reword, add context or whatever is needed.
-- No testing with agent browser.
-
-Reabsorb custom Codex instructions, apply the rules to this entire thread, act correct, do not be lazy and think hard for every prompt.

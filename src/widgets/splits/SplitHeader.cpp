@@ -1116,6 +1116,41 @@ void SplitHeader::updateChannelText()
         if (this->isLive_)
         {
             title += mergedChannel->statusSuffix();
+            if (getSettings()->headerUptime)
+            {
+                QString uptime;
+                if (auto twitchSource = mergedChannel->twitchChannel())
+                {
+                    if (auto *twitch = dynamic_cast<TwitchChannel *>(
+                            twitchSource.get()))
+                    {
+                        const auto status = twitch->accessStreamStatus();
+                        if (status->live)
+                        {
+                            uptime = status->uptime;
+                        }
+                    }
+                }
+                if (uptime.isEmpty())
+                {
+                    if (auto kickSource = mergedChannel->kickChannel())
+                    {
+                        if (auto *kick = dynamic_cast<KickChannel *>(
+                                kickSource.get()))
+                        {
+                            const auto &stream = kick->streamData();
+                            if (stream.isLive)
+                            {
+                                uptime = stream.uptime;
+                            }
+                        }
+                    }
+                }
+                if (!uptime.isEmpty())
+                {
+                    title += " - " + uptime;
+                }
+            }
             if (getSettings()->headerViewerCount)
             {
                 const auto totalViewers = mergedChannel->totalViewerCount();
@@ -1123,13 +1158,15 @@ void SplitHeader::updateChannelText()
                 {
                     title += " - " + localizeNumbers(totalViewers);
                     const auto delta = mergedChannel->viewerCountDeltaPercent();
-                    if (delta.has_value() && std::abs(*delta) >= 0.1)
+                    if (delta.has_value() && std::abs(delta->percent) >= 0.1)
                     {
-                        deltaText = QString(" (%1%2%)")
-                                        .arg(*delta >= 0 ? "+" : "")
-                                        .arg(*delta, 0, 'f', 1);
-                        deltaColor = *delta >= 0 ? QColor(0x4c, 0xaf, 0x50)
-                                                 : QColor(0xef, 0x53, 0x50);
+                        deltaText = QString(" (%1%2% / %3 min)")
+                                        .arg(delta->percent >= 0 ? "+" : "")
+                                        .arg(delta->percent, 0, 'f', 1)
+                                        .arg(delta->spanMinutes);
+                        deltaColor = delta->percent >= 0
+                                         ? QColor(0x4c, 0xaf, 0x50)
+                                         : QColor(0xef, 0x53, 0x50);
                     }
                 }
             }

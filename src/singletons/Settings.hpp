@@ -324,6 +324,8 @@ public:
                                      false};
     BoolSetting headerGame = {"/appearance/splitheader/showGame", false};
     BoolSetting headerUptime = {"/appearance/splitheader/showUptime", false};
+    IntSetting mergedViewerDeltaWindowMinutes = {
+        "/appearance/splitheader/viewerDeltaWindowMinutes", 5};
     FloatSetting customThemeMultiplier = {"/appearance/customThemeMultiplier",
                                           -0.5f};
     // BoolSetting useCustomWindowFrame = {"/appearance/useCustomWindowFrame",

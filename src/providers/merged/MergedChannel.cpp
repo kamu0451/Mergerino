@@ -16,6 +16,7 @@
 #include "providers/tiktok/TikTokLiveChat.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/youtube/YouTubeLiveChat.hpp"
+#include "singletons/Settings.hpp"
 #include "util/Helpers.hpp"
 #include "util/QStringHash.hpp"
 
@@ -31,11 +32,11 @@ namespace {
 
 using namespace chatterino;
 
-constexpr qint64 VIEWER_DELTA_WINDOW_MS = 5 * 60 * 1000;
-// Don't show the delta until we actually have 5 minutes of history,
-// otherwise the first few samples produce wild percentages as viewer
-// counts stabilize after a stream is joined.
-constexpr qint64 VIEWER_DELTA_MIN_SPAN_MS = 5 * 60 * 1000;
+// Skip the first minute of samples to avoid wild percentages while
+// viewer counts settle after joining a stream.
+constexpr qint64 VIEWER_DELTA_MIN_SPAN_MS = 60 * 1000;
+constexpr int VIEWER_DELTA_WINDOW_MIN_MINUTES = 1;
+constexpr int VIEWER_DELTA_WINDOW_MAX_MINUTES = 60;
 
 QString normalizeChannelName(QString value)
 {
@@ -360,15 +361,22 @@ unsigned MergedChannel::totalViewerCount() const
     return total;
 }
 
-std::optional<double> MergedChannel::viewerCountDeltaPercent() const
+std::optional<MergedChannel::ViewerDelta>
+MergedChannel::viewerCountDeltaPercent() const
 {
     const auto now = QDateTime::currentMSecsSinceEpoch();
     const auto current = this->totalViewerCount();
 
-    // Prune samples older than the window, then record a fresh sample.
+    const int windowMinutes =
+        std::clamp(getSettings()->mergedViewerDeltaWindowMinutes.getValue(),
+                   VIEWER_DELTA_WINDOW_MIN_MINUTES,
+                   VIEWER_DELTA_WINDOW_MAX_MINUTES);
+    const qint64 windowMs = static_cast<qint64>(windowMinutes) * 60 * 1000;
+
+    // Prune samples older than the configured window, then record a fresh
+    // sample if the viewer count has changed since the last recorded value.
     while (!this->viewerCountHistory_.empty() &&
-           now - this->viewerCountHistory_.front().first >
-               VIEWER_DELTA_WINDOW_MS)
+           now - this->viewerCountHistory_.front().first > windowMs)
     {
         this->viewerCountHistory_.pop_front();
     }
@@ -383,7 +391,8 @@ std::optional<double> MergedChannel::viewerCountDeltaPercent() const
         return std::nullopt;
     }
     const auto &oldest = this->viewerCountHistory_.front();
-    if (now - oldest.first < VIEWER_DELTA_MIN_SPAN_MS)
+    const qint64 spanMs = now - oldest.first;
+    if (spanMs < VIEWER_DELTA_MIN_SPAN_MS)
     {
         return std::nullopt;
     }
@@ -393,7 +402,12 @@ std::optional<double> MergedChannel::viewerCountDeltaPercent() const
     }
     const double delta = static_cast<double>(current) -
                          static_cast<double>(oldest.second);
-    return (delta / static_cast<double>(oldest.second)) * 100.0;
+    const double percent =
+        (delta / static_cast<double>(oldest.second)) * 100.0;
+    const int spanMinutes =
+        std::clamp(static_cast<int>((spanMs + 30 * 1000) / (60 * 1000)), 1,
+                   windowMinutes);
+    return ViewerDelta{percent, spanMinutes};
 }
 
 ChannelPtr MergedChannel::twitchChannel() const

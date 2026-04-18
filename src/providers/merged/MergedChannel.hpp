@@ -65,7 +65,12 @@ public:
     QString statusSuffix() const;
     QString tooltipText() const;
     unsigned totalViewerCount() const;
-    std::optional<double> viewerCountDeltaPercent() const;
+
+    struct ViewerDelta {
+        double percent;
+        int spanMinutes;
+    };
+    std::optional<ViewerDelta> viewerCountDeltaPercent() const;
 
     ChannelPtr twitchChannel() const;
     ChannelPtr kickChannel() const;

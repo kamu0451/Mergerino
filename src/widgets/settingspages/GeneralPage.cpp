@@ -1075,6 +1075,19 @@ void GeneralPage::initLayout(GeneralPageView &layout)
     SettingWidget::checkbox("Title", s.headerStreamTitle)
         ->setTooltip("Show the stream title")
         ->addTo(layout);
+    SettingWidget::intInput("Merged viewer count % change window",
+                            s.mergedViewerDeltaWindowMinutes,
+                            {
+                                .min = 1,
+                                .max = 60,
+                                .singleStep = 1,
+                                .suffix = " min",
+                            })
+        ->setTooltip("For merged channels, how many minutes of viewer-count "
+                     "history the header's coloured percentage compares "
+                     "against. The label shows the actual span used, so "
+                     "shorter values show sooner but with more noise.")
+        ->addTo(layout);
 
     layout.addSubtitle("R9K");
     auto toggleLocalr9kSeq = getApp()->getHotkeys()->getDisplaySequence(

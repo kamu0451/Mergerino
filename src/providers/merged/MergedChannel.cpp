@@ -477,6 +477,16 @@ void MergedChannel::connectSourceSignals(
             this->appendMergedMessage(message, platform);
         });
     connections.managedConnect(
+        source->messagesAddedAtStart,
+        [this, platform](std::vector<MessagePtr> &messages) {
+            this->fillMergedMessages(messages, platform);
+        });
+    connections.managedConnect(
+        source->filledInMessages,
+        [this, platform](const std::vector<MessagePtr> &messages) {
+            this->fillMergedMessages(messages, platform);
+        });
+    connections.managedConnect(
         source->messageReplaced,
         [this, platform](size_t, const MessagePtr &previous,
                          const MessagePtr &replacement) {
@@ -577,6 +587,53 @@ void MergedChannel::appendMergedMessage(const MessagePtr &source,
     }
 
     this->addMessage(merged, MessageContext::Repost);
+}
+
+void MergedChannel::fillMergedMessages(
+    const std::vector<MessagePtr> &messages, MessagePlatform platform)
+{
+    std::vector<MessagePtr> merged;
+    merged.reserve(messages.size());
+
+    for (const auto &source : messages)
+    {
+        if (!shouldMirrorSourceMessage(source))
+        {
+            continue;
+        }
+
+        const auto key = messageKey(source, platform);
+        if (!key.isEmpty() && this->mirroredMessages_.contains(key))
+        {
+            continue;
+        }
+
+        auto mergedMsg = this->createMergedMessage(source, platform);
+        if (!mergedMsg)
+        {
+            continue;
+        }
+
+        if (!key.isEmpty())
+        {
+            this->insertMirror(key, mergedMsg);
+        }
+
+        const auto chatterName = !mergedMsg->loginName.isEmpty()
+                                     ? mergedMsg->loginName
+                                     : mergedMsg->displayName;
+        if (!chatterName.isEmpty())
+        {
+            this->addRecentChatter(chatterName);
+        }
+
+        merged.push_back(mergedMsg);
+    }
+
+    if (!merged.empty())
+    {
+        this->fillInMissingMessages(merged);
+    }
 }
 
 void MergedChannel::replaceMergedMessage(const MessagePtr &previous,

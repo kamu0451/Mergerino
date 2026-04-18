@@ -603,7 +603,9 @@ void YouTubeLiveChat::fetchLiveChatPage()
                     : QString("Watching YouTube live chat for %1")
                           .arg(this->liveTitle_));
             this->setLive(true);
-            this->skipInitialBacklog_ = true;
+            // Deliver the first poll's backlog so users see a message history
+            // on join. Subsequent polls only contain new live messages.
+            this->skipInitialBacklog_ = false;
             this->poll();
         })
         .onError([this, weak](NetworkResult) {

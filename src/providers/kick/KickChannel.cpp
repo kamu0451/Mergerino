@@ -1,6 +1,7 @@
 #include "providers/kick/KickChannel.hpp"
 
 #include "Application.hpp"
+#include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
@@ -17,15 +18,20 @@
 #include "providers/kick/KickApi.hpp"
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/kick/KickLiveUpdates.hpp"
+#include "providers/kick/KickMessageBuilder.hpp"
 #include "providers/seventv/eventapi/Dispatch.hpp"
 #include "providers/seventv/SeventvAPI.hpp"
 #include "providers/seventv/SeventvEmotes.hpp"
 #include "providers/seventv/SeventvEventAPI.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Settings.hpp"
+#include "util/BoostJsonWrap.hpp"
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/PostToThread.hpp"
+
+#include <boost/json/parse.hpp>
+#include <boost/system/error_code.hpp>
 
 using namespace Qt::Literals;
 using namespace std::chrono_literals;
@@ -67,6 +73,100 @@ void KickChannel::initialize(const UserInit &init)
 {
     this->setUserInfo(init);
     this->resolveChannelInfo();
+    this->loadRecentMessages();
+}
+
+void KickChannel::loadRecentMessages()
+{
+    if (this->recentMessagesRequested_)
+    {
+        return;
+    }
+    this->recentMessagesRequested_ = true;
+
+    auto url = u"https://kick.com/api/v2/channels/"_s % this->slug() %
+               u"/messages"_s;
+
+    std::vector<std::pair<QByteArray, QByteArray>> headers{
+        {"User-Agent",
+         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"},
+        {"Accept", "application/json, text/plain, */*"},
+        {"Accept-Language", "en-US,en;q=0.9"},
+        {"Origin", "https://kick.com"},
+        {"Referer", "https://kick.com/"},
+    };
+
+    auto weak = this->weakFromThis();
+    NetworkRequest(url.toStdString())
+        .headerList(headers)
+        .onError([weak](const NetworkResult &res) {
+            auto self = weak.lock();
+            if (!self)
+            {
+                return;
+            }
+            qCDebug(chatterinoKick)
+                << *self << "Failed to load recent messages:" << res.formatError();
+            self->recentMessagesRequested_ = false;
+        })
+        .onSuccess([weak](const NetworkResult &res) {
+            auto self = weak.lock();
+            if (!self)
+            {
+                return;
+            }
+
+            const auto &ba = res.getData();
+            boost::system::error_code ec;
+            auto jv = boost::json::parse(
+                std::string_view(ba.data(), ba.size()), ec);
+            if (ec || !jv.is_object())
+            {
+                qCDebug(chatterinoKick)
+                    << *self << "Recent-messages response not parseable";
+                return;
+            }
+
+            auto &root = jv.as_object();
+            auto dataIt = root.find("data");
+            if (dataIt == root.end() || !dataIt->value().is_object())
+            {
+                return;
+            }
+            auto &dataObj = dataIt->value().as_object();
+            auto messagesIt = dataObj.find("messages");
+            if (messagesIt == dataObj.end() ||
+                !messagesIt->value().is_array())
+            {
+                return;
+            }
+
+            const auto &messages = messagesIt->value().as_array();
+            std::vector<MessagePtr> collected;
+            collected.reserve(messages.size());
+
+            // The endpoint returns newest-first; reverse to get chronological.
+            for (auto it = messages.rbegin(); it != messages.rend(); ++it)
+            {
+                if (!it->is_object())
+                {
+                    continue;
+                }
+                auto built = KickMessageBuilder::makeChatMessage(
+                    self.get(), BoostJsonObject{it->as_object()});
+                if (built.first)
+                {
+                    collected.push_back(built.first);
+                }
+            }
+
+            if (!collected.empty())
+            {
+                self->addMessagesAtStart(collected);
+            }
+        })
+        .execute();
 }
 
 std::shared_ptr<KickChannel> KickChannel::sharedFromThis()

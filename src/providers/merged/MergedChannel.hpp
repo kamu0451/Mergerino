@@ -76,6 +76,8 @@ private:
     void appendInitialMessages(const ChannelPtr &source,
                                MessagePlatform platform);
     void appendMergedMessage(const MessagePtr &source, MessagePlatform platform);
+    void fillMergedMessages(const std::vector<MessagePtr> &messages,
+                            MessagePlatform platform);
     void replaceMergedMessage(const MessagePtr &previous,
                               const MessagePtr &replacement,
                               MessagePlatform platform);

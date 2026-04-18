@@ -87,6 +87,11 @@ public:
 
     void reloadSeventvEmotes(bool manualRefresh);
 
+    /// Fetch recent chat messages from Kick's private v2 messages endpoint and
+    /// prepend them to this channel so backlog is visible on first join.
+    /// Idempotent after the first successful call.
+    void loadRecentMessages();
+
     std::shared_ptr<const EmoteMap> seventvEmotes() const;
     EmotePtr seventvEmote(const EmoteName &name) const;
 
@@ -212,6 +217,7 @@ private:
 
     bool isMod_ = false;
     bool isVip_ = false;
+    bool recentMessagesRequested_ = false;
 
     StreamData streamData_;
 };

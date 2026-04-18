@@ -16,6 +16,7 @@
 #include "providers/tiktok/TikTokLiveChat.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/youtube/YouTubeLiveChat.hpp"
+#include "util/Helpers.hpp"
 #include "util/QStringHash.hpp"
 
 #include <QPainter>
@@ -560,6 +561,7 @@ void MergedChannel::connectSourceSignals(
             this->streamStatusChanged.invoke();
         });
         connections.managedConnect(kick->streamDataChanged, [this] {
+            this->refreshStatusText();
             this->streamStatusChanged.invoke();
         });
     }
@@ -872,27 +874,51 @@ void MergedChannel::refreshStatusText()
 
     if (this->config_.twitchEnabled)
     {
+        QString status = this->twitchLive_ ? QStringLiteral("live")
+                                           : QStringLiteral("offline");
+        if (this->twitchLive_ && this->twitchChannel_)
+        {
+            if (auto *twitch =
+                    dynamic_cast<TwitchChannel *>(this->twitchChannel_.get()))
+            {
+                const auto viewers =
+                    twitch->accessStreamStatus()->viewerCount;
+                if (viewers > 0)
+                {
+                    status = QStringLiteral("live - %1 viewers")
+                                 .arg(localizeNumbers(viewers));
+                }
+            }
+        }
         lines.append(QString("Twitch: %1 (%2)")
                          .arg(this->config_.effectiveTwitchChannelName(),
-                              this->twitchLive_ ? "live" : "offline"));
+                              status));
     }
     if (this->config_.kickEnabled)
     {
+        QString status = this->kickLive_ ? QStringLiteral("live")
+                                         : QStringLiteral("offline");
+        if (this->kickLive_ && this->kickChannel_)
+        {
+            if (auto *kick =
+                    dynamic_cast<KickChannel *>(this->kickChannel_.get()))
+            {
+                const auto viewers = kick->streamData().viewerCount;
+                if (viewers > 0)
+                {
+                    status = QStringLiteral("live - %1 viewers")
+                                 .arg(localizeNumbers(viewers));
+                }
+            }
+        }
         lines.append(QString("Kick: %1 (%2)")
                          .arg(this->config_.effectiveKickChannelName(),
-                              this->kickLive_ ? "live" : "offline"));
+                              status));
     }
     if (this->config_.youtubeEnabled)
     {
-        QString youtubeStatus =
-            this->youtubeLive_ ? QStringLiteral("live")
-                               : QStringLiteral("waiting for live chat");
-        if (this->youtubeLiveChat_ &&
-            !this->youtubeLiveChat_->statusText().trimmed().isEmpty())
-        {
-            youtubeStatus = this->youtubeLiveChat_->statusText();
-        }
-        lines.append(QString("YouTube: %1").arg(youtubeStatus));
+        lines.append(QString("YouTube: %1")
+                         .arg(this->youtubeLive_ ? "live" : "offline"));
     }
     if (this->config_.tiktokEnabled)
     {

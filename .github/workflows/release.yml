@@ -8,29 +8,95 @@ on:
       - completed
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: >
+          Build workflow run ID to release. Leave empty to publish the most
+          recent successful main-branch Build run.
+        type: string
+        required: false
 
 permissions:
   actions: read
   contents: write
 
 concurrency:
-  group: release-${{ github.event.workflow_run.head_branch }}
+  group: release-${{ github.event.workflow_run.head_branch || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
   publish-release:
     name: Publish rolling release
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
+      - name: Resolve Build run to publish
+        id: resolve
+        uses: actions/github-script@v8
+        env:
+          INPUT_RUN_ID: ${{ inputs.run_id }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            if (context.eventName === 'workflow_run') {
+              const run = context.payload.workflow_run;
+              core.info(`Using workflow_run payload: run ${run.id}, branch ${run.head_branch}, sha ${run.head_sha}`);
+              core.setOutput('run_id', run.id);
+              core.setOutput('head_sha', run.head_sha);
+              core.setOutput('head_branch', run.head_branch);
+              return;
+            }
+
+            let runId = process.env.INPUT_RUN_ID;
+            if (runId) {
+              runId = runId.trim();
+            }
+
+            if (!runId) {
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                owner,
+                repo,
+                workflow_id: 'build.yml',
+                branch: 'main',
+                status: 'success',
+                per_page: 1,
+              });
+              if (data.workflow_runs.length === 0) {
+                core.setFailed('No successful main-branch Build runs found.');
+                return;
+              }
+              runId = String(data.workflow_runs[0].id);
+              core.info(`No run_id provided; defaulting to latest successful main Build: ${runId}`);
+            }
+
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              owner,
+              repo,
+              run_id: Number(runId),
+            });
+
+            if (run.conclusion !== 'success') {
+              core.setFailed(`Run ${runId} conclusion is '${run.conclusion}', refusing to publish.`);
+              return;
+            }
+
+            core.info(`Publishing run ${runId} (branch ${run.head_branch}, sha ${run.head_sha}).`);
+            core.setOutput('run_id', runId);
+            core.setOutput('head_sha', run.head_sha);
+            core.setOutput('head_branch', run.head_branch);
+
       - name: Download build artifact
         uses: actions/download-artifact@v5
         with:
           name: Mergerino-1.5-win64.zip
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
-          run-id: ${{ github.event.workflow_run.id }}
+          run-id: ${{ steps.resolve.outputs.run_id }}
           path: release-artifact
 
       - name: Create or update rolling release
@@ -40,6 +106,7 @@ jobs:
           ASSET_PATH: release-artifact/Mergerino-1.5-win64.zip
           RELEASE_NAME: Latest
           RELEASE_TAG: latest
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -50,7 +117,7 @@ jobs:
             const repo = context.repo.repo;
             const assetName = process.env.ASSET_NAME;
             const assetPath = path.join(process.env.GITHUB_WORKSPACE, process.env.ASSET_PATH);
-            const headSha = context.payload.workflow_run.head_sha;
+            const headSha = process.env.HEAD_SHA;
             const releaseName = process.env.RELEASE_NAME;
             const tag = process.env.RELEASE_TAG;
             const body = [

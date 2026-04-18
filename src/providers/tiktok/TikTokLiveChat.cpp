@@ -277,7 +277,32 @@ void TikTokLiveChat::start()
                                                 QStringLiteral(
                                                     "TikTok: navigation failed"),
                                                 true);
+                                            return S_OK;
                                         }
+                                        // Post-nav sanity probe: confirms
+                                        // JS execution + postMessage IPC
+                                        // round-trip actually work on this
+                                        // page. If this fires but the
+                                        // injected-at-doc-creation script
+                                        // doesn't, the problem is specific
+                                        // to AddScriptToExecuteOnDocumentCreated
+                                        // (iframe/cross-origin/CSP), not IPC.
+                                        const wchar_t *postNavProbe = L"(function(){"
+                                            L"try{"
+                                            L"window.chrome.webview.postMessage("
+                                            L"JSON.stringify({"
+                                            L"kind:'exec-probe',"
+                                            L"url:String(location.href),"
+                                            L"title:String(document.title||''),"
+                                            L"readyState:String(document.readyState),"
+                                            L"chromeWebviewAvailable:"
+                                            L"!!(window.chrome&&window.chrome.webview),"
+                                            L"wsPatched:!!(window.WebSocket&&window.WebSocket.__mergerinoPatched)"
+                                            L"}));"
+                                            L"}catch(e){}"
+                                            L"})()";
+                                        this->impl_->webview->ExecuteScript(
+                                            postNavProbe, nullptr);
                                         return S_OK;
                                     })
                                     .Get(),
@@ -565,6 +590,23 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         this->emitSystemMessage(
             QStringLiteral("[TikTok diag] Navigated to %1 (title: %2)")
                 .arg(url, title));
+        return;
+    }
+    if (kind == QStringLiteral("exec-probe"))
+    {
+        const QString url = obj.value(QStringLiteral("url")).toString();
+        const QString title = obj.value(QStringLiteral("title")).toString();
+        const QString readyState =
+            obj.value(QStringLiteral("readyState")).toString();
+        const bool chromeWebview =
+            obj.value(QStringLiteral("chromeWebviewAvailable")).toBool();
+        const bool wsPatched = obj.value(QStringLiteral("wsPatched")).toBool();
+        this->emitSystemMessage(
+            QStringLiteral(
+                "[TikTok diag] ExecuteScript probe: url=%1, title=%2, "
+                "readyState=%3, chrome.webview=%4, ws-patched=%5")
+                .arg(url, title, readyState,
+                     chromeWebview ? "yes" : "no", wsPatched ? "yes" : "no"));
         return;
     }
     if (kind == QStringLiteral("ws-binary"))

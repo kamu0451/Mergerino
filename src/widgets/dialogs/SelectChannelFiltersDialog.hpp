@@ -12,6 +12,7 @@ class SelectChannelFiltersDialog : public QDialog
 {
 public:
     SelectChannelFiltersDialog(const QList<QUuid> &previousSelection,
+                               const QList<QUuid> &hiddenFilters = {},
                                QWidget *parent = nullptr);
 
     const QList<QUuid> &getSelection() const;

@@ -26,6 +26,7 @@ class MessageElement;
 class MessageThread;
 class TwitchBadge;
 class ScrollbarHighlight;
+enum class PlatformIndicatorMode : uint8_t;
 
 enum class MessagePlatform : uint8_t {
     AnyOrTwitch,
@@ -126,7 +127,9 @@ struct Message {
 
     std::vector<std::unique_ptr<MessageElement>> elements;
 
-    ScrollbarHighlight getScrollBarHighlight() const;
+    ScrollbarHighlight getScrollBarHighlight(
+        PlatformIndicatorMode platformIndicatorMode,
+        bool useActivityPlatformHighlightColors) const;
 
     std::shared_ptr<ChannelPointReward> reward = nullptr;
 

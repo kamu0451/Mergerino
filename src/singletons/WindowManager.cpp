@@ -18,6 +18,7 @@
 #include "singletons/Theme.hpp"
 #include "util/CombinePath.hpp"
 #include "util/FilesystemHelpers.hpp"
+#include "util/QMagicEnum.hpp"
 #include "util/SignalListener.hpp"
 #include "widgets/AccountSwitchPopup.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
@@ -723,6 +724,10 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
             obj.insert("inputEnabled", node->getSplit()->inputEnabled());
             obj.insert("activityMessageScale",
                        node->getSplit()->activityMessageScale());
+            obj.insert("platformIndicatorMode",
+                       qmagicenum::enumNameString(
+                           node->getSplit()->platformIndicatorMode())
+                           .toLower());
 
             QJsonObject split;
             WindowManager::encodeChannel(node->getSplit()->getIndirectChannel(),

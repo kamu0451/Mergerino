@@ -16,7 +16,8 @@
 namespace chatterino {
 
 SelectChannelFiltersDialog::SelectChannelFiltersDialog(
-    const QList<QUuid> &previousSelection, QWidget *parent)
+    const QList<QUuid> &previousSelection, const QList<QUuid> &hiddenFilters,
+    QWidget *parent)
     : QDialog(parent)
 {
     auto *vbox = new QVBoxLayout(this);
@@ -62,8 +63,15 @@ SelectChannelFiltersDialog::SelectChannelFiltersDialog(
     }
     else
     {
+        bool hasVisibleFilters = false;
         for (const auto &f : *availableFilters)
         {
+            if (hiddenFilters.contains(f->getId()))
+            {
+                continue;
+            }
+
+            hasVisibleFilters = true;
             auto *checkbox = new QCheckBox(f->getName(), this);
             bool alreadySelected = previousSelection.contains(f->getId());
             checkbox->setCheckState(alreadySelected
@@ -87,6 +95,12 @@ SelectChannelFiltersDialog::SelectChannelFiltersDialog(
                              });
 
             itemVbox->addWidget(checkbox);
+        }
+
+        if (!hasVisibleFilters)
+        {
+            auto *text = new QLabel("No filters defined");
+            itemVbox->addWidget(text);
         }
     }
 }

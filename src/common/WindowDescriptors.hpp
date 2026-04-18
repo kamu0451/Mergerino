@@ -12,6 +12,7 @@
 #include <QString>
 #include <QUuid>
 
+#include <cstdint>
 #include <optional>
 #include <variant>
 #include <vector>
@@ -34,6 +35,7 @@ namespace chatterino {
 
 // from widgets/Window.hpp
 enum class WindowType;
+enum class PlatformIndicatorMode : std::uint8_t;
 
 struct SplitDescriptor {
     // Twitch or mentions or watching or live or automod or whispers or IRC
@@ -49,6 +51,7 @@ struct SplitDescriptor {
     bool moderationMode_{false};
     bool inputEnabled_{true};
     qreal activityMessageScale_{0.9};
+    std::optional<PlatformIndicatorMode> platformIndicatorMode_;
 
     std::optional<bool> spellCheckOverride;
 

@@ -72,11 +72,18 @@ jobs:
         with:
           key: ${{ runner.os }}-${{ runner.arch }}-conan-user-${{ hashFiles('**/conanfile.py') }}-QT6
           path: ~/.conan2/
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-conan-user-
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
 
       - name: Install Conan
         run: |
-          python3 -c "import site; import sys; print(f'{site.USER_BASE}\\Python{sys.version_info.major}{sys.version_info.minor}\\Scripts')" >> "$Env:GITHUB_PATH"
-          pip3 install --user "conan==${{ env.CONAN_VERSION }}"
+          pip install "conan==${{ env.CONAN_VERSION }}"
 
       - name: Setup Conan
         run: |
@@ -89,7 +96,7 @@ jobs:
           cd build-test
           conan install .. `
               -s build_type=RelWithDebInfo `
-              -c tools.cmake.cmaketoolchain:generator="NMake Makefiles" `
+              -c tools.cmake.cmaketoolchain:generator="Ninja" `
               -b missing `
               --output-folder=. `
               -o with_openssl3="$Env:C2_USE_OPENSSL3"
@@ -109,7 +116,7 @@ jobs:
       - name: Build
         run: |
           cmake `
-              -G"NMake Makefiles" `
+              -G Ninja `
               -DCMAKE_BUILD_TYPE=RelWithDebInfo `
               -DBUILD_TESTS=On `
               -DBUILD_APP=OFF `
@@ -118,8 +125,7 @@ jobs:
               -DBUILD_WITH_CRASHPAD="$Env:C2_ENABLE_CRASHPAD" `
               -DCHATTERINO_SPELLCHECK=On `
               ..
-          set cl=/MP
-          nmake /S /NOLOGO
+          cmake --build . --parallel
         working-directory: build-test
 
       - name: Download and extract Twitch PubSub Server Test

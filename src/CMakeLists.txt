@@ -771,6 +771,8 @@ set(SOURCE_FILES
         widgets/dialogs/SelectChannelDialog.hpp
         widgets/dialogs/SelectChannelFiltersDialog.cpp
         widgets/dialogs/SelectChannelFiltersDialog.hpp
+        widgets/dialogs/SplitSettingsDialog.cpp
+        widgets/dialogs/SplitSettingsDialog.hpp
         widgets/dialogs/SettingsDialog.cpp
         widgets/dialogs/SettingsDialog.hpp
         widgets/dialogs/UpdateDialog.cpp
@@ -805,6 +807,8 @@ set(SOURCE_FILES
         widgets/helper/color/SBCanvas.cpp
         widgets/helper/color/SBCanvas.hpp
 
+        widgets/helper/ActivityMessageUtils.cpp
+        widgets/helper/ActivityMessageUtils.hpp
         widgets/helper/ChannelView.cpp
         widgets/helper/ChannelView.hpp
         widgets/helper/CmdDeleteKeyFilter.cpp

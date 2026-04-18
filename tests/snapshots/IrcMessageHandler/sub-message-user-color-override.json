@@ -2,6 +2,91 @@
     "input": "@badges=staff/1,broadcaster/1,turbo/1;color=#008000;display-name=ronni;emotes=;id=db25007f-7a18-43eb-9379-80131e44d633;login=ronni;mod=0;msg-id=resub;msg-param-months=6;msg-param-sub-plan=Prime;msg-param-sub-plan-name=Prime;room-id=11148817;subscriber=1;system-msg=ronni\\shas\\ssubscribed\\sfor\\s6\\smonths!;tmi-sent-ts=1507246572675;turbo=1;user-id=1337;user-type=staff :tmi.twitch.tv USERNOTICE #pajlada :Great stream -- keep it up!",
     "output": [
         {
+            "channelName": "",
+            "count": 1,
+            "displayName": "",
+            "elements": [
+                {
+                    "element": {
+                        "color": "System",
+                        "flags": "Timestamp",
+                        "link": {
+                            "type": "None",
+                            "value": ""
+                        },
+                        "style": "TimestampMedium",
+                        "tooltip": "",
+                        "trailingSpace": true,
+                        "type": "TextElement",
+                        "words": [
+                            "23:36"
+                        ]
+                    },
+                    "flags": "Timestamp",
+                    "format": "",
+                    "link": {
+                        "type": "None",
+                        "value": ""
+                    },
+                    "time": "23:36:12",
+                    "tooltip": "",
+                    "trailingSpace": true,
+                    "type": "TimestampElement"
+                },
+                {
+                    "color": "Text",
+                    "fallbackColor": "System",
+                    "flags": "Text|Mention",
+                    "link": {
+                        "type": "None",
+                        "value": ""
+                    },
+                    "style": "ChatMedium",
+                    "tooltip": "",
+                    "trailingSpace": true,
+                    "type": "MentionElement",
+                    "userColor": "#ffff00ff",
+                    "userLoginName": "ronni",
+                    "words": [
+                        "ronni"
+                    ]
+                },
+                {
+                    "color": "System",
+                    "flags": "Text",
+                    "link": {
+                        "type": "None",
+                        "value": ""
+                    },
+                    "style": "ChatMedium",
+                    "tooltip": "",
+                    "trailingSpace": true,
+                    "type": "TextElement",
+                    "words": [
+                        "has",
+                        "subscribed",
+                        "for",
+                        "6",
+                        "months!"
+                    ]
+                }
+            ],
+            "externalBadges": [],
+            "flags": "System|DoNotTriggerNotification|Subscription",
+            "frozen": false,
+            "id": "",
+            "localizedName": "",
+            "loginName": "",
+            "messageText": "ronni has subscribed for 6 months!",
+            "searchText": "ronni has subscribed for 6 months!",
+            "serverReceivedTime": "",
+            "timeoutUser": "",
+            "twitchBadgeInfos": {},
+            "twitchBadges": [],
+            "userID": "",
+            "usernameColor": "#ff000000"
+        },
+        {
             "channelName": "pajlada",
             "count": 1,
             "displayName": "ronni",
@@ -165,11 +250,10 @@
                     "url": ""
                 }
             ],
-            "externalBadges": [
-            ],
+            "externalBadges": [],
             "flags": "Collapsed|Subscription",
             "frozen": false,
-        "highlightColor": "#5a53fc18",
+            "highlightColor": "#5a53fc18",
             "id": "db25007f-7a18-43eb-9379-80131e44d633",
             "localizedName": "",
             "loginName": "ronni",
@@ -177,8 +261,7 @@
             "searchText": "ronni  ronni: Great stream -- keep it up! ",
             "serverReceivedTime": "2017-10-05T23:36:12Z",
             "timeoutUser": "",
-            "twitchBadgeInfos": {
-            },
+            "twitchBadgeInfos": {},
             "twitchBadges": [
                 "staff",
                 "broadcaster",
@@ -186,94 +269,6 @@
             ],
             "userID": "1337",
             "usernameColor": "#ffff00ff"
-        },
-        {
-            "channelName": "",
-            "count": 1,
-            "displayName": "",
-            "elements": [
-                {
-                    "element": {
-                        "color": "System",
-                        "flags": "Timestamp",
-                        "link": {
-                            "type": "None",
-                            "value": ""
-                        },
-                        "style": "TimestampMedium",
-                        "tooltip": "",
-                        "trailingSpace": true,
-                        "type": "TextElement",
-                        "words": [
-                            "23:36"
-                        ]
-                    },
-                    "flags": "Timestamp",
-                    "format": "",
-                    "link": {
-                        "type": "None",
-                        "value": ""
-                    },
-                    "time": "23:36:12",
-                    "tooltip": "",
-                    "trailingSpace": true,
-                    "type": "TimestampElement"
-                },
-                {
-                    "color": "Text",
-                    "fallbackColor": "System",
-                    "flags": "Text|Mention",
-                    "link": {
-                        "type": "None",
-                        "value": ""
-                    },
-                    "style": "ChatMedium",
-                    "tooltip": "",
-                    "trailingSpace": true,
-                    "type": "MentionElement",
-                    "userColor": "#ffff00ff",
-                    "userLoginName": "ronni",
-                    "words": [
-                        "ronni"
-                    ]
-                },
-                {
-                    "color": "System",
-                    "flags": "Text",
-                    "link": {
-                        "type": "None",
-                        "value": ""
-                    },
-                    "style": "ChatMedium",
-                    "tooltip": "",
-                    "trailingSpace": true,
-                    "type": "TextElement",
-                    "words": [
-                        "has",
-                        "subscribed",
-                        "for",
-                        "6",
-                        "months!"
-                    ]
-                }
-            ],
-            "externalBadges": [
-            ],
-            "flags": "System|DoNotTriggerNotification|Subscription",
-            "frozen": false,
-            "id": "",
-            "localizedName": "",
-            "loginName": "",
-            "messageText": "ronni has subscribed for 6 months!",
-            "searchText": "ronni has subscribed for 6 months!",
-            "serverReceivedTime": "",
-            "timeoutUser": "",
-            "twitchBadgeInfos": {
-            },
-            "twitchBadges": [
-            ],
-            "userID": "",
-            "usernameColor": "#ff000000"
         }
     ],
     "params": {

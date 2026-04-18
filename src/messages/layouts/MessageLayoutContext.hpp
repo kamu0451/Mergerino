@@ -9,6 +9,8 @@
 #include <QColor>
 #include <QPainter>
 
+#include <cstdint>
+
 namespace pajlada::Signals {
 class SignalHolder;
 }  // namespace pajlada::Signals
@@ -19,6 +21,7 @@ class ColorProvider;
 class Theme;
 class Settings;
 struct Selection;
+enum class PlatformIndicatorMode : std::uint8_t;
 
 // TODO: Figure out if this could be a subset of Theme instead (e.g. Theme::MessageColors)
 struct MessageColors {
@@ -81,6 +84,7 @@ struct MessagePaintContext {
     const bool isMentions{};
     // whether automatic event overlays should be rendered as solid fills
     const bool forceFlatEventHighlights{};
+    const PlatformIndicatorMode platformIndicatorMode;
 
     // y coordinate we're currently painting at
     int y{};

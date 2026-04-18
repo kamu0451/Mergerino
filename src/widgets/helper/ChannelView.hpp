@@ -11,6 +11,7 @@
 #include "messages/Selection.hpp"
 #include "util/ThreadGuard.hpp"
 #include "widgets/BaseWidget.hpp"
+#include "widgets/helper/ScrollbarHighlight.hpp"
 #include "widgets/TooltipWidget.hpp"
 
 #include <pajlada/signals/signal.hpp>
@@ -24,11 +25,13 @@
 #include <QWheelEvent>
 #include <QWidget>
 
+#include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace chatterino {
 enum class HighlightState;
+enum class PlatformIndicatorMode : std::uint8_t;
 
 class Channel;
 using ChannelPtr = std::shared_ptr<Channel>;
@@ -209,6 +212,7 @@ public:
     bool mayContainMessage(const MessagePtr &message);
 
     void updateColorTheme();
+    void refreshPlatformIndicatorMode();
 
     /// @brief Adjusts the colors this view uses
     ///
@@ -333,14 +337,19 @@ private:
     const MessageColors &effectiveMessageColors() const;
     float activityMessageScale() const;
     float activityMessageImageScale() const;
+    PlatformIndicatorMode resolvedPlatformIndicatorMode() const;
+    ScrollbarHighlight scrollbarHighlightForMessage(
+        const MessagePtr &message) const;
     std::optional<MessagePtr> transformActivityMessage(
-        const MessagePtr &message, int &pendingGiftRecipients) const;
+        const MessagePtr &message, int &pendingGiftRecipients,
+        bool &suppressNextAnnouncementMessage) const;
     void rebuildActivityMessages();
     ChannelViewID id_{};
 
     bool layoutQueued_ = false;
     bool bufferInvalidationQueued_ = false;
     int activityGiftRecipientsToSuppress_ = 0;
+    bool activitySuppressNextAnnouncementMessage_ = false;
 
     bool lastMessageHasAlternateBackground_ = false;
     bool lastMessageHasAlternateBackgroundReverse_ = true;

@@ -29,6 +29,7 @@
 #include "widgets/ChatterListWidget.hpp"
 #include "widgets/dialogs/SelectChannelDialog.hpp"
 #include "widgets/dialogs/SelectChannelFiltersDialog.hpp"
+#include "widgets/dialogs/SplitSettingsDialog.hpp"
 #include "widgets/dialogs/UserInfoPopup.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/DebugPopup.hpp"
@@ -67,6 +68,12 @@ constexpr qreal ALERTS_PRIMARY_RATIO = 0.7;
 constexpr qreal ALERTS_SECONDARY_RATIO = 0.3;
 constexpr qreal MIN_ACTIVITY_MESSAGE_SCALE = 0.75;
 constexpr qreal MAX_ACTIVITY_MESSAGE_SCALE = 1.1;
+
+PlatformIndicatorMode defaultPlatformIndicatorMode(bool isActivityPane)
+{
+    return isActivityPane ? PlatformIndicatorMode::LineColor
+                          : getSettings()->mergedPlatformIndicatorMode.getEnum();
+}
 
 QStringList normalizedFilterIds(const QList<QUuid> &ids)
 {
@@ -244,9 +251,15 @@ void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
 
     if (activitySplit)
     {
+        const auto activityPlatformIndicatorMode =
+            activitySplit->platformIndicatorMode();
+        const auto activityMessageScale = activitySplit->activityMessageScale();
+
         activitySplit->setChannel(ownerSplit->getIndirectChannel());
         activitySplit->setFilters(ownerSplit->getFilters());
         activitySplit->setInputEnabled(false);
+        activitySplit->setActivityMessageScale(activityMessageScale);
+        activitySplit->setPlatformIndicatorMode(activityPlatformIndicatorMode);
         refreshActivityIcons(container);
         return;
     }
@@ -284,6 +297,7 @@ Qt::KeyboardModifiers Split::modifierStatus = Qt::NoModifier;
 Split::Split(QWidget *parent)
     : BaseWidget(parent)
     , channel_(Channel::getEmpty())
+    , platformIndicatorMode_(defaultPlatformIndicatorMode(false))
     , vbox_(new QVBoxLayout(this))
     , header_(new SplitHeader(this))
     , view_(new ChannelView(this, this, ChannelView::Context::None,
@@ -989,6 +1003,11 @@ qreal Split::activityMessageScale() const
     return this->activityMessageScale_;
 }
 
+PlatformIndicatorMode Split::platformIndicatorMode() const
+{
+    return this->platformIndicatorMode_;
+}
+
 bool Split::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == this->view_)
@@ -1045,6 +1064,18 @@ void Split::setActivityMessageScale(qreal value)
 
     this->activityMessageScale_ = clamped;
     this->view_->invalidateBuffers();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setPlatformIndicatorMode(PlatformIndicatorMode value)
+{
+    if (this->platformIndicatorMode_ == value)
+    {
+        return;
+    }
+
+    this->platformIndicatorMode_ = value;
+    this->view_->refreshPlatformIndicatorMode();
     getApp()->getWindows()->queueSave();
 }
 
@@ -1351,6 +1382,10 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
         dialog->setSelectedChannel({});
     }
     dialog->setActivityPaneEnabled(linkedActivityPane != nullptr);
+    dialog->setPlatformIndicatorMode(activityOwnerSplit
+                                         ? activityOwnerSplit
+                                               ->platformIndicatorMode()
+                                         : this->platformIndicatorMode());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(dialogTitle);
     dialog->show();
@@ -1361,6 +1396,8 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
         if (didSelectChannel && activityOwnerSplit)
         {
             activityOwnerSplit->setChannel(dialog->getSelectedChannel());
+            activityOwnerSplit->setPlatformIndicatorMode(
+                dialog->platformIndicatorMode());
         }
 
         callback(didSelectChannel);
@@ -1372,6 +1409,36 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
         }
     });
     this->selectChannelDialog_ = dialog;
+}
+
+void Split::showSettingsDialog()
+{
+    if (!this->splitSettingsDialog_.isNull())
+    {
+        this->splitSettingsDialog_->raise();
+        return;
+    }
+
+    auto *dialog = new SplitSettingsDialog(this->isActivityPane(), this);
+    dialog->setPlatformIndicatorMode(this->platformIndicatorMode());
+    dialog->setActivityMessageScale(this->activityMessageScale());
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(this->isActivityPane() ? this->activityPaneTitle()
+                                                  : "Split settings");
+    dialog->show();
+
+    std::ignore = dialog->closed.connect([this, dialog] {
+        if (dialog->hasAcceptedChanges())
+        {
+            this->setPlatformIndicatorMode(dialog->platformIndicatorMode());
+            if (this->isActivityPane())
+            {
+                this->setActivityMessageScale(dialog->activityMessageScale());
+            }
+        }
+    });
+
+    this->splitSettingsDialog_ = dialog;
 }
 
 void Split::updateGifEmotes()
@@ -1560,6 +1627,7 @@ void Split::openAlertsPane()
     }
 
     alertsSplit->setInputEnabled(false);
+    alertsSplit->setPlatformIndicatorMode(defaultPlatformIndicatorMode(true));
     container->setSelected(alertsSplit);
     alertsSplit->setFocus(Qt::OtherFocusReason);
     for (auto *split : container->getSplits())
@@ -1592,6 +1660,7 @@ void Split::popup()
     split->setFilters(this->getFilters());
     split->setInputEnabled(this->inputEnabled());
     split->setActivityMessageScale(this->activityMessageScale());
+    split->setPlatformIndicatorMode(this->platformIndicatorMode());
 
     window.getNotebook().getOrAddSelectedPage()->insertSplit(split);
     window.show();
@@ -1732,7 +1801,13 @@ void Split::openSubPage()
 
 void Split::setFiltersDialog()
 {
-    SelectChannelFiltersDialog d(this->getFilters(), this);
+    QList<QUuid> hiddenFilters;
+    if (const auto alertFilterId = findAlertsFilterId())
+    {
+        hiddenFilters.append(*alertFilterId);
+    }
+
+    SelectChannelFiltersDialog d(this->getFilters(), hiddenFilters, this);
     d.setWindowTitle("Select filters");
 
     if (d.exec() == QDialog::Accepted)

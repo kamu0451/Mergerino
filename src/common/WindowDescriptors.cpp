@@ -5,6 +5,8 @@
 #include "common/WindowDescriptors.hpp"
 
 #include "common/QLogging.hpp"
+#include "singletons/Settings.hpp"
+#include "util/QMagicEnum.hpp"
 #include "widgets/Window.hpp"
 
 #include <QFile>
@@ -109,6 +111,13 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
     descriptor.inputEnabled_ = root.value("inputEnabled").toBool(true);
     descriptor.activityMessageScale_ =
         root.value("activityMessageScale").toDouble(0.9);
+    if (auto platformIndicatorMode = root["platformIndicatorMode"];
+        platformIndicatorMode.isString())
+    {
+        descriptor.platformIndicatorMode_ = qmagicenum::enumCast<
+            PlatformIndicatorMode>(platformIndicatorMode.toString(),
+                                   qmagicenum::CASE_INSENSITIVE);
+    }
     if (data.contains("channel"))
     {
         descriptor.channelName_ = data.value("channel").toString();

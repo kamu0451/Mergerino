@@ -279,30 +279,79 @@ void TikTokLiveChat::start()
                                                 true);
                                             return S_OK;
                                         }
-                                        // Post-nav sanity probe: confirms
-                                        // JS execution + postMessage IPC
-                                        // round-trip actually work on this
-                                        // page. If this fires but the
-                                        // injected-at-doc-creation script
-                                        // doesn't, the problem is specific
-                                        // to AddScriptToExecuteOnDocumentCreated
-                                        // (iframe/cross-origin/CSP), not IPC.
+                                        // Post-nav sanity probe. Uses
+                                        // ExecuteScript's result callback
+                                        // rather than postMessage so we get
+                                        // the answer even if chrome.webview
+                                        // IPC is wedged. Returns a JSON
+                                        // string that C++ parses below.
                                         const wchar_t *postNavProbe = L"(function(){"
                                             L"try{"
-                                            L"window.chrome.webview.postMessage("
-                                            L"JSON.stringify({"
-                                            L"kind:'exec-probe',"
+                                            L"return JSON.stringify({"
                                             L"url:String(location.href),"
                                             L"title:String(document.title||''),"
                                             L"readyState:String(document.readyState),"
-                                            L"chromeWebviewAvailable:"
+                                            L"chromeWebview:"
                                             L"!!(window.chrome&&window.chrome.webview),"
-                                            L"wsPatched:!!(window.WebSocket&&window.WebSocket.__mergerinoPatched)"
-                                            L"}));"
-                                            L"}catch(e){}"
+                                            L"wsPatched:!!(window.WebSocket&&window.WebSocket.__mergerinoPatched),"
+                                            L"fetchPatched:!!(window.fetch&&window.fetch.__mergerinoPatched)"
+                                            L"});"
+                                            L"}catch(e){return JSON.stringify({error:String(e)});}"
                                             L"})()";
-                                        this->impl_->webview->ExecuteScript(
-                                            postNavProbe, nullptr);
+                                        HRESULT execHr =
+                                            this->impl_->webview->ExecuteScript(
+                                                postNavProbe,
+                                                Callback<
+                                                    ICoreWebView2ExecuteScriptCompletedHandler>(
+                                                    [this, guard](
+                                                        HRESULT errorCode,
+                                                        LPCWSTR resultJson)
+                                                        -> HRESULT {
+                                                        if (guard.expired())
+                                                        {
+                                                            return S_OK;
+                                                        }
+                                                        if (FAILED(errorCode))
+                                                        {
+                                                            this->emitSystemMessage(
+                                                                QStringLiteral(
+                                                                    "[TikTok "
+                                                                    "diag] "
+                                                                    "ExecuteScript "
+                                                                    "failed "
+                                                                    "(0x%1)")
+                                                                    .arg(
+                                                                        static_cast<
+                                                                            quint32>(
+                                                                            errorCode),
+                                                                        8, 16,
+                                                                        QChar(
+                                                                            '0')));
+                                                            return S_OK;
+                                                        }
+                                                        this->emitSystemMessage(
+                                                            QStringLiteral(
+                                                                "[TikTok diag] "
+                                                                "ExecuteScript "
+                                                                "result: %1")
+                                                                .arg(fromWide(
+                                                                    resultJson)));
+                                                        return S_OK;
+                                                    })
+                                                    .Get());
+                                        if (FAILED(execHr))
+                                        {
+                                            this->emitSystemMessage(
+                                                QStringLiteral(
+                                                    "[TikTok diag] "
+                                                    "ExecuteScript dispatch "
+                                                    "failed synchronously "
+                                                    "(0x%1)")
+                                                    .arg(
+                                                        static_cast<quint32>(
+                                                            execHr),
+                                                        8, 16, QChar('0')));
+                                        }
                                         return S_OK;
                                     })
                                     .Get(),

@@ -41,7 +41,11 @@ constexpr std::wstring_view kInjectScript = LR"JS(
     };
 
     const isChatSocket = function (u) {
-        return /webcast/i.test(u);
+        // TikTok's live chat uses their general IM WebSocket rather than a
+        // "/webcast/" URL. Observed endpoint:
+        //   wss://im-ws.tiktok.com/ws/v2?service=33554513&...
+        // Keep /webcast/ as a fallback in case older pops show up.
+        return /im-ws\.tiktok\.com\/ws|webcast/i.test(u);
     };
 
     const Patched = function (url, protocols) {

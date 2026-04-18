@@ -835,6 +835,8 @@ void WindowManager::encodeChannel(IndirectChannel channel, QJsonObject &obj)
             obj.insert("kickChannel", config.kickChannelName);
             obj.insert("youtubeEnabled", config.youtubeEnabled);
             obj.insert("youtubeStreamUrl", config.youtubeStreamUrl);
+            obj.insert("tiktokEnabled", config.tiktokEnabled);
+            obj.insert("tiktokUsername", config.tiktokUsername);
         }
         break;
 
@@ -906,6 +908,8 @@ IndirectChannel WindowManager::decodeChannel(const SplitDescriptor &descriptor)
             .kickChannelName = descriptor.mergedKickChannelName_,
             .youtubeEnabled = descriptor.mergedYoutubeEnabled,
             .youtubeStreamUrl = descriptor.mergedYoutubeStreamUrl_,
+            .tiktokEnabled = descriptor.mergedTiktokEnabled,
+            .tiktokUsername = descriptor.mergedTiktokUsername_,
         }));
     }
 

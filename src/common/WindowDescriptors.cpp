@@ -151,6 +151,10 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
             data["youtubeEnabled"].toBool(false);
         descriptor.mergedYoutubeStreamUrl_ =
             data["youtubeStreamUrl"].toString();
+        descriptor.mergedTiktokEnabled =
+            data["tiktokEnabled"].toBool(false);
+        descriptor.mergedTiktokUsername_ =
+            data["tiktokUsername"].toString();
     }
 }
 

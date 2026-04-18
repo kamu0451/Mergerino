@@ -67,6 +67,8 @@ struct SplitDescriptor {
     QString mergedKickChannelName_;
     bool mergedYoutubeEnabled = false;
     QString mergedYoutubeStreamUrl_;
+    bool mergedTiktokEnabled = false;
+    QString mergedTiktokUsername_;
 
     static void loadFromJSON(SplitDescriptor &descriptor,
                              const QJsonObject &root, const QJsonObject &data);

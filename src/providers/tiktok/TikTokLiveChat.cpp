@@ -311,36 +311,67 @@ void TikTokLiveChat::start()
                                 &this->impl_->msgToken);
 
                             // Inject the WebSocket hook before the first page
-                            // script runs. The completion handler is required
-                            // by the interface even though we don't act on it.
+                            // script runs. AddScriptToExecuteOnDocumentCreated
+                            // is async: the script is only registered once
+                            // the completion callback fires. If we call
+                            // Navigate before then, the page's first document
+                            // starts loading without our hook and TikTok's
+                            // /@user/live SPA never navigates again, so we'd
+                            // miss every WebSocket. Navigate from inside the
+                            // completion handler instead.
+                            const QString url =
+                                QStringLiteral("https://www.tiktok.com/@%1/live")
+                                    .arg(this->username_);
                             this->impl_->webview
                                 ->AddScriptToExecuteOnDocumentCreated(
                                     std::wstring(tiktok::kInjectScript).c_str(),
                                     Callback<
                                         ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
-                                        [](HRESULT, LPCWSTR) -> HRESULT {
+                                        [this, guard, url](
+                                            HRESULT addHr,
+                                            LPCWSTR) -> HRESULT {
+                                            if (guard.expired())
+                                            {
+                                                return S_OK;
+                                            }
+                                            if (FAILED(addHr))
+                                            {
+                                                this->emitSystemMessage(
+                                                    QStringLiteral(
+                                                        "[TikTok diag] "
+                                                        "AddScriptToExecuteOnDocumentCreated "
+                                                        "failed (0x%1)")
+                                                        .arg(
+                                                            static_cast<
+                                                                quint32>(addHr),
+                                                            8, 16, QChar('0')));
+                                                return S_OK;
+                                            }
+                                            this->emitSystemMessage(
+                                                QStringLiteral(
+                                                    "[TikTok diag] "
+                                                    "Script registered, "
+                                                    "navigating to %1")
+                                                    .arg(url));
+                                            HRESULT navHr =
+                                                this->impl_->webview->Navigate(
+                                                    toWide(url).c_str());
+                                            if (FAILED(navHr))
+                                            {
+                                                this->emitSystemMessage(
+                                                    QStringLiteral(
+                                                        "[TikTok diag] "
+                                                        "Navigate() failed "
+                                                        "synchronously "
+                                                        "(0x%1)")
+                                                        .arg(
+                                                            static_cast<
+                                                                quint32>(navHr),
+                                                            8, 16, QChar('0')));
+                                            }
                                             return S_OK;
                                         })
                                         .Get());
-
-                            const QString url =
-                                QStringLiteral("https://www.tiktok.com/@%1/live")
-                                    .arg(this->username_);
-                            this->emitSystemMessage(
-                                QStringLiteral(
-                                    "[TikTok diag] Navigating to %1")
-                                    .arg(url));
-                            HRESULT navHr = this->impl_->webview->Navigate(
-                                toWide(url).c_str());
-                            if (FAILED(navHr))
-                            {
-                                this->emitSystemMessage(
-                                    QStringLiteral(
-                                        "[TikTok diag] Navigate() call "
-                                        "failed synchronously (0x%1)")
-                                        .arg(static_cast<quint32>(navHr), 8,
-                                             16, QChar('0')));
-                            }
                             return S_OK;
                         })
                         .Get());

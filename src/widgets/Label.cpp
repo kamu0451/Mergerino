@@ -88,6 +88,18 @@ void Label::setShouldElide(bool shouldElide)
     this->update();
 }
 
+void Label::setTrailingText(const QString &text, QColor color)
+{
+    if (this->trailingText_ == text && this->trailingColor_ == color)
+    {
+        return;
+    }
+    this->trailingText_ = text;
+    this->trailingColor_ = color;
+    this->updateSize();
+    this->update();
+}
+
 void Label::setFontStyle(FontStyle style)
 {
     this->fontStyle_ = style;
@@ -130,23 +142,56 @@ void Label::paintEvent(QPaintEvent * /*event*/)
         return this->text_;
     }();
 
-    qreal width = metrics.horizontalAdvance(text);
-    Qt::Alignment alignment = !this->centered_ || width > textRect.width()
-                                  ? Qt::AlignLeft | Qt::AlignVCenter
-                                  : Qt::AlignCenter;
+    const qreal mainWidth = metrics.horizontalAdvance(text);
+    const qreal trailingWidth =
+        this->trailingText_.isEmpty()
+            ? 0.0
+            : metrics.horizontalAdvance(this->trailingText_);
+    const qreal combinedWidth = mainWidth + trailingWidth;
 
-    painter.setBrush(this->palette().windowText());
+    Qt::Alignment alignment =
+        !this->centered_ || combinedWidth > textRect.width()
+            ? Qt::AlignLeft | Qt::AlignVCenter
+            : Qt::AlignCenter;
 
-    QTextOption option(alignment);
-    if (this->wordWrap_)
+    if (this->trailingText_.isEmpty())
     {
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        painter.setBrush(this->palette().windowText());
+
+        QTextOption option(alignment);
+        if (this->wordWrap_)
+        {
+            option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        }
+        else
+        {
+            option.setWrapMode(QTextOption::NoWrap);
+        }
+        painter.drawText(textRect, text, option);
     }
     else
     {
-        option.setWrapMode(QTextOption::NoWrap);
+        // Custom two-color draw: main text in palette color, trailing text
+        // in trailingColor_. Drawn as a single centered or left-aligned unit.
+        qreal startX = textRect.left();
+        if (alignment.testFlag(Qt::AlignHCenter) ||
+            alignment == Qt::AlignCenter)
+        {
+            startX =
+                textRect.left() + (textRect.width() - combinedWidth) / 2.0;
+        }
+        const qreal baselineY = textRect.top() +
+                                (textRect.height() + metrics.ascent() -
+                                 metrics.descent()) /
+                                    2.0;
+
+        painter.setPen(this->palette().color(QPalette::WindowText));
+        painter.drawText(QPointF(startX, baselineY), text);
+
+        painter.setPen(this->trailingColor_);
+        painter.drawText(QPointF(startX + mainWidth, baselineY),
+                         this->trailingText_);
     }
-    painter.drawText(textRect, text, option);
 
 #if 0
     painter.setPen(QColor(255, 0, 0));
@@ -193,6 +238,7 @@ void Label::updateSize()
     else
     {
         auto width = metrics.horizontalAdvance(this->text_) +
+                     metrics.horizontalAdvance(this->trailingText_) +
                      this->currentPadding_.left() +
                      this->currentPadding_.right();
         this->sizeHint_ = QSizeF(width, height).toSize();

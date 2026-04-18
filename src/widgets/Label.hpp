@@ -8,6 +8,7 @@
 #include "widgets/BaseWidget.hpp"
 
 #include <pajlada/signals/signalholder.hpp>
+#include <QColor>
 
 class QFontMetricsF;
 
@@ -39,6 +40,10 @@ public:
     /// render the current text.
     void setShouldElide(bool shouldElide);
 
+    /// Sets an optional trailing suffix that is drawn in `color` immediately
+    /// after the main text. Pass an empty string to clear it.
+    void setTrailingText(const QString &text, QColor color);
+
 protected:
     void scaleChangedEvent(float scale_) override;
     void paintEvent(QPaintEvent *) override;
@@ -59,6 +64,8 @@ protected:
     bool updateElidedText(const QFontMetricsF &fontMetrics, qreal width);
 
     QString text_;
+    QString trailingText_;
+    QColor trailingColor_;
     FontStyle fontStyle_;
     QSize sizeHint_;
     QSize minimumSizeHint_;

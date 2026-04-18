@@ -1012,6 +1012,8 @@ void SplitHeader::updateChannelText()
     this->tooltipText_ = QString();
 
     auto title = channel->getLocalizedName();
+    QString deltaText;
+    QColor deltaColor;
 
     if (indirectChannel.getType() == Channel::Type::TwitchWatching)
     {
@@ -1123,9 +1125,11 @@ void SplitHeader::updateChannelText()
                     const auto delta = mergedChannel->viewerCountDeltaPercent();
                     if (delta.has_value() && std::abs(*delta) >= 0.1)
                     {
-                        title += QString(" (%1%2%)")
-                                     .arg(*delta >= 0 ? "+" : "")
-                                     .arg(*delta, 0, 'f', 1);
+                        deltaText = QString(" (%1%2%)")
+                                        .arg(*delta >= 0 ? "+" : "")
+                                        .arg(*delta, 0, 'f', 1);
+                        deltaColor = *delta >= 0 ? QColor(0x4c, 0xaf, 0x50)
+                                                 : QColor(0xef, 0x53, 0x50);
                     }
                 }
             }
@@ -1135,6 +1139,7 @@ void SplitHeader::updateChannelText()
     if (this->split_->isActivityPane())
     {
         title = this->split_->activityPaneTitle();
+        deltaText.clear();
     }
     else if (!title.isEmpty() && !this->split_->getFilters().empty())
     {
@@ -1142,6 +1147,7 @@ void SplitHeader::updateChannelText()
     }
 
     this->titleLabel_->setText(title.isEmpty() ? "<empty>" : title);
+    this->titleLabel_->setTrailingText(deltaText, deltaColor);
 }
 
 void SplitHeader::updateIcons()

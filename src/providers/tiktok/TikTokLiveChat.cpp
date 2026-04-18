@@ -481,6 +481,30 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         this->setStatusText(QStringLiteral("TikTok live chat error"), true);
         return;
     }
+    if (kind == QStringLiteral("ws-probe"))
+    {
+        const QString url = obj.value(QStringLiteral("url")).toString();
+        this->emitSystemMessage(
+            QStringLiteral("[TikTok diag] WebSocket opened: %1").arg(url));
+        return;
+    }
+    if (kind == QStringLiteral("http-probe"))
+    {
+        const QString url = obj.value(QStringLiteral("url")).toString();
+        const QString via = obj.value(QStringLiteral("via")).toString();
+        this->emitSystemMessage(
+            QStringLiteral("[TikTok diag] %1 request: %2").arg(via, url));
+        return;
+    }
+    if (kind == QStringLiteral("nav-end"))
+    {
+        const QString url = obj.value(QStringLiteral("url")).toString();
+        const QString title = obj.value(QStringLiteral("title")).toString();
+        this->emitSystemMessage(
+            QStringLiteral("[TikTok diag] Navigated to %1 (title: %2)")
+                .arg(url, title));
+        return;
+    }
     if (kind == QStringLiteral("ws-binary"))
     {
         const QString base64 = obj.value(QStringLiteral("base64")).toString();

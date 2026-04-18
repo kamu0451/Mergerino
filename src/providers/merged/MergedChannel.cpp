@@ -35,6 +35,11 @@ using namespace chatterino;
 // Skip the first minute of samples to avoid wild percentages while
 // viewer counts settle after joining a stream.
 constexpr qint64 VIEWER_DELTA_MIN_SPAN_MS = 60 * 1000;
+// Force a periodic sample even when the viewer count hasn't changed so
+// the oldest reference point stays close to the window edge. Otherwise
+// a stable stream would only ever have one sample and the delta would
+// never appear.
+constexpr qint64 VIEWER_DELTA_SAMPLE_INTERVAL_MS = 30 * 1000;
 constexpr int VIEWER_DELTA_WINDOW_MIN_MINUTES = 1;
 constexpr int VIEWER_DELTA_WINDOW_MAX_MINUTES = 60;
 
@@ -381,7 +386,9 @@ MergedChannel::viewerCountDeltaPercent() const
         this->viewerCountHistory_.pop_front();
     }
     if (this->viewerCountHistory_.empty() ||
-        this->viewerCountHistory_.back().second != current)
+        this->viewerCountHistory_.back().second != current ||
+        now - this->viewerCountHistory_.back().first >=
+            VIEWER_DELTA_SAMPLE_INTERVAL_MS)
     {
         this->viewerCountHistory_.emplace_back(now, current);
     }

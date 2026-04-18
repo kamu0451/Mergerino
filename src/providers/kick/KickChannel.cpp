@@ -84,8 +84,8 @@ void KickChannel::loadRecentMessages()
     }
     this->recentMessagesRequested_ = true;
 
-    auto url = u"https://kick.com/api/v2/channels/"_s % this->slug() %
-               u"/messages"_s;
+    QString url = u"https://kick.com/api/v2/channels/"_s % this->slug() %
+                  u"/messages"_s;
 
     std::vector<std::pair<QByteArray, QByteArray>> headers{
         {"User-Agent",
@@ -98,7 +98,7 @@ void KickChannel::loadRecentMessages()
     };
 
     auto weak = this->weakFromThis();
-    NetworkRequest(url.toStdString())
+    NetworkRequest(QUrl(url))
         .headerList(headers)
         .onError([weak](const NetworkResult &res) {
             auto self = weak.lock();

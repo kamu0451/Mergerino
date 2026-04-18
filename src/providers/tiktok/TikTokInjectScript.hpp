@@ -24,7 +24,10 @@ constexpr std::wstring_view kInjectScript = LR"JS(
 
     const post = function (payload) {
         try {
-            window.chrome.webview.postMessage(JSON.stringify(payload));
+            // Post the object directly. WebView2 serializes and C++
+            // reads via get_WebMessageAsJson - that call fails with
+            // E_INVALIDARG if we hand it an already-stringified value.
+            window.chrome.webview.postMessage(payload);
         } catch (e) { /* host gone - ignore */ }
     };
 

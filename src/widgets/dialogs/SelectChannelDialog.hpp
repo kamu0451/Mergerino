@@ -10,6 +10,7 @@
 #include <pajlada/signals/signal.hpp>
 #include <QRadioButton>
 
+#include <cstdint>
 #include <optional>
 
 class QCheckBox;
@@ -22,6 +23,7 @@ class QRadioButton;
 namespace chatterino {
 
 class MicroNotebook;
+enum class PlatformIndicatorMode : std::uint8_t;
 
 namespace detail {
 
@@ -43,8 +45,10 @@ public:
 
     void setSelectedChannel(std::optional<IndirectChannel> channel_);
     void setActivityPaneEnabled(bool enabled);
+    void setPlatformIndicatorMode(PlatformIndicatorMode mode);
     IndirectChannel getSelectedChannel() const;
     bool activityPaneEnabled() const;
+    PlatformIndicatorMode platformIndicatorMode() const;
     bool hasSeletedChannel() const;
 
     pajlada::Signals::NoArgSignal closed;

@@ -37,10 +37,6 @@
     "qtsvg"
   ],
   "features": {
-    "benchmarks": {
-      "description": "Build benchamarks",
-      "dependencies": ["benchmark"]
-    },
     "tests": {
       "description": "Build tests",
       "dependencies": ["gtest"]

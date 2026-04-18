@@ -98,6 +98,7 @@ private:
     bool skipInitialBacklog_{false};
     bool immediateSourceProbePending_{false};
     bool viewerCountPollScheduled_{false};
+    int activePollStreak_{0};
 
     std::shared_ptr<bool> lifetimeGuard_;
     std::unordered_set<QString> seenMessageIds_;

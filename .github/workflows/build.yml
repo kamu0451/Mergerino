@@ -52,14 +52,15 @@ jobs:
         uses: actions/cache@v5
         with:
           key: ${{ runner.os }}-${{ runner.arch }}-conan-user-${{ hashFiles('**/conanfile.py') }}-QT6
+          path: ~/.conan2/
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-conan-user-
-          path: ~/.conan2/
 
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+          cache: pip
 
       - name: Install and setup Conan
         shell: bash
@@ -89,7 +90,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_TOOLCHAIN_FILE="conan_toolchain.cmake" `
             -DUSE_PRECOMPILED_HEADERS=ON `
-            -DBUILD_WITH_CRASHPAD=OFF `
             -DCHATTERINO_LTO=OFF `
             -DFORCE_JSON_GENERATION=Off `
             -DCHATTERINO_SPELLCHECK=On `
@@ -97,10 +97,11 @@ jobs:
           ninja
 
       - name: Package
+        if: ${{ github.event_name != 'pull_request' }}
         working-directory: build
         shell: pwsh
         run: |
-          $packageDir = "Mergerino-1.5-win64"
+          $packageDir = "Mergerino-win64"
           if (Test-Path $packageDir) {
             Remove-Item $packageDir -Recurse -Force
           }
@@ -108,13 +109,14 @@ jobs:
           Copy-Item bin/mergerino.exe $packageDir/
           Get-ChildItem bin -Filter '*.dll' | Copy-Item -Destination $packageDir -Force
           ..\.CI\deploy-crt.ps1 $packageDir
-          if (Test-Path "Mergerino-1.5-win64.zip") {
-            Remove-Item "Mergerino-1.5-win64.zip" -Force
+          if (Test-Path "Mergerino-win64.zip") {
+            Remove-Item "Mergerino-win64.zip" -Force
           }
-          7z a Mergerino-1.5-win64.zip .\$packageDir\*
+          7z a Mergerino-win64.zip .\$packageDir\*
 
       - name: Upload artifact
+        if: ${{ github.event_name != 'pull_request' }}
         uses: actions/upload-artifact@v7
         with:
-          name: Mergerino-1.5-win64.zip
-          path: build/Mergerino-1.5-win64.zip
+          name: Mergerino-win64.zip
+          path: build/Mergerino-win64.zip

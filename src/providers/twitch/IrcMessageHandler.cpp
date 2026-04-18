@@ -771,15 +771,17 @@ void IrcMessageHandler::parseUserNoticeMessageInto(Communi::IrcMessage *message,
         return;
     }
 
-    if (SPECIAL_MESSAGE_TYPES.contains(msgType))
-    {
-        // Messages are not required, so they might be empty
-        if (!content.isEmpty())
+    const bool hasAttachedSpecialMessage =
+        SPECIAL_MESSAGE_TYPES.contains(msgType) && !content.isEmpty();
+    const auto addAttachedSpecialMessage = [&] {
+        if (!hasAttachedSpecialMessage)
         {
-            addMessage(message, sink, channel, content, *getApp()->getTwitch(),
-                       true, false, msgType);
+            return;
         }
-    }
+
+        addMessage(message, sink, channel, content, *getApp()->getTwitch(),
+                   true, false, msgType);
+    };
 
     auto it = tags.find("system-msg");
 
@@ -848,6 +850,7 @@ void IrcMessageHandler::parseUserNoticeMessageInto(Communi::IrcMessage *message,
             }
 
             sink.addMessage(msg, MessageContext::Original);
+            addAttachedSpecialMessage();
             return;
         }
         else if (msgType == "sub" || msgType == "resub")
@@ -929,6 +932,11 @@ void IrcMessageHandler::parseUserNoticeMessageInto(Communi::IrcMessage *message,
         }
 
         sink.addMessage(msg, MessageContext::Original);
+        addAttachedSpecialMessage();
+    }
+    else
+    {
+        addAttachedSpecialMessage();
     }
 }
 

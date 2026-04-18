@@ -1,5 +1,13 @@
 Patch Notes
 
+18/04/2026
+- Cleaned up activity tab to reduce noise
+- Alerts with a message attached now display first
+- Separated main chat and activity and added settings
+- Improved YouTube chat refresh rate
+- Fixed a bug where activity would get cleared when updating settings
+- Improved build pipeline
+
 16/04/2026
 - Added Activity Tab to display subscriptions and donations separately
 - Improved YouTube chat connection stability

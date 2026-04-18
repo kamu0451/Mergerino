@@ -24,6 +24,8 @@
 #include <QtGlobal>
 #include <QThread>
 
+#include <algorithm>
+
 namespace chatterino {
 
 namespace {
@@ -74,9 +76,36 @@ QColor fallbackPlatformHighlightColor(const Message &message,
     return color;
 }
 
-QColor automaticEventHighlightColor(const Message &message,
-                                    const QColor &highlightColor)
+QColor activityPlatformHighlightColor(const Message &message)
 {
+    const auto accent = defaultPlatformAccent(message.platform);
+    const auto hsv = accent.toHsv();
+    const int hue = hsv.hsvHue() >= 0 ? hsv.hsvHue() : 0;
+    const int saturation =
+        std::clamp(std::max(hsv.hsvSaturation(), 165) + 6, 0, 205);
+    const int value = std::clamp(std::min(232, std::max(hsv.value(), 208)), 0,
+                                 232);
+    constexpr int alpha = 118;
+
+    QColor popped;
+    popped.setHsv(hue, saturation, value, alpha);
+    return popped;
+}
+
+QColor automaticEventHighlightColor(const Message &message,
+                                    const QColor &highlightColor,
+                                    const MessagePaintContext &ctx)
+{
+    if (ctx.forceFlatEventHighlights)
+    {
+        if (!mergedPlatformIndicatorShowsLineColor(ctx.platformIndicatorMode))
+        {
+            return {};
+        }
+
+        return activityPlatformHighlightColor(message);
+    }
+
     const auto style = getSettings()->platformEventHighlightStyle.getEnum();
     if (style == PlatformEventHighlightStyle::None)
     {
@@ -101,8 +130,13 @@ QColor automaticEventHighlightColor(const Message &message,
     return fallbackPlatformHighlightColor(message, highlightColor);
 }
 
-bool automaticEventHighlightUsesGradient()
+bool automaticEventHighlightUsesGradient(const MessagePaintContext &ctx)
 {
+    if (ctx.forceFlatEventHighlights)
+    {
+        return false;
+    }
+
     return getSettings()->platformEventHighlightStyle.getEnum() ==
            PlatformEventHighlightStyle::Gradient;
 }
@@ -190,16 +224,18 @@ QColor brightenGradientColor(const QColor &color)
 
 bool applyAutomaticEventOverlay(const Message &message, const QColor &baseColor,
                                 bool brightenGradient,
+                                const MessagePaintContext &ctx,
                                 QColor &gradientOverlayColor,
                                 QColor &solidOverlayColor)
 {
-    auto resolvedColor = automaticEventHighlightColor(message, baseColor);
+    auto resolvedColor =
+        automaticEventHighlightColor(message, baseColor, ctx);
     if (!resolvedColor.isValid())
     {
         return false;
     }
 
-    if (automaticEventHighlightUsesGradient())
+    if (automaticEventHighlightUsesGradient(ctx))
     {
         gradientOverlayColor =
             brightenGradient ? brightenGradientColor(resolvedColor)
@@ -496,7 +532,8 @@ MessagePaintResult MessageLayout::paint(const MessagePaintContext &ctx)
     {
         auto redeemedStripeColor = automaticEventHighlightColor(
             *this->message_,
-            *ColorProvider::instance().color(ColorType::RedeemedHighlight));
+            *ColorProvider::instance().color(ColorType::RedeemedHighlight),
+            ctx);
         if (redeemedStripeColor.isValid())
         {
             ctx.painter.fillRect(
@@ -612,13 +649,15 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     QColor gradientLeadInColor;
 
     bool suppressMergedPlatformTint =
-        automaticEventHighlightUsesGradient() &&
         usesAutomaticEventOverlay(*this->message_, ctx.preferences) &&
-        !automaticEventIncludesUserMessage(*this->message_);
+        ((ctx.forceFlatEventHighlights &&
+          mergedPlatformIndicatorShowsLineColor(ctx.platformIndicatorMode)) ||
+         (automaticEventHighlightUsesGradient(ctx) &&
+          !automaticEventIncludesUserMessage(*this->message_)));
 
     if (this->message_->platformAccentColor &&
         mergedPlatformIndicatorShowsLineColor(
-            getSettings()->mergedPlatformIndicatorMode) &&
+            ctx.platformIndicatorMode) &&
         !suppressMergedPlatformTint)
     {
         backgroundColor = blendColors(backgroundColor,
@@ -631,7 +670,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
         applyAutomaticEventOverlay(*this->message_,
                                    *ctx.colorProvider.color(
                                        ColorType::ElevatedMessageHighlight),
-                                   false,
+                                   false, ctx,
                                    gradientOverlayColor, solidOverlayColor);
     }
 
@@ -642,7 +681,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
             *ctx.colorProvider.color(ColorType::FirstMessageHighlight);
         applyAutomaticEventOverlay(*this->message_,
                                    firstMessageBaseColor,
-                                   false,
+                                   false, ctx,
                                    gradientOverlayColor, solidOverlayColor);
         if (gradientOverlayColor.isValid())
         {
@@ -655,7 +694,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     {
         applyAutomaticEventOverlay(
             *this->message_, *ctx.colorProvider.color(ColorType::WatchStreak),
-            false,
+            false, ctx,
             gradientOverlayColor, solidOverlayColor);
     }
     else if ((this->message_->flags.has(MessageFlag::Highlighted) ||
@@ -672,7 +711,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     {
         applyAutomaticEventOverlay(
             *this->message_, *ctx.colorProvider.color(ColorType::Subscription),
-            false,
+            false, ctx,
             gradientOverlayColor, solidOverlayColor);
     }
     else if ((this->message_->flags.has(MessageFlag::RedeemedHighlight) ||
@@ -683,12 +722,12 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
         applyAutomaticEventOverlay(
             *this->message_,
             *ctx.colorProvider.color(ColorType::RedeemedHighlight),
-            false,
+            false, ctx,
             gradientOverlayColor, solidOverlayColor);
     }
     else if (isPlatformAlertMessage(*this->message_))
     {
-        applyAutomaticEventOverlay(*this->message_, {}, true,
+        applyAutomaticEventOverlay(*this->message_, {}, true, ctx,
                                    gradientOverlayColor, solidOverlayColor);
     }
     else if (this->message_->flags.has(MessageFlag::AutoMod) ||

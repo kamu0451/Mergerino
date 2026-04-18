@@ -17,6 +17,8 @@
 #include <QVBoxLayout>
 #include <QWidget>
 
+#include <cstdint>
+
 namespace chatterino {
 
 class ChannelView;
@@ -26,6 +28,8 @@ class SplitContainer;
 class SplitOverlay;
 class SelectChannelDialog;
 class OverlayWindow;
+class SplitSettingsDialog;
+enum class PlatformIndicatorMode : std::uint8_t;
 
 // Each ChatWidget consists of three sub-elements that handle their own part of
 // the chat widget: ChatWidgetHeader
@@ -60,6 +64,7 @@ public:
     bool hasLinkedActivityPane();
     QString activityPaneTitle() const;
     qreal activityMessageScale() const;
+    PlatformIndicatorMode platformIndicatorMode() const;
 
     IndirectChannel getIndirectChannel();
     ChannelPtr getChannel() const;
@@ -72,6 +77,7 @@ public:
     bool getModerationMode() const;
     void setInputEnabled(bool enabled);
     void setActivityMessageScale(qreal value);
+    void setPlatformIndicatorMode(PlatformIndicatorMode value);
 
     std::optional<bool> checkSpellingOverride() const;
     void setCheckSpellingOverride(std::optional<bool> override);
@@ -92,6 +98,7 @@ public:
     void setContainer(SplitContainer *container);
 
     void setInputReply(const MessagePtr &reply);
+    void showSettingsDialog();
 
     // This is called on window focus lost
     void unpause();
@@ -170,6 +177,7 @@ private:
     bool isTopRightSplit_{};
     bool inputEnabled_{true};
     qreal activityMessageScale_{0.9};
+    PlatformIndicatorMode platformIndicatorMode_;
 
     bool isMouseOver_{};
     bool isDragging_{};
@@ -183,6 +191,7 @@ private:
     QPointer<OverlayWindow> overlayWindow_;
 
     QPointer<SelectChannelDialog> selectChannelDialog_;
+    QPointer<SplitSettingsDialog> splitSettingsDialog_;
 
     pajlada::Signals::Connection channelIDChangedConnection_;
     pajlada::Signals::Connection usermodeChangedConnection_;

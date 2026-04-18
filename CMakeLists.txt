@@ -66,10 +66,6 @@ if(BUILD_TESTS)
     list(APPEND VCPKG_MANIFEST_FEATURES "tests")
 endif()
 
-if(BUILD_BENCHMARKS)
-    list(APPEND VCPKG_MANIFEST_FEATURES "benchmarks")
-endif()
-
 project(mergerino
     VERSION 1.5.0
     DESCRIPTION "Merged streamer chat client for Twitch, Kick, and YouTube"
@@ -77,6 +73,16 @@ project(mergerino
 
 if(NOT WIN32)
     message(FATAL_ERROR "Mergerino currently supports Windows only.")
+endif()
+
+if(BUILD_BENCHMARKS)
+    message(WARNING "Benchmarks have been removed from this repository. BUILD_BENCHMARKS will be ignored.")
+    set(BUILD_BENCHMARKS OFF)
+endif()
+
+if(BUILD_WITH_CRASHPAD)
+    message(WARNING "Crashpad support has been removed from this repository. BUILD_WITH_CRASHPAD will be ignored.")
+    set(BUILD_WITH_CRASHPAD OFF)
 endif()
 
 set(LIBRARY_PROJECT "${PROJECT_NAME}-lib")
@@ -259,11 +265,6 @@ if (BUILD_TESTS)
     set_target_properties(gmock_main PROPERTIES FOLDER lib)
 endif()
 
-if(BUILD_BENCHMARKS)
-    # Include system benchmark (Google Benchmark)
-    find_package(benchmark REQUIRED)
-endif()
-
 FetchContent_Declare(
     RapidJSON
     SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/lib/rapidjson
@@ -306,10 +307,6 @@ if (CHATTERINO_PLUGINS)
     find_package(Sol2 REQUIRED)
 endif()
 
-if(BUILD_WITH_CRASHPAD)
-    add_subdirectory("${CMAKE_SOURCE_DIR}/tools/crash-handler")
-endif()
-
 if(NOT CHATTERINO_NO_AVIF_PLUGIN)
     include(${CMAKE_SOURCE_DIR}/cmake/AVIF.cmake)
 endif()
@@ -320,12 +317,9 @@ if(libavif_FOUND AND NOT CHATTERINO_NO_AVIF_PLUGIN)
 endif()
 
 set(_prev_build_tests ${BUILD_TESTS})
-set(_prev_build_benchmarks ${BUILD_BENCHMARKS})
 set(BUILD_TESTS OFF)
-set(BUILD_BENCHMARKS OFF)
 add_subdirectory(lib/twitch-eventsub-ws)
 set(BUILD_TESTS ${_prev_build_tests})
-set(BUILD_BENCHMARKS ${_prev_build_benchmarks})
 
 # Used to provide a date of build in the About page (for nightly builds). Getting the actual time of
 # compilation in CMake is a more involved, as documented in https://stackoverflow.com/q/24292898.
@@ -345,17 +339,13 @@ include(cmake/resources/generate_resources.cmake)
 
 add_subdirectory(src)
 
-if(BUILD_TESTS OR BUILD_BENCHMARKS)
+if(BUILD_TESTS)
     add_subdirectory(mocks)
 endif()
 
 if(BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
-endif()
-
-if(BUILD_BENCHMARKS)
-    add_subdirectory(benchmarks)
 endif()
 
 feature_summary(WHAT ALL)

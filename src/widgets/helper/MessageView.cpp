@@ -10,6 +10,7 @@
 #include "messages/MessageElement.hpp"
 #include "messages/Selection.hpp"
 #include "providers/colors/ColorProvider.hpp"
+#include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 
@@ -91,6 +92,9 @@ void MessageView::paintEvent(QPaintEvent * /*event*/)
         .canvasWidth = this->width_,
         .isWindowFocused = this->window() == QApplication::activeWindow(),
         .isMentions = false,
+        .forceFlatEventHighlights = false,
+        .platformIndicatorMode =
+            getSettings()->mergedPlatformIndicatorMode.getEnum(),
 
         .y = 0,
         .messageIndex = 0,

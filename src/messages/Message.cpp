@@ -40,9 +40,38 @@ QColor defaultPlatformAccent(MessagePlatform platform)
     }
 }
 
-std::shared_ptr<QColor> platformHighlightColor(const Message &message,
-                                               ColorType colorType)
+QColor activityPlatformHighlightColor(const Message &message)
 {
+    const auto accent = defaultPlatformAccent(message.platform);
+    const auto hsv = accent.toHsv();
+    const int hue = hsv.hsvHue() >= 0 ? hsv.hsvHue() : 0;
+    const int saturation =
+        std::clamp(std::max(hsv.hsvSaturation(), 165) + 6, 0, 205);
+    const int value = std::clamp(std::min(232, std::max(hsv.value(), 208)), 0,
+                                 232);
+    constexpr int alpha = 118;
+
+    QColor popped;
+    popped.setHsv(hue, saturation, value, alpha);
+    return popped;
+}
+
+std::shared_ptr<QColor> platformHighlightColor(const Message &message,
+                                               ColorType colorType,
+                                               PlatformIndicatorMode
+                                                   platformIndicatorMode,
+                                               bool useActivityPlatformHighlightColors)
+{
+    if (useActivityPlatformHighlightColors)
+    {
+        if (!mergedPlatformIndicatorShowsLineColor(platformIndicatorMode))
+        {
+            return {};
+        }
+
+        return std::make_shared<QColor>(activityPlatformHighlightColor(message));
+    }
+
     auto base = ColorProvider::instance().color(colorType);
     if (!base || !base->isValid())
     {
@@ -75,8 +104,20 @@ std::shared_ptr<QColor> platformHighlightColor(const Message &message,
     return std::make_shared<QColor>(color);
 }
 
-std::shared_ptr<QColor> platformAlertHighlightColor(const Message &message)
+std::shared_ptr<QColor> platformAlertHighlightColor(
+    const Message &message, PlatformIndicatorMode platformIndicatorMode,
+    bool useActivityPlatformHighlightColors)
 {
+    if (useActivityPlatformHighlightColors)
+    {
+        if (!mergedPlatformIndicatorShowsLineColor(platformIndicatorMode))
+        {
+            return {};
+        }
+
+        return std::make_shared<QColor>(activityPlatformHighlightColor(message));
+    }
+
     const auto style = getSettings()->platformEventHighlightStyle.getEnum();
     if (style == PlatformEventHighlightStyle::None)
     {
@@ -125,7 +166,9 @@ Message::~Message()
     DebugCount::decrease(DebugObject::Message);
 }
 
-ScrollbarHighlight Message::getScrollBarHighlight() const
+ScrollbarHighlight Message::getScrollBarHighlight(
+    PlatformIndicatorMode platformIndicatorMode,
+    bool useActivityPlatformHighlightColors) const
 {
     if (this->flags.has(MessageFlag::Highlighted) ||
         this->flags.has(MessageFlag::HighlightedWhisper))
@@ -138,7 +181,9 @@ ScrollbarHighlight Message::getScrollBarHighlight() const
     if (this->flags.has(MessageFlag::WatchStreak) &&
         getSettings()->enableWatchStreakHighlight)
     {
-        auto color = platformHighlightColor(*this, ColorType::WatchStreak);
+        auto color = platformHighlightColor(
+            *this, ColorType::WatchStreak, platformIndicatorMode,
+            useActivityPlatformHighlightColors);
         if (!color)
         {
             return {};
@@ -151,7 +196,9 @@ ScrollbarHighlight Message::getScrollBarHighlight() const
     if (this->flags.has(MessageFlag::Subscription) &&
         getSettings()->enableSubHighlight)
     {
-        auto color = platformHighlightColor(*this, ColorType::Subscription);
+        auto color = platformHighlightColor(
+            *this, ColorType::Subscription, platformIndicatorMode,
+            useActivityPlatformHighlightColors);
         if (!color)
         {
             return {};
@@ -164,8 +211,9 @@ ScrollbarHighlight Message::getScrollBarHighlight() const
     if (this->flags.has(MessageFlag::RedeemedHighlight) ||
         this->flags.has(MessageFlag::RedeemedChannelPointReward))
     {
-        auto color =
-            platformHighlightColor(*this, ColorType::RedeemedHighlight);
+        auto color = platformHighlightColor(
+            *this, ColorType::RedeemedHighlight, platformIndicatorMode,
+            useActivityPlatformHighlightColors);
         if (!color)
         {
             return {};
@@ -179,8 +227,9 @@ ScrollbarHighlight Message::getScrollBarHighlight() const
 
     if (this->flags.has(MessageFlag::ElevatedMessage))
     {
-        auto color =
-            platformHighlightColor(*this, ColorType::ElevatedMessageHighlight);
+        auto color = platformHighlightColor(
+            *this, ColorType::ElevatedMessageHighlight,
+            platformIndicatorMode, useActivityPlatformHighlightColors);
         if (!color)
         {
             return {};
@@ -196,8 +245,9 @@ ScrollbarHighlight Message::getScrollBarHighlight() const
 
     if (this->flags.has(MessageFlag::FirstMessage))
     {
-        auto color =
-            platformHighlightColor(*this, ColorType::FirstMessageHighlight);
+        auto color = platformHighlightColor(
+            *this, ColorType::FirstMessageHighlight, platformIndicatorMode,
+            useActivityPlatformHighlightColors);
         if (!color)
         {
             return {};
@@ -212,7 +262,8 @@ ScrollbarHighlight Message::getScrollBarHighlight() const
 
     if (isPlatformAlertMessage(*this))
     {
-        auto color = platformAlertHighlightColor(*this);
+        auto color = platformAlertHighlightColor(
+            *this, platformIndicatorMode, useActivityPlatformHighlightColors);
         if (!color)
         {
             return {};

@@ -36,6 +36,8 @@ struct MergedChannelConfig {
     bool tiktokEnabled{false};
     QString tiktokUsername;
 
+    bool operator==(const MergedChannelConfig &) const = default;
+
     QString displayName() const;
     QString effectiveTwitchChannelName() const;
     QString effectiveKickChannelName() const;

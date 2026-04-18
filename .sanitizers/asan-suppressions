@@ -1,2 +1,0 @@
-# Ignore openssl issues
-interceptor_via_lib:libcrypto.so.3

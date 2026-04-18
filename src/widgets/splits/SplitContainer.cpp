@@ -15,6 +15,7 @@
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Fonts.hpp"
+#include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/QMagicEnum.hpp"
@@ -343,6 +344,7 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
     clone->setActivityMessageScale(source->activityMessageScale());
     clone->setCheckSpellingOverride(source->checkSpellingOverride());
     clone->setChannel(source->getIndirectChannel());
+    clone->setPlatformIndicatorMode(source->platformIndicatorMode());
 
     this->insertSplit(clone, {
                                  .relativeSplit = source,
@@ -1136,6 +1138,8 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
         result.inputEnabled_ = currentNode->split_->inputEnabled();
         result.activityMessageScale_ =
             currentNode->split_->activityMessageScale();
+        result.platformIndicatorMode_ =
+            currentNode->split_->platformIndicatorMode();
         return result;
     }
 
@@ -1172,6 +1176,14 @@ void SplitContainer::applyFromDescriptorRecursively(
         split->setCheckSpellingOverride(splitNode.spellCheckOverride);
         split->setInputEnabled(splitNode.inputEnabled_);
         split->setActivityMessageScale(splitNode.activityMessageScale_);
+        if (splitNode.platformIndicatorMode_)
+        {
+            split->setPlatformIndicatorMode(*splitNode.platformIndicatorMode_);
+        }
+        else if (split->isActivityPane())
+        {
+            split->setPlatformIndicatorMode(PlatformIndicatorMode::LineColor);
+        }
 
         this->insertSplit(split);
 
@@ -1210,6 +1222,16 @@ void SplitContainer::applyFromDescriptorRecursively(
                 split->setCheckSpellingOverride(splitNode.spellCheckOverride);
                 split->setInputEnabled(splitNode.inputEnabled_);
                 split->setActivityMessageScale(splitNode.activityMessageScale_);
+                if (splitNode.platformIndicatorMode_)
+                {
+                    split->setPlatformIndicatorMode(
+                        *splitNode.platformIndicatorMode_);
+                }
+                else if (split->isActivityPane())
+                {
+                    split->setPlatformIndicatorMode(
+                        PlatformIndicatorMode::LineColor);
+                }
 
                 auto node = std::make_shared<Node>();
                 node->parent_ = baseNode;

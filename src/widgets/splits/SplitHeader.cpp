@@ -37,14 +37,12 @@
 #include "widgets/TooltipWidget.hpp"
 
 #include <QDrag>
-#include <QActionGroup>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMenu>
 #include <QMimeData>
 #include <QPainter>
 
-#include <array>
 #include <cmath>
 
 namespace {
@@ -502,48 +500,13 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
                     this->split_, [this] {
                         this->split_->showSearch(true);
                     });
-    menu->addAction("Set filters",
-                    h->getDisplaySequence(HotkeyCategory::Split, "pickFilters"),
-                    this->split_, &Split::setFiltersDialog);
     if (this->split_->isActivityPane())
     {
-        struct ActivityScaleOption {
-            const char *label;
-            qreal scale;
-        };
-        constexpr std::array<ActivityScaleOption, 8> scaleOptions{{
-            {"75%", 0.75},
-            {"80%", 0.80},
-            {"85%", 0.85},
-            {"90%", 0.90},
-            {"95%", 0.95},
-            {"100%", 1.00},
-            {"105%", 1.05},
-            {"110%", 1.10},
-        }};
-
-        auto *sizeMenu = new QMenu("Chat line size", this);
-        auto *sizeGroup = new QActionGroup(sizeMenu);
-        sizeGroup->setExclusive(true);
-
-        for (const auto &option : scaleOptions)
-        {
-            auto *action = sizeMenu->addAction(option.label);
-            action->setCheckable(true);
-            action->setActionGroup(sizeGroup);
-            QObject::connect(sizeMenu, &QMenu::aboutToShow, this,
-                             [this, action, scale = option.scale]() {
-                                 action->setChecked(qAbs(
-                                     this->split_->activityMessageScale() -
-                                     scale) < 0.0001);
-                             });
-            QObject::connect(action, &QAction::triggered, this,
-                             [this, scale = option.scale]() {
-                                 this->split_->setActivityMessageScale(scale);
-                             });
-        }
-
-        menu->addMenu(sizeMenu);
+        menu->addAction("Settings", this->split_, &Split::showSettingsDialog);
+    }
+    else
+    {
+        menu->addAction("Settings", this->split_, &Split::changeChannel);
     }
     menu->addSeparator();
 
@@ -1001,7 +964,7 @@ void SplitHeader::scaleChangedEvent(float scale)
 
 void SplitHeader::setAddButtonVisible(bool value)
 {
-    this->addButton_->setVisible(value);
+    this->addButton_->setVisible(value && !this->split_->isActivityPane());
 }
 
 void SplitHeader::updateChannelText()
@@ -1336,7 +1299,15 @@ void SplitHeader::mouseDoubleClickEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton)
     {
-        this->split_->changeChannel();
+        this->dragging_ = false;
+        if (this->split_->isActivityPane())
+        {
+            this->split_->showSettingsDialog();
+        }
+        else
+        {
+            this->split_->changeChannel();
+        }
     }
     this->doubleClicked_ = true;
 }

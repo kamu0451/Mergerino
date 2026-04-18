@@ -236,13 +236,11 @@ std::vector<DictionaryInfo> SpellChecker::getAvailableDictionaries() const
                 // - en_GB-large.aff
                 continue;
             }
-            auto name = [&] -> QString {
-                if (dict.isSystem)
-                {
-                    return dict.name % " (System)";
-                }
-                return dict.name;
-            }();
+            QString name = dict.name;
+            if (dict.isSystem)
+            {
+                name += " (System)";
+            }
 
             dictionaries.push_back(DictionaryInfo{
                 .name = name,

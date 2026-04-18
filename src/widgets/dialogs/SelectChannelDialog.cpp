@@ -13,7 +13,6 @@
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Theme.hpp"
-#include "util/QMagicEnum.hpp"
 #include "widgets/helper/MicroNotebook.hpp"
 
 #include <QCheckBox>
@@ -470,6 +469,14 @@ void SelectChannelDialog::setActivityPaneEnabled(bool enabled)
     }
 }
 
+void SelectChannelDialog::setPlatformIndicatorMode(PlatformIndicatorMode mode)
+{
+    if (this->ui_.indicatorMode)
+    {
+        this->ui_.indicatorMode->setCurrentIndex(indicatorModeIndex(mode));
+    }
+}
+
 IndirectChannel SelectChannelDialog::getSelectedChannel() const
 {
     return this->selectedChannel_;
@@ -479,6 +486,16 @@ bool SelectChannelDialog::activityPaneEnabled() const
 {
     return this->ui_.enableActivity != nullptr &&
            this->ui_.enableActivity->isChecked();
+}
+
+PlatformIndicatorMode SelectChannelDialog::platformIndicatorMode() const
+{
+    if (this->ui_.indicatorMode == nullptr)
+    {
+        return PlatformIndicatorMode::LineColor;
+    }
+
+    return indicatorModeFromIndex(this->ui_.indicatorMode->currentIndex());
 }
 
 bool SelectChannelDialog::hasSeletedChannel() const

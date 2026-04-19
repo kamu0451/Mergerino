@@ -1,5 +1,11 @@
 Patch Notes
 
+19/04/2026
+- Added activity filter setting
+- Cleaned up UI
+- YouTube membership gifts now collapse to 1 message in activity tab
+- Reduced brightness of highlights in activity tab
+
 18/04/2026
 - Cleaned up activity tab to reduce noise
 - Alerts with a message attached now display first

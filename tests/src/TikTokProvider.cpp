@@ -143,6 +143,51 @@ TEST(TikTokLiveChat, normalizeSourceReturnsEmptyOnBlankInput)
     EXPECT_TRUE(TikTokLiveChat::normalizeSource("   ").isEmpty());
 }
 
+TEST(TikTokLiveChat, normalizeSourceAcceptsUppercaseHostAndScheme)
+{
+    EXPECT_EQ(TikTokLiveChat::normalizeSource(
+                  "HTTPS://WWW.TIKTOK.COM/@gevad1ch/live"),
+              "gevad1ch");
+}
+
+TEST(TikTokLiveChat, normalizeSourcePreservesUsernameCase)
+{
+    // TikTok usernames are case-preserving in our normalization - the regex
+    // captures the literal segment. Downstream code that lowercases for
+    // display should do so explicitly.
+    EXPECT_EQ(TikTokLiveChat::normalizeSource(
+                  "https://www.tiktok.com/@GevadiCh/live"),
+              "GevadiCh");
+}
+
+TEST(TikTokLiveChat, normalizeSourceStripsLiveSuffixFromBareName)
+{
+    EXPECT_EQ(TikTokLiveChat::normalizeSource("gevad1ch/live"), "gevad1ch");
+    EXPECT_EQ(TikTokLiveChat::normalizeSource("@gevad1ch/live"), "gevad1ch");
+}
+
+TEST(TikTokLiveChat, normalizeSourceStripsTrailingSlashAfterName)
+{
+    EXPECT_EQ(TikTokLiveChat::normalizeSource(
+                  "https://www.tiktok.com/@gevad1ch/"),
+              "gevad1ch");
+}
+
+TEST(TikTokLiveChat, normalizeSourceAcceptsUsernameWithDotsAndUnderscores)
+{
+    EXPECT_EQ(TikTokLiveChat::normalizeSource("@foo.bar_123"), "foo.bar_123");
+}
+
+TEST(TikTokLiveChat, normalizeSourceStripsBareNameQueryParams)
+{
+    EXPECT_EQ(TikTokLiveChat::normalizeSource("gevad1ch?x=1"), "gevad1ch");
+}
+
+TEST(TikTokLiveChat, normalizeSourceReturnsEmptyForBareAtSymbol)
+{
+    EXPECT_TRUE(TikTokLiveChat::normalizeSource("@").isEmpty());
+}
+
 TEST(TikTokFrameDecoder, decodesChatMessage)
 {
     const auto userBytes =

@@ -69,6 +69,21 @@ constexpr qreal ALERTS_SECONDARY_RATIO = 0.3;
 constexpr qreal MIN_ACTIVITY_MESSAGE_SCALE = 0.75;
 constexpr qreal MAX_ACTIVITY_MESSAGE_SCALE = 1.1;
 
+bool isTwitchSpecialChannelType(Channel::Type type)
+{
+    switch (type)
+    {
+        case Channel::Type::TwitchWhispers:
+        case Channel::Type::TwitchWatching:
+        case Channel::Type::TwitchMentions:
+        case Channel::Type::TwitchLive:
+        case Channel::Type::TwitchAutomod:
+            return true;
+        default:
+            return false;
+    }
+}
+
 PlatformIndicatorMode defaultPlatformIndicatorMode(bool isActivityPane)
 {
     return isActivityPane ? PlatformIndicatorMode::LineColor
@@ -400,6 +415,7 @@ void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
 
     if (!enabled)
     {
+        ownerSplit->setFilterActivity(false);
         if (activitySplit)
         {
             container->deleteSplit(activitySplit);
@@ -414,11 +430,13 @@ void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
             activitySplit->platformIndicatorMode();
         const auto activityMessageScale = activitySplit->activityMessageScale();
 
+        activitySplit->setFilterActivity(false);
         activitySplit->setChannel(ownerSplit->getIndirectChannel());
         activitySplit->setFilters(ownerSplit->getFilters());
         activitySplit->setInputEnabled(false);
         activitySplit->setActivityMessageScale(activityMessageScale);
         activitySplit->setPlatformIndicatorMode(activityPlatformIndicatorMode);
+        ownerSplit->setFilterActivity(true);
         refreshActivityIcons(container);
         return;
     }
@@ -1114,6 +1132,16 @@ bool Split::hasLinkedActivityPane()
     return findLinkedActivityPane(this) != nullptr;
 }
 
+bool Split::filterActivity() const
+{
+    return this->filterActivity_;
+}
+
+bool Split::filterActivityExplicit() const
+{
+    return this->filterActivityExplicit_;
+}
+
 QString Split::activityPaneTitle() const
 {
     if (auto *merged = dynamic_cast<MergedChannel *>(this->getChannel().get()))
@@ -1235,6 +1263,25 @@ void Split::setPlatformIndicatorMode(PlatformIndicatorMode value)
 
     this->platformIndicatorMode_ = value;
     this->view_->refreshPlatformIndicatorMode();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setFilterActivity(bool value, bool explicitPreference)
+{
+    const bool valueChanged = this->filterActivity_ != value;
+    const bool explicitChanged =
+        this->filterActivityExplicit_ != explicitPreference;
+    if (!valueChanged && !explicitChanged)
+    {
+        return;
+    }
+
+    this->filterActivity_ = value;
+    this->filterActivityExplicit_ = explicitPreference;
+    if (valueChanged)
+    {
+        this->view_->refreshMessages();
+    }
     getApp()->getWindows()->queueSave();
 }
 
@@ -1528,8 +1575,13 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
         this->isActivityPane() ? findActivityOwnerSplit(this) : this;
     QPointer<Split> linkedActivityPane =
         activityOwnerSplit ? findLinkedActivityPane(activityOwnerSplit) : nullptr;
+    const bool showSpecialPage =
+        empty ||
+        (activityOwnerSplit &&
+         isTwitchSpecialChannelType(
+             activityOwnerSplit->getIndirectChannel().getType()));
 
-    auto *dialog = new SelectChannelDialog(this);
+    auto *dialog = new SelectChannelDialog(showSpecialPage, this);
     if (!empty)
     {
         dialog->setSelectedChannel(activityOwnerSplit
@@ -1541,6 +1593,9 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
         dialog->setSelectedChannel({});
     }
     dialog->setActivityPaneEnabled(linkedActivityPane != nullptr);
+    dialog->setFilterActivity(activityOwnerSplit
+                                  ? activityOwnerSplit->filterActivity()
+                                  : this->filterActivity());
     dialog->setPlatformIndicatorMode(activityOwnerSplit
                                          ? activityOwnerSplit
                                                ->platformIndicatorMode()
@@ -1565,6 +1620,8 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
             }
             activityOwnerSplit->setPlatformIndicatorMode(
                 dialog->platformIndicatorMode());
+            activityOwnerSplit->setFilterActivity(dialog->filterActivity(),
+                                                  true);
         }
 
         callback(acceptedChanges);
@@ -1593,6 +1650,7 @@ void Split::showSettingsDialog()
 
     auto *dialog = new SplitSettingsDialog(this->isActivityPane(), this);
     dialog->setPlatformIndicatorMode(this->platformIndicatorMode());
+    dialog->setFilterActivity(this->filterActivity());
     dialog->setActivityMessageScale(this->activityMessageScale());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(this->isActivityPane() ? this->activityPaneTitle()
@@ -1606,6 +1664,10 @@ void Split::showSettingsDialog()
             if (this->isActivityPane())
             {
                 this->setActivityMessageScale(dialog->activityMessageScale());
+            }
+            else
+            {
+                this->setFilterActivity(dialog->filterActivity(), true);
             }
         }
     });
@@ -1718,13 +1780,20 @@ void Split::addSibling()
 
 void Split::deleteFromContainer()
 {
+    if (this->isActivityPane())
+    {
+        if (auto *ownerSplit = findActivityOwnerSplit(this))
+        {
+            ownerSplit->setFilterActivity(false);
+        }
+    }
     this->actionRequested.invoke(Action::Delete);
 }
 
 void Split::changeChannel()
 {
     this->showChangeChannelPopup(
-        "Change channel", false, [this](bool didSelectChannel) {
+        "Tab settings", false, [this](bool didSelectChannel) {
             if (!didSelectChannel)
             {
                 return;
@@ -1749,6 +1818,10 @@ void Split::openAlertsPane()
 
     if (this->isActivityPane())
     {
+        if (auto *ownerSplit = findActivityOwnerSplit(this))
+        {
+            ownerSplit->setFilterActivity(false);
+        }
         container->deleteSplit(this);
         for (auto *split : container->getSplits())
         {
@@ -1781,6 +1854,7 @@ void Split::openAlertsPane()
         if (splitMatchesChannelAndFilters(split, channelSignature, filterIds) &&
             split->isActivityPane())
         {
+            this->setFilterActivity(false);
             container->deleteSplit(split);
             for (auto *other : container->getSplits())
             {
@@ -1799,7 +1873,9 @@ void Split::openAlertsPane()
     }
 
     alertsSplit->setInputEnabled(false);
+    alertsSplit->setFilterActivity(false);
     alertsSplit->setPlatformIndicatorMode(defaultPlatformIndicatorMode(true));
+    this->setFilterActivity(true);
     container->setSelected(alertsSplit);
     alertsSplit->setFocus(Qt::OtherFocusReason);
     for (auto *split : container->getSplits())
@@ -1831,6 +1907,8 @@ void Split::popup()
     split->setModerationMode(this->getModerationMode());
     split->setFilters(this->getFilters());
     split->setInputEnabled(this->inputEnabled());
+    split->setFilterActivity(this->filterActivity(),
+                             this->filterActivityExplicit());
     split->setActivityMessageScale(this->activityMessageScale());
     split->setPlatformIndicatorMode(this->platformIndicatorMode());
 

@@ -10,6 +10,7 @@
 #include "singletons/Fonts.hpp"
 #include "singletons/Theme.hpp"
 
+#include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -100,6 +101,16 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane, QWidget *parent)
         "logo badges, or both.");
     appearanceLayout->addRow("Platform style", this->ui_.indicatorMode);
 
+    if (!this->isActivityPane_)
+    {
+        this->ui_.filterActivity = new QCheckBox("Filter activity");
+        this->ui_.filterActivity->setToolTip(
+            "Hide sub, hype chat, and cheer activity from this main chat. "
+            "When a linked Activity tab is enabled, this starts turned on by "
+            "default.");
+        appearanceLayout->addRow(this->ui_.filterActivity);
+    }
+
     if (this->isActivityPane_)
     {
         this->ui_.activityScale = new QComboBox();
@@ -147,6 +158,19 @@ PlatformIndicatorMode SplitSettingsDialog::platformIndicatorMode() const
     }
 
     return indicatorModeFromIndex(this->ui_.indicatorMode->currentIndex());
+}
+
+void SplitSettingsDialog::setFilterActivity(bool enabled)
+{
+    if (this->ui_.filterActivity)
+    {
+        this->ui_.filterActivity->setChecked(enabled);
+    }
+}
+
+bool SplitSettingsDialog::filterActivity() const
+{
+    return this->ui_.filterActivity && this->ui_.filterActivity->isChecked();
 }
 
 void SplitSettingsDialog::setActivityMessageScale(qreal scale)
@@ -203,6 +227,10 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     if (this->ui_.indicatorMode)
     {
         this->ui_.indicatorMode->setFont(uiFont);
+    }
+    if (this->ui_.filterActivity)
+    {
+        this->ui_.filterActivity->setFont(uiFont);
     }
     if (this->ui_.activityScale)
     {

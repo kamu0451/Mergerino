@@ -722,6 +722,9 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
             obj.insert("type", "split");
             obj.insert("moderationMode", node->getSplit()->getModerationMode());
             obj.insert("inputEnabled", node->getSplit()->inputEnabled());
+            obj.insert("filterActivity", node->getSplit()->filterActivity());
+            obj.insert("filterActivityExplicit",
+                       node->getSplit()->filterActivityExplicit());
             obj.insert("activityMessageScale",
                        node->getSplit()->activityMessageScale());
             obj.insert("platformIndicatorMode",

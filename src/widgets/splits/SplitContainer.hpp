@@ -248,6 +248,7 @@ private:
     NodeDescriptor buildDescriptorRecursively(const Node *currentNode) const;
     void applyFromDescriptorRecursively(const NodeDescriptor &rootNode,
                                         Node *baseNode);
+    void normalizeRestoredActivityFiltering();
 
     void layout();
     void selectSplitRecursive(Node *node, SplitDirection direction);
@@ -275,6 +276,7 @@ private:
 
     NotebookTab *tab_;
     std::vector<Split *> splits_;
+    std::vector<Split *> splitsNeedingActivityFilterNormalization_;
 
     std::unordered_map<Split *, pajlada::Signals::SignalHolder>
         connectionsPerSplit_;

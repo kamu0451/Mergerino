@@ -205,7 +205,7 @@ QString normalizeYouTubeSource(QString value)
 
 }  // namespace
 
-SelectChannelDialog::SelectChannelDialog(QWidget *parent)
+SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     : BaseWindow(
           {
               BaseWindow::Flags::EnableCustomFrame,
@@ -221,6 +221,7 @@ SelectChannelDialog::SelectChannelDialog(QWidget *parent)
     auto &ui = this->ui_;
     auto *rootLayout = new QVBoxLayout(this->getLayoutContainer());
     rootLayout->setContentsMargins({});
+    rootLayout->setSpacing(6);
 
     ui.notebook = new MicroNotebook(this->getLayoutContainer());
     rootLayout->addWidget(ui.notebook, 1);
@@ -236,7 +237,7 @@ SelectChannelDialog::SelectChannelDialog(QWidget *parent)
     intro->setWordWrap(true);
     mergedLayout->addWidget(intro);
 
-    auto *baseGroup = new QGroupBox("Tab");
+    auto *baseGroup = new QGroupBox;
     auto *baseLayout = new QFormLayout(baseGroup);
     ui.tabName = new QLineEdit();
     ui.tabName->setPlaceholderText("Streamer / tab name");
@@ -285,9 +286,14 @@ SelectChannelDialog::SelectChannelDialog(QWidget *parent)
         "Open the linked activity tab for this merged tab and keep it in "
         "sync with this channel.");
     platformLayout->addRow(ui.enableActivity);
+    ui.filterActivity = new QCheckBox("Filter activity");
+    ui.filterActivity->setToolTip(
+        "Hide sub, hype chat, and cheer activity from the main chat. "
+        "When the linked Activity tab is enabled, this starts turned on by "
+        "default.");
+    platformLayout->addRow(ui.filterActivity);
 
     mergedLayout->addWidget(platformGroup);
-    mergedLayout->addStretch(1);
 
     QObject::connect(ui.enableTwitch, &QCheckBox::toggled, this,
                      [this](bool) { this->syncMergedFieldState(); });
@@ -297,35 +303,49 @@ SelectChannelDialog::SelectChannelDialog(QWidget *parent)
                      [this](bool) { this->syncMergedFieldState(); });
     QObject::connect(ui.enableTikTok, &QCheckBox::toggled, this,
                      [this](bool) { this->syncMergedFieldState(); });
+    QObject::connect(ui.enableActivity, &QCheckBox::toggled, this,
+                     [this](bool enabled) {
+                         if (enabled && this->ui_.filterActivity != nullptr &&
+                             !this->ui_.filterActivity->isChecked())
+                         {
+                             this->ui_.filterActivity->setChecked(true);
+                         }
+                     });
 
     ui.notebook->addPage(ui.mergedPage, "Merged");
 
-    ui.specialPage = new QWidget;
-    auto *specialLayout = new QVBoxLayout(ui.specialPage);
-    auto *specialIntro = new QLabel(
-        "Use this page for Twitch-wide utility channels that are not tied to a "
-        "specific streamer tab.");
-    specialIntro->setWordWrap(true);
-    specialLayout->addWidget(specialIntro);
+    if (showSpecialPage)
+    {
+        ui.specialPage = new QWidget;
+        auto *specialLayout = new QVBoxLayout(ui.specialPage);
+        auto *specialIntro = new QLabel(
+            "Use this page for Twitch-wide utility channels that are not tied "
+            "to a specific streamer tab.");
+        specialIntro->setWordWrap(true);
+        specialLayout->addWidget(specialIntro);
 
-    ui.whispers = new detail::AutoCheckedRadioButton("Whispers");
-    ui.mentions = new detail::AutoCheckedRadioButton("Mentions");
-    ui.watching = new detail::AutoCheckedRadioButton("Watching");
-    ui.live = new detail::AutoCheckedRadioButton("Live");
-    ui.automod = new detail::AutoCheckedRadioButton("AutoMod");
+        ui.whispers = new detail::AutoCheckedRadioButton("Whispers");
+        ui.mentions = new detail::AutoCheckedRadioButton("Mentions");
+        ui.watching = new detail::AutoCheckedRadioButton("Watching");
+        ui.live = new detail::AutoCheckedRadioButton("Live");
+        ui.automod = new detail::AutoCheckedRadioButton("AutoMod");
 
-    specialLayout->addWidget(ui.whispers);
-    specialLayout->addWidget(ui.mentions);
-    specialLayout->addWidget(ui.watching);
-    specialLayout->addWidget(ui.live);
-    specialLayout->addWidget(ui.automod);
-    specialLayout->addStretch(1);
+        specialLayout->addWidget(ui.whispers);
+        specialLayout->addWidget(ui.mentions);
+        specialLayout->addWidget(ui.watching);
+        specialLayout->addWidget(ui.live);
+        specialLayout->addWidget(ui.automod);
 
-    ui.notebook->addPage(ui.specialPage, "Twitch Special");
+        ui.notebook->addPage(ui.specialPage, "Twitch Special");
+    }
+    else
+    {
+        ui.notebook->setShowHeader(false);
+    }
 
     auto *buttonBox =
         new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    buttonBox->setContentsMargins({10, 10, 10, 10});
+    buttonBox->setContentsMargins({10, 4, 10, 10});
     rootLayout->addWidget(buttonBox);
 
     QObject::connect(buttonBox, &QDialogButtonBox::accepted, this, [this] {
@@ -360,6 +380,7 @@ void SelectChannelDialog::setMergedDefaults()
     this->ui_.notebook->select(this->ui_.mergedPage);
     this->ui_.tabName->clear();
     this->ui_.enableActivity->setChecked(false);
+    this->ui_.filterActivity->setChecked(false);
     this->ui_.enableTwitch->setChecked(true);
     this->ui_.twitchName->clear();
     this->ui_.enableKick->setChecked(true);
@@ -436,22 +457,47 @@ void SelectChannelDialog::setSelectedChannel(
     switch (indirectChannel.getType())
     {
         case Channel::Type::TwitchWhispers:
+            if (this->ui_.specialPage == nullptr)
+            {
+                this->setMergedDefaults();
+                break;
+            }
             this->ui_.notebook->select(this->ui_.specialPage);
             this->ui_.whispers->setChecked(true);
             break;
         case Channel::Type::TwitchMentions:
+            if (this->ui_.specialPage == nullptr)
+            {
+                this->setMergedDefaults();
+                break;
+            }
             this->ui_.notebook->select(this->ui_.specialPage);
             this->ui_.mentions->setChecked(true);
             break;
         case Channel::Type::TwitchWatching:
+            if (this->ui_.specialPage == nullptr)
+            {
+                this->setMergedDefaults();
+                break;
+            }
             this->ui_.notebook->select(this->ui_.specialPage);
             this->ui_.watching->setChecked(true);
             break;
         case Channel::Type::TwitchLive:
+            if (this->ui_.specialPage == nullptr)
+            {
+                this->setMergedDefaults();
+                break;
+            }
             this->ui_.notebook->select(this->ui_.specialPage);
             this->ui_.live->setChecked(true);
             break;
         case Channel::Type::TwitchAutomod:
+            if (this->ui_.specialPage == nullptr)
+            {
+                this->setMergedDefaults();
+                break;
+            }
             this->ui_.notebook->select(this->ui_.specialPage);
             this->ui_.automod->setChecked(true);
             break;
@@ -477,6 +523,14 @@ void SelectChannelDialog::setPlatformIndicatorMode(PlatformIndicatorMode mode)
     }
 }
 
+void SelectChannelDialog::setFilterActivity(bool enabled)
+{
+    if (this->ui_.filterActivity)
+    {
+        this->ui_.filterActivity->setChecked(enabled);
+    }
+}
+
 IndirectChannel SelectChannelDialog::getSelectedChannel() const
 {
     return this->selectedChannel_;
@@ -486,6 +540,12 @@ bool SelectChannelDialog::activityPaneEnabled() const
 {
     return this->ui_.enableActivity != nullptr &&
            this->ui_.enableActivity->isChecked();
+}
+
+bool SelectChannelDialog::filterActivity() const
+{
+    return this->ui_.filterActivity != nullptr &&
+           this->ui_.filterActivity->isChecked();
 }
 
 PlatformIndicatorMode SelectChannelDialog::platformIndicatorMode() const

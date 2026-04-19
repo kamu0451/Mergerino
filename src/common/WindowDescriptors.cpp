@@ -109,6 +109,15 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
     descriptor.server_ = data.value("server").toInt(-1);
     descriptor.moderationMode_ = root.value("moderationMode").toBool();
     descriptor.inputEnabled_ = root.value("inputEnabled").toBool(true);
+    if (root["filterActivity"].isBool())
+    {
+        descriptor.filterActivity_ = root.value("filterActivity").toBool();
+    }
+    if (root["filterActivityExplicit"].isBool())
+    {
+        descriptor.filterActivityExplicit_ =
+            root.value("filterActivityExplicit").toBool();
+    }
     descriptor.activityMessageScale_ =
         root.value("activityMessageScale").toDouble(0.9);
     if (auto platformIndicatorMode = root["platformIndicatorMode"];

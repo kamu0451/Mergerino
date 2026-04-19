@@ -341,6 +341,8 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
     clone->setFilters(filters);
     clone->setModerationMode(source->getModerationMode());
     clone->setInputEnabled(source->inputEnabled());
+    clone->setFilterActivity(source->filterActivity(),
+                             source->filterActivityExplicit());
     clone->setActivityMessageScale(source->activityMessageScale());
     clone->setCheckSpellingOverride(source->checkSpellingOverride());
     clone->setChannel(source->getIndirectChannel());
@@ -1061,9 +1063,11 @@ void SplitContainer::applyFromDescriptor(const NodeDescriptor &rootNode)
 {
     assert(this->baseNode_->type_ == Node::Type::EmptyRoot);
 
+    this->splitsNeedingActivityFilterNormalization_.clear();
     this->disableLayouting_ = true;
     this->applyFromDescriptorRecursively(rootNode, this->baseNode_.get());
     this->disableLayouting_ = false;
+    this->normalizeRestoredActivityFiltering();
     this->layout();
 }
 
@@ -1136,6 +1140,9 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
         result.spellCheckOverride =
             currentNode->split_->checkSpellingOverride();
         result.inputEnabled_ = currentNode->split_->inputEnabled();
+        result.filterActivity_ = currentNode->split_->filterActivity();
+        result.filterActivityExplicit_ =
+            currentNode->split_->filterActivityExplicit();
         result.activityMessageScale_ =
             currentNode->split_->activityMessageScale();
         result.platformIndicatorMode_ =
@@ -1175,6 +1182,18 @@ void SplitContainer::applyFromDescriptorRecursively(
         split->setFilters(splitNode.filters_);
         split->setCheckSpellingOverride(splitNode.spellCheckOverride);
         split->setInputEnabled(splitNode.inputEnabled_);
+        const bool hasExplicitFilterActivity =
+            splitNode.filterActivityExplicit_.has_value();
+        if (splitNode.filterActivity_)
+        {
+            split->setFilterActivity(*splitNode.filterActivity_,
+                                     splitNode.filterActivityExplicit_.value_or(
+                                         false));
+        }
+        if (!splitNode.filterActivity_ || !hasExplicitFilterActivity)
+        {
+            this->splitsNeedingActivityFilterNormalization_.push_back(split);
+        }
         split->setActivityMessageScale(splitNode.activityMessageScale_);
         if (splitNode.platformIndicatorMode_)
         {
@@ -1221,6 +1240,19 @@ void SplitContainer::applyFromDescriptorRecursively(
                 split->setModerationMode(splitNode.moderationMode_);
                 split->setCheckSpellingOverride(splitNode.spellCheckOverride);
                 split->setInputEnabled(splitNode.inputEnabled_);
+                const bool hasExplicitFilterActivity =
+                    splitNode.filterActivityExplicit_.has_value();
+                if (splitNode.filterActivity_)
+                {
+                    split->setFilterActivity(
+                        *splitNode.filterActivity_,
+                        splitNode.filterActivityExplicit_.value_or(false));
+                }
+                if (!splitNode.filterActivity_ || !hasExplicitFilterActivity)
+                {
+                    this->splitsNeedingActivityFilterNormalization_.push_back(
+                        split);
+                }
                 split->setActivityMessageScale(splitNode.activityMessageScale_);
                 if (splitNode.platformIndicatorMode_)
                 {
@@ -1261,6 +1293,24 @@ void SplitContainer::applyFromDescriptorRecursively(
             }
         }
     }
+}
+
+void SplitContainer::normalizeRestoredActivityFiltering()
+{
+    for (auto *split : this->splitsNeedingActivityFilterNormalization_)
+    {
+        if (!split || split->isActivityPane())
+        {
+            continue;
+        }
+
+        if (split->hasLinkedActivityPane())
+        {
+            split->setFilterActivity(true);
+        }
+    }
+
+    this->splitsNeedingActivityFilterNormalization_.clear();
 }
 
 void SplitContainer::refreshTabTitle()

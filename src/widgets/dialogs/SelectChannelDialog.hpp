@@ -41,13 +41,15 @@ protected:
 class SelectChannelDialog final : public BaseWindow
 {
 public:
-    SelectChannelDialog(QWidget *parent = nullptr);
+    SelectChannelDialog(bool showSpecialPage, QWidget *parent = nullptr);
 
     void setSelectedChannel(std::optional<IndirectChannel> channel_);
     void setActivityPaneEnabled(bool enabled);
+    void setFilterActivity(bool enabled);
     void setPlatformIndicatorMode(PlatformIndicatorMode mode);
     IndirectChannel getSelectedChannel() const;
     bool activityPaneEnabled() const;
+    bool filterActivity() const;
     PlatformIndicatorMode platformIndicatorMode() const;
     bool hasSeletedChannel() const;
 
@@ -74,6 +76,7 @@ private:
         QCheckBox *enableTikTok{};
         QLineEdit *tiktokInput{};
         QComboBox *indicatorMode{};
+        QCheckBox *filterActivity{};
 
         QWidget *specialPage{};
         detail::AutoCheckedRadioButton *whispers{};

@@ -1347,6 +1347,16 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
     }
 }
 
+void ChannelView::refreshMessages()
+{
+    if (!this->underlyingChannel_)
+    {
+        return;
+    }
+
+    this->setChannel(this->underlyingChannel_);
+}
+
 void ChannelView::setFilters(const QList<QUuid> &ids)
 {
     this->channelFilters_ = std::make_shared<FilterSet>(ids);
@@ -1371,6 +1381,12 @@ FilterSetPtr ChannelView::getFilterSet() const
 
 bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
 {
+    if (this->split_ && this->split_->filterActivity() &&
+        !this->split_->isActivityPane() && isActivityAlertMessage(*m))
+    {
+        return false;
+    }
+
     if (this->channelFilters_)
     {
         if (getSettings()->excludeUserMessagesFromFilter &&
@@ -3796,6 +3812,9 @@ void ChannelView::updateID()
     boost::hash_combine(seed, first);
     boost::hash_combine(seed, second);
     boost::hash_combine(seed, this->underlyingChannel_->getType());
+    boost::hash_combine(seed, this->split_ != nullptr &&
+                                  this->split_->filterActivity() &&
+                                  !this->split_->isActivityPane());
 
     this->id_ = seed;
 }

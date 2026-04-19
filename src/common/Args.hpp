@@ -66,6 +66,7 @@ public:
     std::optional<Channel> activateChannel;
     std::optional<QString> initialLogin;
     bool verbose{};
+    std::optional<QString> logFile;
     bool safeMode{};
 
     bool useOldScaling = false;

@@ -117,6 +117,11 @@ Args::Args(const QApplication &app, const Paths &paths)
     auto verboseOption = QCommandLineOption(
         QStringList{"v", "verbose"}, "Attaches to the Console on windows, "
                                      "allowing you to see debug output.");
+    QCommandLineOption logFileOption(
+        "log-file",
+        "Append all qCDebug/qCInfo/qCWarning output to this file with "
+        "timestamps. Intended for dev iteration.",
+        "path");
     // Safe mode
     QCommandLineOption safeModeOption(
         "safe-mode", "Starts Mergerino without loading Plugins and always "
@@ -166,6 +171,7 @@ Args::Args(const QApplication &app, const Paths &paths)
         parentWindowOption,
         parentWindowIdOption,
         verboseOption,
+        logFileOption,
         safeModeOption,
         loginOption,
         channelLayout,
@@ -200,6 +206,11 @@ Args::Args(const QApplication &app, const Paths &paths)
     }
 
     this->verbose = parser.isSet(verboseOption);
+
+    if (parser.isSet(logFileOption))
+    {
+        this->logFile = parser.value(logFileOption);
+    }
 
     this->printVersion = parser.isSet("V");
 

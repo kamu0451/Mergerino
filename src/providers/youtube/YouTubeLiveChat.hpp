@@ -50,6 +50,18 @@ public:
     static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
     static int computeBackoffDelay(int failureStreak);
 
+    /// Clamps the server-provided timeoutMs to a [1s, 30s] range, treating
+    /// non-positive inputs as "use the minimum". Exposed for testing.
+    static int cappedPollDelay(int timeoutMs);
+
+    /// Biases the next-poll delay earlier when the previous poll delivered
+    /// messages (the stream is active) and compensates for the elapsed
+    /// request time so the effective cadence matches TikTok timeoutMs.
+    /// Exposed for testing.
+    static int adjustedPollDelay(int timeoutMs, qint64 requestElapsedMs,
+                                 int deliveredMessageCount,
+                                 int activePollStreak);
+
 private:
     void resolveVideoId();
     void resolveChannelIdFromVideoId(const QString &videoId,

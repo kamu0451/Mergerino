@@ -280,3 +280,60 @@ TEST(YouTubeLiveChat, computeBackoffDelayCapsAt60Seconds)
     EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(10), 60000);
     EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(100), 60000);
 }
+
+TEST(YouTubeLiveChat, cappedPollDelayClampsToOneSecondFloor)
+{
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(0), 1000);
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(-500), 1000);
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(500), 1000);
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(999), 1000);
+}
+
+TEST(YouTubeLiveChat, cappedPollDelayClampsToThirtySecondCeiling)
+{
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(30000), 30000);
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(60000), 30000);
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(999999), 30000);
+}
+
+TEST(YouTubeLiveChat, cappedPollDelayPassesThroughInsideRange)
+{
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(1500), 1500);
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(5000), 5000);
+    EXPECT_EQ(YouTubeLiveChat::cappedPollDelay(20000), 20000);
+}
+
+TEST(YouTubeLiveChat, adjustedPollDelayNeverReturnsBelowMinimumWait)
+{
+    // Very small effective delay (request took ≈ full timeout) must still
+    // leave at least 250ms so we don't spin on poll errors.
+    EXPECT_GE(YouTubeLiveChat::adjustedPollDelay(1000, 950, 0, 0), 250);
+    EXPECT_GE(YouTubeLiveChat::adjustedPollDelay(1000, 10'000, 0, 0), 250);
+}
+
+TEST(YouTubeLiveChat, adjustedPollDelayAppliesEarlyBiasOnQuietStream)
+{
+    // 5000ms timeout, 100ms request, no messages: early bias is
+    // clamp(5000/10, 75, 150) = 150, so next delay ≈ 5000 - 100 - 150 = 4750.
+    EXPECT_EQ(YouTubeLiveChat::adjustedPollDelay(5000, 100, 0, 0), 4750);
+}
+
+TEST(YouTubeLiveChat, adjustedPollDelayPullsEarlierOnActiveStreak)
+{
+    // Same timeout as above but with delivered messages should return a
+    // smaller delay (earlier next poll).
+    const int quietDelay =
+        YouTubeLiveChat::adjustedPollDelay(5000, 100, 0, 0);
+    const int activeDelay =
+        YouTubeLiveChat::adjustedPollDelay(5000, 100, 3, 3);
+    EXPECT_LT(activeDelay, quietDelay);
+}
+
+TEST(YouTubeLiveChat, adjustedPollDelayRespectsClampedUpperBoundOnLargeTimeout)
+{
+    // Any timeout ≥ 30s collapses to a 30s capped base.
+    const int delay =
+        YouTubeLiveChat::adjustedPollDelay(60'000, 0, 0, 0);
+    EXPECT_LE(delay, 30'000);
+    EXPECT_GE(delay, 250);
+}

@@ -112,43 +112,6 @@ QDateTime parseTimestampUsec(const QString &timestampUsec)
         .toLocalTime();
 }
 
-int cappedYouTubePollDelay(int timeoutMs)
-{
-    constexpr int minimumDelayMs = 1000;
-    constexpr int maximumDelayMs = 30000;
-
-    if (timeoutMs <= 0)
-    {
-        return minimumDelayMs;
-    }
-
-    return std::clamp(timeoutMs, minimumDelayMs, maximumDelayMs);
-}
-
-int adjustedYouTubePollDelay(int timeoutMs, qint64 requestElapsedMs,
-                             int deliveredMessageCount, int activePollStreak)
-{
-    const auto cappedDelay = cappedYouTubePollDelay(timeoutMs);
-    constexpr int minimumWaitMs = 250;
-    const auto baseEarlyBiasMs = std::clamp(cappedDelay / 10, 75, 150);
-
-    int activityBiasMs = 0;
-    if (deliveredMessageCount > 0)
-    {
-        const auto cappedStreak = std::clamp(activePollStreak, 1, 3);
-        activityBiasMs = deliveredMessageCount >= 3 ? 35 : 20;
-        activityBiasMs += (cappedStreak - 1) * 10;
-    }
-
-    const auto maxEarlyBiasMs =
-        std::min(200, std::max(baseEarlyBiasMs, cappedDelay / 5));
-    const auto earlyBiasMs =
-        std::min(baseEarlyBiasMs + activityBiasMs, maxEarlyBiasMs);
-    return std::max(minimumWaitMs,
-                    cappedDelay - static_cast<int>(requestElapsedMs) -
-                        earlyBiasMs);
-}
-
 }  // namespace
 
 namespace chatterino {
@@ -810,7 +773,7 @@ void YouTubeLiveChat::poll()
                 if (!timed.isEmpty())
                 {
                     this->continuation_ = timed["continuation"].toString();
-                    nextDelay = adjustedYouTubePollDelay(
+                    nextDelay = YouTubeLiveChat::adjustedPollDelay(
                         timed["timeoutMs"].toInt(nextDelay),
                         requestTimer->elapsed(), deliveredMessageCount,
                         this->activePollStreak_);
@@ -825,7 +788,7 @@ void YouTubeLiveChat::poll()
                 {
                     this->continuation_ =
                         invalidation["continuation"].toString();
-                    nextDelay = adjustedYouTubePollDelay(
+                    nextDelay = YouTubeLiveChat::adjustedPollDelay(
                         invalidation["timeoutMs"].toInt(nextDelay),
                         requestTimer->elapsed(), deliveredMessageCount,
                         this->activePollStreak_);
@@ -1161,6 +1124,44 @@ bool YouTubeLiveChat::shouldResolveLiveStreamFromSource() const
 QString YouTubeLiveChat::resolvedSource() const
 {
     return normalizeSource(this->streamUrl_);
+}
+
+int YouTubeLiveChat::cappedPollDelay(int timeoutMs)
+{
+    constexpr int minimumDelayMs = 1000;
+    constexpr int maximumDelayMs = 30000;
+
+    if (timeoutMs <= 0)
+    {
+        return minimumDelayMs;
+    }
+
+    return std::clamp(timeoutMs, minimumDelayMs, maximumDelayMs);
+}
+
+int YouTubeLiveChat::adjustedPollDelay(int timeoutMs, qint64 requestElapsedMs,
+                                       int deliveredMessageCount,
+                                       int activePollStreak)
+{
+    const auto cappedDelay = YouTubeLiveChat::cappedPollDelay(timeoutMs);
+    constexpr int minimumWaitMs = 250;
+    const auto baseEarlyBiasMs = std::clamp(cappedDelay / 10, 75, 150);
+
+    int activityBiasMs = 0;
+    if (deliveredMessageCount > 0)
+    {
+        const auto cappedStreak = std::clamp(activePollStreak, 1, 3);
+        activityBiasMs = deliveredMessageCount >= 3 ? 35 : 20;
+        activityBiasMs += (cappedStreak - 1) * 10;
+    }
+
+    const auto maxEarlyBiasMs =
+        std::min(200, std::max(baseEarlyBiasMs, cappedDelay / 5));
+    const auto earlyBiasMs =
+        std::min(baseEarlyBiasMs + activityBiasMs, maxEarlyBiasMs);
+    return std::max(minimumWaitMs,
+                    cappedDelay - static_cast<int>(requestElapsedMs) -
+                        earlyBiasMs);
 }
 
 int YouTubeLiveChat::computeBackoffDelay(int failureStreak)

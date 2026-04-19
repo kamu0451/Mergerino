@@ -295,6 +295,17 @@ QRect BaseWindow::getBounds() const
 #endif
 }
 
+void BaseWindow::syncBoundsForSave()
+{
+#ifdef USEWINSDK
+    if (this->isNotMinimizedOrMaximized_)
+    {
+        this->currentBounds_ = this->geometry();
+        this->useNextBounds_.stop();
+    }
+#endif
+}
+
 float BaseWindow::scale() const
 {
     return std::max<float>(0.01f, this->overrideScale().value_or(this->scale_));

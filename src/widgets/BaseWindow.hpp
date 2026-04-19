@@ -55,6 +55,14 @@ public:
     void setInitialBounds(QRect bounds, widgets::BoundsChecking mode);
     QRect getBounds() const;
 
+    /// Flushes any pending bounds update into currentBounds_ immediately.
+    /// Call before reading getBounds() from a save path so a close-right-
+    /// after-move doesn't lose position to the 10 ms useNextBounds_ timer.
+    /// No-op unless the window is in the normal (not minimized / not
+    /// maximized) state, to preserve the existing "ignore maximized
+    /// bounds" contract.
+    void syncBoundsForSave();
+
     QWidget *getLayoutContainer();
     bool hasCustomWindowFrame() const;
 

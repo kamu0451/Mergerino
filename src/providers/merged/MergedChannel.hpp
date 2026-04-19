@@ -135,6 +135,12 @@ private:
     // the 5-minute delta shown in the header.
     mutable std::deque<std::pair<qint64, unsigned>> viewerCountHistory_;
 
+    // Client-side outbound rate limiting. Keeps a macro-held Enter from
+    // tripping Twitch/Kick server-side rate limits (which can time the user
+    // out). Values are msSinceEpoch of the last successful fan-out.
+    qint64 lastTwitchSendMs_{0};
+    qint64 lastKickSendMs_{0};
+
     bool twitchLive_{false};
     bool kickLive_{false};
     bool youtubeLive_{false};

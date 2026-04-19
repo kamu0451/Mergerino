@@ -40,6 +40,12 @@ constexpr qint64 VIEWER_DELTA_MIN_SPAN_MS = 60 * 1000;
 // a stable stream would only ever have one sample and the delta would
 // never appear.
 constexpr qint64 VIEWER_DELTA_SAMPLE_INTERVAL_MS = 30 * 1000;
+// Client-side outbound throttle. Twitch allows 20 msg / 30s for regular
+// users (≈ 1500ms/msg); Kick is undocumented, so use a conservative 1s
+// floor. Mods on either platform can technically send faster; we trade a
+// small fraction of their upper bound for a simpler, safer floor.
+constexpr qint64 TWITCH_SEND_INTERVAL_MS = 1500;
+constexpr qint64 KICK_SEND_INTERVAL_MS = 1000;
 constexpr int VIEWER_DELTA_WINDOW_MIN_MINUTES = 1;
 constexpr int VIEWER_DELTA_WINDOW_MAX_MINUTES = 60;
 // Hard cap on stored samples. Time-based pruning alone doesn't bound growth
@@ -215,40 +221,72 @@ void MergedChannel::sendMessage(const QString &message)
         return;
     }
 
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
     bool sent = false;
     QStringList unavailablePlatforms;
+    QStringList throttledPlatforms;
+    qint64 nextAllowedMs = 0;
 
     if (this->config_.twitchEnabled && this->twitchChannel_)
     {
-        if (getApp()->getAccounts()->twitch.isLoggedIn())
+        if (!getApp()->getAccounts()->twitch.isLoggedIn())
         {
-            this->twitchChannel_->sendMessage(message);
-            sent = true;
+            unavailablePlatforms.append("Twitch");
+        }
+        else if (now - this->lastTwitchSendMs_ < TWITCH_SEND_INTERVAL_MS)
+        {
+            throttledPlatforms.append("Twitch");
+            nextAllowedMs = std::max(
+                nextAllowedMs,
+                this->lastTwitchSendMs_ + TWITCH_SEND_INTERVAL_MS - now);
         }
         else
         {
-            unavailablePlatforms.append("Twitch");
+            this->twitchChannel_->sendMessage(message);
+            this->lastTwitchSendMs_ = now;
+            sent = true;
         }
     }
 
     if (this->config_.kickEnabled && this->kickChannel_)
     {
-        if (getApp()->getAccounts()->kick.isLoggedIn())
-        {
-            this->kickChannel_->sendMessage(message);
-            sent = true;
-        }
-        else
+        if (!getApp()->getAccounts()->kick.isLoggedIn())
         {
             unavailablePlatforms.append("Kick");
         }
+        else if (now - this->lastKickSendMs_ < KICK_SEND_INTERVAL_MS)
+        {
+            throttledPlatforms.append("Kick");
+            nextAllowedMs = std::max(
+                nextAllowedMs,
+                this->lastKickSendMs_ + KICK_SEND_INTERVAL_MS - now);
+        }
+        else
+        {
+            this->kickChannel_->sendMessage(message);
+            this->lastKickSendMs_ = now;
+            sent = true;
+        }
     }
 
-    if (!sent && !unavailablePlatforms.isEmpty())
+    if (!sent)
     {
-        this->addSystemStatusMessage(
-            QString("Log in to %1 to send merged chat.")
-                .arg(unavailablePlatforms.join(" or ")));
+        if (!throttledPlatforms.isEmpty())
+        {
+            // Round up so a 1ms remainder still shows as "1s".
+            const qint64 seconds = (nextAllowedMs + 999) / 1000;
+            this->addSystemStatusMessage(
+                QString("Sending too fast on %1 - wait %2s.")
+                    .arg(throttledPlatforms.join(" and "))
+                    .arg(seconds));
+        }
+        else if (!unavailablePlatforms.isEmpty())
+        {
+            this->addSystemStatusMessage(
+                QString("Log in to %1 to send merged chat.")
+                    .arg(unavailablePlatforms.join(" or ")));
+        }
     }
 }
 

@@ -8,6 +8,7 @@
 #include "common/network/NetworkResult.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
+#include "util/GuardedCallback.hpp"
 
 #include <QDateTime>
 #include <QDebug>
@@ -893,14 +894,14 @@ void YouTubeLiveChat::poll()
 
 void YouTubeLiveChat::schedulePoll(int delayMs)
 {
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
-    QTimer::singleShot(delayMs, [this, weak] {
-        if (!weak.lock() || !this->running_)
-        {
-            return;
-        }
-        this->poll();
-    });
+    QTimer::singleShot(delayMs,
+                       guardedCallback(this->lifetimeGuard_, [this] {
+                           if (!this->running_)
+                           {
+                               return;
+                           }
+                           this->poll();
+                       }));
 }
 
 void YouTubeLiveChat::pollViewerCount()
@@ -1047,15 +1048,15 @@ void YouTubeLiveChat::pollViewerCount()
 
 void YouTubeLiveChat::scheduleViewerCountPoll(int delayMs)
 {
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
-    QTimer::singleShot(delayMs, [this, weak] {
-        if (!weak.lock() || !this->running_ || !this->live_)
-        {
-            this->viewerCountPollScheduled_ = false;
-            return;
-        }
-        this->pollViewerCount();
-    });
+    QTimer::singleShot(delayMs,
+                       guardedCallback(this->lifetimeGuard_, [this] {
+                           if (!this->running_ || !this->live_)
+                           {
+                               this->viewerCountPollScheduled_ = false;
+                               return;
+                           }
+                           this->pollViewerCount();
+                       }));
 }
 
 void YouTubeLiveChat::setViewerCount(unsigned count)
@@ -1075,15 +1076,14 @@ unsigned YouTubeLiveChat::viewerCount() const
 
 void YouTubeLiveChat::scheduleResolve(int delayMs)
 {
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
-    QTimer::singleShot(delayMs, [this, weak] {
-        if (!weak.lock() || !this->running_)
-        {
-            return;
-        }
-
-        this->resolveVideoId();
-    });
+    QTimer::singleShot(delayMs,
+                       guardedCallback(this->lifetimeGuard_, [this] {
+                           if (!this->running_)
+                           {
+                               return;
+                           }
+                           this->resolveVideoId();
+                       }));
 }
 
 void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)

@@ -182,7 +182,10 @@ void TikTokLiveChat::start()
     QObject::connect(&this->impl_->joinTimer, &QTimer::timeout,
                      [this]() { this->flushPendingJoins(); });
     this->impl_->stuckConnectionTimer.setSingleShot(true);
-    this->impl_->stuckConnectionTimer.setInterval(30000);
+    // 60s: TikTok's check_alive can legitimately take 30+ seconds on a
+    // slow room or rate-limited endpoint, so the earlier 30s threshold
+    // false-positived on real-but-slow live rooms.
+    this->impl_->stuckConnectionTimer.setInterval(60000);
     this->impl_->decodePool.setMaxThreadCount(1);
     QObject::connect(&this->impl_->stuckConnectionTimer, &QTimer::timeout,
                      [this]() {
@@ -726,7 +729,18 @@ void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
         !frame.giftEvents.empty();
     if (hasLiveContent)
     {
-        // Fallback live signal when check_alive hasn't fired yet.
+        // Fallback live signal when check_alive hasn't fired yet. Any real
+        // chat/like/join frame is proof the room is live - cancel the
+        // stuck-connection watchdog and clear a prior "unavailable" status
+        // so the user sees the recovery.
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.stop();
+        }
+        if (!this->live_)
+        {
+            this->setStatusText(QStringLiteral("Connected to TikTok"));
+        }
         this->setLive(true);
     }
     for (const auto &chat : frame.chatMessages)

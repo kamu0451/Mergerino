@@ -527,6 +527,20 @@ QString openURL(const CommandContext &ctx)
         return "";
     }
 
+    // Scheme allowlist. openUrl would otherwise hand file://, javascript:,
+    // or arbitrary custom-protocol URLs to the OS handler - trivial to
+    // paste by accident and occasionally a vector for attacker-controlled
+    // text copied into chat input. Keep the safe, common web schemes.
+    const auto scheme = url.scheme().toLower();
+    if (scheme != "http" && scheme != "https" && scheme != "mailto")
+    {
+        ctx.channel->addSystemMessage(
+            QString("Refusing to open URL with scheme '%1'. "
+                    "Allowed: http, https, mailto.")
+                .arg(scheme.isEmpty() ? QStringLiteral("(empty)") : scheme));
+        return "";
+    }
+
     auto preferPrivateMode = getSettings()->openLinksIncognito.getValue();
     auto forcePrivateMode = parser.isSet(privateModeOption);
     auto forceNonPrivateMode = parser.isSet(noPrivateModeOption);

@@ -945,18 +945,20 @@ void UserInfoPopup::setData(const QString &name,
     {
         // YouTube / TikTok users don't exist on Twitch Helix or the Kick
         // REST API, so firing those fetches just produces "Unavailable"
-        // noise. Render a minimal view - the filtered latest messages
-        // below still give the user meaningful context.
+        // noise. Render a minimal view - show a single platform label in
+        // place of the follower-count slot, hide the Twitch-only rows
+        // (created-date, user-ID, mod timeout, usercard link). The
+        // filtered latest-messages panel below still gives meaningful
+        // context.
         const QString platformLabel =
             this->messagePlatform_ == MessagePlatform::YouTube
                 ? QStringLiteral("YouTube user")
                 : QStringLiteral("TikTok user");
         this->ui_.followerCountLabel->setText(TEXT_FOLLOWERS.arg(platformLabel));
-        this->ui_.createdDateLabel->setText(
-            TEXT_CREATED.arg(TEXT_UNAVAILABLE));
-        this->ui_.userIDLabel->setText(u"ID " % TEXT_UNAVAILABLE);
-        this->ui_.userIDLabel->setProperty("copy-text",
-                                           TEXT_UNAVAILABLE.toString());
+        this->ui_.createdDateLabel->hide();
+        this->ui_.userIDLabel->hide();
+        this->ui_.timeoutWidget->hide();
+        this->ui_.usercardLabel->hide();
     }
     else if (this->isKick_)
     {

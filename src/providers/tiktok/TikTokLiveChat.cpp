@@ -521,18 +521,41 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         extract(room.value(QStringLiteral("total_user")));
     }
 
-    // webcast/room/check_alive: data.data[0].alive_state / user_count.
-    // alive_state == 2 means the room is still live; anything else (4 is
-    // the common "ended" code) means the stream has gone offline. The
-    // WebSocket close event is unreliable on stream-end, so treat this
-    // as the authoritative signal.
+    // webcast/room/check_alive: data.data[] is an array of room states.
+    // TikTok has used two shapes historically:
+    //   older: { "alive_state": N }  where N == 2 means live, else ended
+    //   newer: { "alive": true|false, "room_id_str": "..." }
+    // Accept either. The WebSocket close event is unreliable on stream-
+    // end, so this is the authoritative live/offline signal.
     const auto inner = data.value(QStringLiteral("data")).toArray();
     if (!inner.isEmpty())
     {
-        const auto first = inner.first().toObject();
-        extract(first.value(QStringLiteral("user_count")));
-        const auto aliveVal = first.value(QStringLiteral("alive_state"));
-        if (aliveVal.isDouble())
+        bool anyRoomLive = false;
+        bool sawAliveField = false;
+        for (const auto &entry : inner)
+        {
+            const auto obj = entry.toObject();
+            extract(obj.value(QStringLiteral("user_count")));
+            const auto aliveState = obj.value(QStringLiteral("alive_state"));
+            if (aliveState.isDouble())
+            {
+                sawAliveField = true;
+                if (aliveState.toInt() == 2)
+                {
+                    anyRoomLive = true;
+                }
+            }
+            const auto aliveBool = obj.value(QStringLiteral("alive"));
+            if (aliveBool.isBool())
+            {
+                sawAliveField = true;
+                if (aliveBool.toBool())
+                {
+                    anyRoomLive = true;
+                }
+            }
+        }
+        if (sawAliveField)
         {
             // Room responded with a definitive live/offline state - cancel
             // the stuck-connection watchdog regardless of value.
@@ -540,7 +563,7 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
             {
                 this->impl_->stuckConnectionTimer.stop();
             }
-            this->setLive(aliveVal.toInt() == 2);
+            this->setLive(anyRoomLive);
         }
     }
 

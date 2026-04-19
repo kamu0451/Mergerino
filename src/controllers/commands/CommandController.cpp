@@ -399,8 +399,11 @@ CommandController::CommandController(const Paths &paths)
     this->registerCommand("/fakemsg", &commands::injectFakeMessage);
     this->registerCommand("/debug-update-to-no-stream",
                           &commands::injectStreamUpdateNoStream);
-    this->registerCommand("/simmsg", &commands::simulateMergedMessage);
 #endif
+    // /simmsg is Mergerino-specific and useful in Release for UI
+    // smoke-testing on a merged tab without real streams. It's a no-op
+    // on non-merged channels and carries no platform-side effect.
+    this->registerCommand("/simmsg", &commands::simulateMergedMessage);
 
     this->registerCommand("/copy", &commands::copyToClipboard);
 

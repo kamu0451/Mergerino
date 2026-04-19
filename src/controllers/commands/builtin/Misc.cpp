@@ -686,6 +686,9 @@ QString simulateMergedMessage(const CommandContext &ctx)
 
     const auto text = ctx.words.mid(2).join(' ');
     merged->injectDebugMessage(platform, QStringLiteral("simulator"), text);
+    ctx.channel->addSystemMessage(
+        QString("simmsg injected %1 message: %2")
+            .arg(platformStr, text));
     return "";
 }
 

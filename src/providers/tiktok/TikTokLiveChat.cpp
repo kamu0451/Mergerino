@@ -486,14 +486,31 @@ void TikTokLiveChat::setViewerCount(unsigned count)
 
 void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
 {
-    // TikTok's /webcast/room/(enter|info|check_alive) responses wrap the
-    // useful data in a nested "data" object. Different endpoints put the
-    // user count under slightly different paths; probe the ones we've seen
-    // in the wild.
-    const auto data = root.value(QStringLiteral("data")).toObject();
-    if (data.isEmpty())
+    // TikTok's /webcast/room/(enter|info|check_alive) responses arrive in
+    // two top-level shapes:
+    //   A) root.data is an OBJECT (enter / info endpoints, or login errors)
+    //        { "data": { "user_count": N, "room": {..}, "message": "..." } }
+    //      For this shape, room-state info may also appear as a nested
+    //      data[] array: { "data": { "data": [ {alive_state / alive} ] } }
+    //   B) root.data is an ARRAY directly (current check_alive endpoint)
+    //        { "data": [ {"alive": true, "room_id_str": "..."} ] }
+    // Normalise by extracting roomEntries (the array of per-room objects)
+    // and dataObj (the object form, if any) up front.
+    const auto rootDataValue = root.value(QStringLiteral("data"));
+    QJsonObject dataObj;
+    QJsonArray roomEntries;
+    if (rootDataValue.isArray())
     {
-        return;
+        roomEntries = rootDataValue.toArray();
+    }
+    else
+    {
+        dataObj = rootDataValue.toObject();
+        if (dataObj.isEmpty())
+        {
+            return;
+        }
+        roomEntries = dataObj.value(QStringLiteral("data")).toArray();
     }
 
     unsigned count = 0;
@@ -509,30 +526,26 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         }
     };
 
-    // webcast/room/enter and webcast/room/info: data.user_count / total_user
-    extract(data.value(QStringLiteral("user_count")));
-    extract(data.value(QStringLiteral("total_user")));
-
-    // webcast/room/info variant: data.room.user_count
-    const auto room = data.value(QStringLiteral("room")).toObject();
+    // Object form: webcast/room/enter / webcast/room/info variants.
+    extract(dataObj.value(QStringLiteral("user_count")));
+    extract(dataObj.value(QStringLiteral("total_user")));
+    const auto room = dataObj.value(QStringLiteral("room")).toObject();
     if (!room.isEmpty())
     {
         extract(room.value(QStringLiteral("user_count")));
         extract(room.value(QStringLiteral("total_user")));
     }
 
-    // webcast/room/check_alive: data.data[] is an array of room states.
-    // TikTok has used two shapes historically:
+    // Per-room entries: TikTok has used two shapes historically -
     //   older: { "alive_state": N }  where N == 2 means live, else ended
     //   newer: { "alive": true|false, "room_id_str": "..." }
     // Accept either. The WebSocket close event is unreliable on stream-
     // end, so this is the authoritative live/offline signal.
-    const auto inner = data.value(QStringLiteral("data")).toArray();
-    if (!inner.isEmpty())
+    if (!roomEntries.isEmpty())
     {
         bool anyRoomLive = false;
         bool sawAliveField = false;
-        for (const auto &entry : inner)
+        for (const auto &entry : roomEntries)
         {
             const auto obj = entry.toObject();
             extract(obj.value(QStringLiteral("user_count")));
@@ -582,7 +595,7 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         }
         if (title.isEmpty())
         {
-            title = data.value(QStringLiteral("title")).toString();
+            title = dataObj.value(QStringLiteral("title")).toString();
         }
         if (!title.isEmpty())
         {
@@ -594,7 +607,7 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
     // via another path yet.
     if (this->roomId_.isEmpty())
     {
-        const auto rid = data.value(QStringLiteral("id_str")).toString();
+        const auto rid = dataObj.value(QStringLiteral("id_str")).toString();
         if (!rid.isEmpty())
         {
             this->roomId_ = rid;

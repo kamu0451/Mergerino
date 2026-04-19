@@ -41,6 +41,14 @@ public:
     pajlada::Signals::NoArgSignal liveStatusChanged;
     pajlada::Signals::NoArgSignal viewerCountChanged;
 
+    // Exposed for unit tests. Pure helpers with no instance state.
+    static QString maybeExtractVideoId(const QString &url);
+    static QString normalizeSource(const QString &source);
+    static bool isLikelyChannelId(const QString &value);
+    static QString extractLiveChatContinuation(
+        const QJsonObject &liveChatRenderer);
+    static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
+
 private:
     void resolveVideoId();
     void resolveChannelIdFromVideoId(const QString &videoId,
@@ -63,18 +71,12 @@ private:
     bool shouldResolveLiveStreamFromSource() const;
     QString resolvedSource() const;
 
-    static QString maybeExtractVideoId(const QString &url);
-    static QString normalizeSource(const QString &source);
-    static bool isLikelyChannelId(const QString &value);
     static QString sourceLivePath(const QString &source);
     static bool isLikelyVideoId(const QString &value);
     static QString extractFirstMatch(const QString &text,
                                      const QStringList &patterns);
-    static QString extractLiveChatContinuation(
-        const QJsonObject &liveChatRenderer);
     static QString extractVideoChannelId(const QString &html);
     static QString extractLiveVideoId(const QString &html);
-    static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
     static QString parseText(const QJsonValue &value);
     static MessagePtr parseRendererMessage(const QJsonObject &renderer,
                                           const QString &rendererName,

@@ -21,6 +21,7 @@
 #include <QUrlQuery>
 
 #include <algorithm>
+#include <atomic>
 #include <optional>
 #include <vector>
 
@@ -1493,9 +1494,22 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     }
     else
     {
-        qWarning().nospace() << "YouTube: unhandled live chat renderer: "
-                             << rendererName;
-        qWarning() << QJsonDocument(renderer).toJson(QJsonDocument::Compact);
+        // Rate-limit diagnostic renderer dumps so a stream with many unknown
+        // renderer types can't flood the log. Five is enough to spot a new
+        // renderer; beyond that the first few already carried the signal.
+        static std::atomic<int> warningCount{0};
+        const int n = warningCount.fetch_add(1, std::memory_order_relaxed);
+        if (n < 5)
+        {
+            qWarning().nospace() << "YouTube: unhandled live chat renderer: "
+                                 << rendererName;
+            qWarning() << QJsonDocument(renderer).toJson(QJsonDocument::Compact);
+        }
+        else if (n == 5)
+        {
+            qWarning() << "YouTube: further unhandled-renderer warnings "
+                          "suppressed for this session";
+        }
         return nullptr;
     }
 

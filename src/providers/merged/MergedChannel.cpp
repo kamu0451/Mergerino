@@ -432,6 +432,26 @@ MergedChannel::viewerCountDeltaPercent() const
     {
         this->viewerCountHistory_.pop_front();
     }
+
+    // Discontinuity guard: merged sources connect sequentially at
+    // startup, so the first sample can be tiny (Twitch-only, 5 viewers)
+    // and the current sample is the full multi-platform total (60+),
+    // producing bogus +1000% deltas. If current and oldest disagree by
+    // 3x or more, the window spans two regimes - drop it and restart.
+    if (!this->viewerCountHistory_.empty() && current > 0)
+    {
+        const auto oldestCount = this->viewerCountHistory_.front().second;
+        if (oldestCount > 0)
+        {
+            const unsigned hi = std::max(current, oldestCount);
+            const unsigned lo = std::min(current, oldestCount);
+            if (static_cast<double>(hi) > static_cast<double>(lo) * 3.0)
+            {
+                this->viewerCountHistory_.clear();
+            }
+        }
+    }
+
     if (this->viewerCountHistory_.empty() ||
         this->viewerCountHistory_.back().second != current ||
         now - this->viewerCountHistory_.back().first >=

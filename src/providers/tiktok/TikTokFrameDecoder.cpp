@@ -386,6 +386,11 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
                 break;
         }
     }
+    // Push even when method is empty so diagnostics can tell us if the
+    // BaseMessage schema changed (different field number for method).
+    out.allMethods.push_back(method.isEmpty() ? QStringLiteral("<empty>")
+                                              : method);
+
     if (payload.empty())
     {
         return true;
@@ -434,11 +439,13 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
     }
     else if (method == QStringLiteral("WebcastRoomUserSeqMessage"))
     {
-        // Schema (best-effort, from public RE): field 3 total (historical
-        // total viewers), field 4/6 online (current viewers). Field names
-        // have drifted over TikTok versions. Scan every int64-typed field
-        // in the 3-10 range and take the largest - that's almost always
-        // the current live count.
+        // Schema (best-effort, from public RE): fields 3, 5, 7 commonly
+        // carry total/online viewer counts across TikTok versions. But
+        // room_id / anchor_id are ALSO int64 in the same range and hold
+        // huge values (10^18), so taking the raw max picks the id. Cap
+        // at 10 million - more than any live concurrent count - to
+        // filter IDs out. Take the max of remaining values.
+        constexpr qint64 VIEWER_COUNT_MAX_PLAUSIBLE = 10'000'000;
         qint64 best = 0;
         Reader r = Reader::fromSpan(payload);
         std::uint32_t fld{};
@@ -457,7 +464,7 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
                     break;
                 }
                 const auto signedV = static_cast<qint64>(v);
-                if (signedV > best)
+                if (signedV > best && signedV <= VIEWER_COUNT_MAX_PLAUSIBLE)
                 {
                     best = signedV;
                 }
@@ -472,8 +479,11 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
             out.roomViewerCount = best;
         }
     }
-    // Other methods (control, room notify, ...) are left for follow-up
-    // work and ignored here.
+    else
+    {
+        // Capture so diagnostics can tell us what we're missing.
+        out.unhandledMethods.push_back(method);
+    }
     return true;
 }
 
@@ -526,6 +536,17 @@ DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes)
         }
         switch (field)
         {
+            case 6: {  // payload_encoding (string)
+                std::string_view s;
+                if (!r.readString(s))
+                {
+                    return out;
+                }
+                out.payloadEncoding = toQString(s);
+                out.envelopeFields.push_back(
+                    QStringLiteral("f6/str/%1").arg(s.size()));
+                break;
+            }
             case 7: {  // payload_type (string)
                 std::string_view s;
                 if (!r.readString(s))
@@ -533,6 +554,8 @@ DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes)
                     return out;
                 }
                 out.payloadType = toQString(s);
+                out.envelopeFields.push_back(
+                    QStringLiteral("f7/str/%1").arg(s.size()));
                 break;
             }
             case 8: {  // payload (bytes)
@@ -540,18 +563,47 @@ DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes)
                 {
                     return out;
                 }
+                out.envelopeFields.push_back(
+                    QStringLiteral("f8/bytes/%1").arg(innerPayload.size()));
                 break;
             }
-            default:
-                if (!r.skip(wire))
+            default: {
+                const auto wireTag = static_cast<int>(wire);
+                if (wire == WireType::LengthDelimited)
+                {
+                    std::span<const std::uint8_t> sub;
+                    if (!r.readLengthDelimited(sub))
+                    {
+                        return out;
+                    }
+                    out.envelopeFields.push_back(
+                        QStringLiteral("f%1/w%2/l%3")
+                            .arg(field)
+                            .arg(wireTag)
+                            .arg(sub.size()));
+                }
+                else if (!r.skip(wire))
                 {
                     return out;
                 }
+                else
+                {
+                    out.envelopeFields.push_back(
+                        QStringLiteral("f%1/w%2").arg(field).arg(wireTag));
+                }
                 break;
+            }
         }
     }
 
-    if (out.payloadType == QStringLiteral("msg") && !innerPayload.empty())
+    // Newer TikTok schemas sometimes leave payload_type empty (routing
+    // metadata moved into the headers_list at field 5). Treat an empty
+    // payloadType as permissive: try to decode if innerPayload looks
+    // parseable. The inner FetchResult decoder is self-consistent - if
+    // the bytes aren't a valid FetchResult it just returns no events.
+    const bool payloadTypeKnown = out.payloadType == QStringLiteral("msg");
+    const bool tryDecode = payloadTypeKnown || out.payloadType.isEmpty();
+    if (tryDecode && !innerPayload.empty())
     {
         decodeFetchResult(innerPayload, out);
     }

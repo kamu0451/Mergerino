@@ -70,6 +70,20 @@ struct DecodedFrame {
     // Latest online-viewer count observed from WebcastRoomUserSeqMessage.
     // 0 means "no count in this frame" (consumer should keep previous value).
     qint64 roomViewerCount{0};
+    // Method strings observed in BaseMessage frames that didn't match any
+    // known handler. Exposed for diagnostic logging so we can see what
+    // message types are flowing through and add handlers opportunistically.
+    std::vector<QString> unhandledMethods;
+    // Every method string seen in this frame (handled or not). For
+    // diagnostics - lets the caller tally what TikTok is sending.
+    std::vector<QString> allMethods;
+    // Diagnostic: list of (field_number, wire_type, length) tuples
+    // observed in the outer envelope, encoded as "fN/wW/lL". Helps
+    // identify schema drift at the push-frame level.
+    std::vector<QString> envelopeFields;
+    // envelope field 6 = payload_encoding (e.g. "gzip"). Empty means
+    // no encoding / raw.
+    QString payloadEncoding;
 };
 
 DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes);

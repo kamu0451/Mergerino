@@ -80,10 +80,10 @@ QColor activityPlatformHighlightColor(const Message &message)
     const auto hsv = accent.toHsv();
     const int hue = hsv.hsvHue() >= 0 ? hsv.hsvHue() : 0;
     const int saturation =
-        std::clamp(std::max(hsv.hsvSaturation(), 165) + 6, 0, 205);
-    const int value = std::clamp(std::min(232, std::max(hsv.value(), 208)), 0,
-                                 232);
-    constexpr int alpha = 118;
+        std::clamp(std::max(hsv.hsvSaturation(), 150) - 10, 0, 180);
+    const int value = std::clamp(std::min(220, std::max(hsv.value(), 198)), 0,
+                                 220);
+    constexpr int alpha = 102;
 
     QColor popped;
     popped.setHsv(hue, saturation, value, alpha);
@@ -177,7 +177,8 @@ bool automaticEventIncludesUserMessage(const Message &message)
 }
 
 bool usesAutomaticEventOverlay(const Message &message,
-                               const MessagePreferences &preferences)
+                               const MessagePreferences &preferences,
+                               bool includeActivityCheerOverlay)
 {
     if (message.flags.has(MessageFlag::ElevatedMessage) &&
         preferences.enableElevatedMessageHighlight)
@@ -206,6 +207,12 @@ bool usesAutomaticEventOverlay(const Message &message,
     if ((message.flags.has(MessageFlag::RedeemedHighlight) ||
          message.flags.has(MessageFlag::RedeemedChannelPointReward)) &&
         preferences.enableRedeemedHighlight)
+    {
+        return true;
+    }
+
+    if (includeActivityCheerOverlay &&
+        message.flags.has(MessageFlag::CheerMessage))
     {
         return true;
     }
@@ -647,7 +654,8 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     QColor gradientLeadInColor;
 
     bool suppressMergedPlatformTint =
-        usesAutomaticEventOverlay(*this->message_, ctx.preferences) &&
+        usesAutomaticEventOverlay(*this->message_, ctx.preferences,
+                                  ctx.forceFlatEventHighlights) &&
         ((ctx.forceFlatEventHighlights &&
           mergedPlatformIndicatorShowsLineColor(ctx.platformIndicatorMode)) ||
          (automaticEventHighlightUsesGradient(ctx) &&
@@ -694,6 +702,12 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
             *this->message_, *ctx.colorProvider.color(ColorType::WatchStreak),
             false, ctx,
             gradientOverlayColor, solidOverlayColor);
+    }
+    else if (ctx.forceFlatEventHighlights &&
+             this->message_->flags.has(MessageFlag::CheerMessage))
+    {
+        applyAutomaticEventOverlay(*this->message_, {}, false, ctx,
+                                   gradientOverlayColor, solidOverlayColor);
     }
     else if ((this->message_->flags.has(MessageFlag::Highlighted) ||
               this->message_->flags.has(MessageFlag::HighlightedWhisper)) &&

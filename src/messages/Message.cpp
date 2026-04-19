@@ -44,10 +44,10 @@ QColor activityPlatformHighlightColor(const Message &message)
     const auto hsv = accent.toHsv();
     const int hue = hsv.hsvHue() >= 0 ? hsv.hsvHue() : 0;
     const int saturation =
-        std::clamp(std::max(hsv.hsvSaturation(), 165) + 6, 0, 205);
-    const int value = std::clamp(std::min(232, std::max(hsv.value(), 208)), 0,
-                                 232);
-    constexpr int alpha = 118;
+        std::clamp(std::max(hsv.hsvSaturation(), 150) - 10, 0, 180);
+    const int value = std::clamp(std::min(220, std::max(hsv.value(), 198)), 0,
+                                 220);
+    constexpr int alpha = 102;
 
     QColor popped;
     popped.setHsv(hue, saturation, value, alpha);
@@ -203,6 +203,19 @@ ScrollbarHighlight Message::getScrollBarHighlight(
         }
         return {
             color,
+        };
+    }
+
+    if (useActivityPlatformHighlightColors &&
+        this->flags.has(MessageFlag::CheerMessage))
+    {
+        if (!mergedPlatformIndicatorShowsLineColor(platformIndicatorMode))
+        {
+            return {};
+        }
+
+        return {
+            std::make_shared<QColor>(activityPlatformHighlightColor(*this)),
         };
     }
 

@@ -168,6 +168,7 @@ public:
     ///
     /// @see #underlyingChannel()
     void setChannel(const ChannelPtr &underlyingChannel);
+    void refreshMessages();
 
     void setFilters(const QList<QUuid> &ids);
     QList<QUuid> getFilterIds() const;

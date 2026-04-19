@@ -27,7 +27,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v5
         with:
-          name: Mergerino-win64.zip
+          name: Mergerino.zip
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           run-id: ${{ github.event.workflow_run.id }}
@@ -36,8 +36,8 @@ jobs:
       - name: Create or update rolling release
         uses: actions/github-script@v8
         env:
-          ASSET_NAME: Mergerino-win64.zip
-          ASSET_PATH: release-artifact/Mergerino-win64.zip
+          ASSET_NAME: Mergerino.zip
+          ASSET_PATH: release-artifact/Mergerino.zip
           RELEASE_NAME: Latest
           RELEASE_TAG: latest
         with:
@@ -130,7 +130,7 @@ jobs:
             });
 
             for (const asset of assets) {
-              if (asset.name === assetName) {
+              if (asset.name === assetName || asset.name === 'Mergerino-win64.zip') {
                 await github.rest.repos.deleteReleaseAsset({
                   owner,
                   repo,

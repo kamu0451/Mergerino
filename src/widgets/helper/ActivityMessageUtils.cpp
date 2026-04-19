@@ -18,12 +18,12 @@ using namespace chatterino;
 
 const QRegularExpression ACTIVITY_GIFT_BOMB_SUMMARY_REGEX(
     QStringLiteral(
-        R"(^(.+?)\s+(?:is gifting|gifted)\s+(\d+)\s+.*?\b(subs|subscriptions|memberships)\b(?:\s+to\b.*)?(?:!|\.)?(?: .*)?$)"),
+        R"(^(?:(.+?)\s+(?:is gifting|gifted)\s+|sent\s+)(\d+)\s+.*?\b(?:gift\s+)?(subs|subscriptions|memberships)\b(?:\s+to\b.*)?(?:!|\.)?(?: .*)?$)"),
     QRegularExpression::CaseInsensitiveOption);
 
 const QRegularExpression ACTIVITY_GIFT_RECIPIENT_REGEX(
     QStringLiteral(
-        R"((?:^.+\s+gifted\s+(?:(?:an?\s+|\d+\s+months?\s+of\s+an?\s+).*)?\b(?:sub|subscription|membership)\b\s+to\s+.+(?:!|\.)?(?: .*)?$)|(?:^.+\s+received\s+(?:a\s+gift\s+)?membership\s+from\s+.+(?:!|\.)?(?: .*)?$))"),
+        R"((?:^.+\s+gifted\s+(?:(?:an?\s+|\d+\s+months?\s+of\s+an?\s+).*)?\b(?:sub|subscription|membership)\b\s+to\s+.+(?:!|\.)?(?: .*)?$)|(?:^.+\s+received\s+(?:a\s+gift\s+)?membership\s+(?:from|by)\s+.+(?:!|\.)?(?: .*)?$))"),
     QRegularExpression::CaseInsensitiveOption);
 
 const QRegularExpression ACTIVITY_TWITCH_BITS_BADGE_REGEX(

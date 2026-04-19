@@ -65,6 +65,8 @@ public:
     QString activityPaneTitle() const;
     qreal activityMessageScale() const;
     PlatformIndicatorMode platformIndicatorMode() const;
+    bool filterActivity() const;
+    bool filterActivityExplicit() const;
 
     IndirectChannel getIndirectChannel();
     ChannelPtr getChannel() const;
@@ -78,6 +80,7 @@ public:
     void setInputEnabled(bool enabled);
     void setActivityMessageScale(qreal value);
     void setPlatformIndicatorMode(PlatformIndicatorMode value);
+    void setFilterActivity(bool value, bool explicitPreference = false);
 
     std::optional<bool> checkSpellingOverride() const;
     void setCheckSpellingOverride(std::optional<bool> override);
@@ -176,6 +179,8 @@ private:
     bool moderationMode_{};
     bool isTopRightSplit_{};
     bool inputEnabled_{true};
+    bool filterActivity_{false};
+    bool filterActivityExplicit_{false};
     qreal activityMessageScale_{0.9};
     PlatformIndicatorMode platformIndicatorMode_;
 

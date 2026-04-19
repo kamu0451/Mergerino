@@ -76,6 +76,17 @@ TEST(ActivityMessageUtils, CompactsGiftBombMembershipsToSubs)
     EXPECT_EQ(compactActivityGiftBombText(message), "GiftLord gifted 5 subs");
 }
 
+TEST(ActivityMessageUtils, CompactsYouTubeGiftPurchaseAnnouncements)
+{
+    Message message;
+    message.flags.set(MessageFlag::Subscription);
+    message.displayName = "Halfman";
+    message.messageText = "Sent 20 Coconut B gift memberships";
+
+    ASSERT_EQ(getActivityGiftBombRecipientCount(message), 20);
+    EXPECT_EQ(compactActivityGiftBombText(message), "Halfman gifted 20 subs");
+}
+
 TEST(ActivityMessageUtils, DetectsTwitchAndYouTubeGiftRecipients)
 {
     Message twitchRecipient;
@@ -91,6 +102,13 @@ TEST(ActivityMessageUtils, DetectsTwitchAndYouTubeGiftRecipients)
         "Viewer received a gift membership from GiftLord!";
 
     EXPECT_TRUE(isActivityGiftRecipientMessage(youtubeRecipient));
+
+    Message youtubeRecipientBy;
+    youtubeRecipientBy.flags.set(MessageFlag::Subscription);
+    youtubeRecipientBy.messageText =
+        "Viewer received a gift membership by GiftLord";
+
+    EXPECT_TRUE(isActivityGiftRecipientMessage(youtubeRecipientBy));
 }
 
 TEST(ActivityMessageUtils, RejectsKickRewardRedemptions)

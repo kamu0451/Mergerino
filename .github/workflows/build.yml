@@ -108,14 +108,14 @@ jobs:
           Copy-Item bin/mergerino.exe $packageDir/
           Get-ChildItem bin -Filter '*.dll' | Copy-Item -Destination $packageDir -Force
           ..\.CI\deploy-crt.ps1 $packageDir
-          if (Test-Path "Mergerino-win64.zip") {
-            Remove-Item "Mergerino-win64.zip" -Force
+          if (Test-Path "Mergerino.zip") {
+            Remove-Item "Mergerino.zip" -Force
           }
-          7z a Mergerino-win64.zip .\$packageDir\*
+          7z a Mergerino.zip .\$packageDir\*
 
       - name: Upload artifact
         if: ${{ github.event_name != 'pull_request' }}
         uses: actions/upload-artifact@v7
         with:
-          name: Mergerino-win64.zip
-          path: build/Mergerino-win64.zip
+          name: Mergerino.zip
+          path: build/Mergerino.zip

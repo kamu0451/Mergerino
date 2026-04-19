@@ -11,6 +11,7 @@
 #include <cstdint>
 
 class QCloseEvent;
+class QCheckBox;
 class QComboBox;
 
 namespace chatterino {
@@ -24,6 +25,9 @@ public:
 
     void setPlatformIndicatorMode(PlatformIndicatorMode mode);
     PlatformIndicatorMode platformIndicatorMode() const;
+
+    void setFilterActivity(bool enabled);
+    bool filterActivity() const;
 
     void setActivityMessageScale(qreal scale);
     qreal activityMessageScale() const;
@@ -40,6 +44,7 @@ protected:
 private:
     struct {
         QComboBox *indicatorMode{};
+        QCheckBox *filterActivity{};
         QComboBox *activityScale{};
     } ui_{};
 

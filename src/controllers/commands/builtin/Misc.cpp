@@ -636,17 +636,21 @@ QString simulateMergedMessage(const CommandContext &ctx)
     // /simmsg <platform> <text...>
     // Injects a synthetic platform-tagged message into the current merged
     // channel so the merged UI (badge, accent, dedup) can be exercised
-    // without a live source stream.
-    if (ctx.channel == nullptr)
+    // without a live source stream. Requires the active split to be a
+    // merged tab (shows e.g. "name (Twitch + Kick + YouTube live)" in
+    // the header). Won't work in an <empty> split or a single-platform
+    // chat.
+    if (ctx.channel == nullptr || ctx.channel->isEmpty())
     {
-        return "";
+        return "Open a merged channel tab first, then run /simmsg there.";
     }
 
     auto *merged = dynamic_cast<MergedChannel *>(ctx.channel.get());
     if (merged == nullptr)
     {
         ctx.channel->addSystemMessage(
-            "/simmsg only works in a merged channel tab.");
+            "/simmsg only works in a merged channel tab, not in a "
+            "single-platform chat.");
         return "";
     }
 

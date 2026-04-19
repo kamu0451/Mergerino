@@ -954,6 +954,27 @@ void YouTubeLiveChat::pollViewerCount()
                 {
                     continue;
                 }
+                // YouTube flips this flag to false the moment the stream
+                // ends, while get_live_chat keeps returning timed
+                // continuations for a grace period. Without this check we
+                // stay "live" indefinitely; treat it as authoritative.
+                const auto isLiveVal = viewership["isLive"];
+                if (isLiveVal.isBool() && !isLiveVal.toBool() && this->live_)
+                {
+                    if (this->shouldResolveLiveStreamFromSource())
+                    {
+                        this->waitForNextLive(
+                            "YouTube stream ended. Waiting for the next "
+                            "live.",
+                            YOUTUBE_RECONNECT_DELAY_MS);
+                    }
+                    else
+                    {
+                        this->setLive(false);
+                        this->setStatusText("YouTube stream has ended.");
+                    }
+                    return;
+                }
                 const auto raw =
                     viewership["originalViewCount"].toString();
                 bool ok = false;

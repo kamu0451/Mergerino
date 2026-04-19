@@ -486,12 +486,21 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         extract(room.value(QStringLiteral("total_user")));
     }
 
-    // webcast/room/check_alive: data.data[0].alive_state / user_count
+    // webcast/room/check_alive: data.data[0].alive_state / user_count.
+    // alive_state == 2 means the room is still live; anything else (4 is
+    // the common "ended" code) means the stream has gone offline. The
+    // WebSocket close event is unreliable on stream-end, so treat this
+    // as the authoritative signal.
     const auto inner = data.value(QStringLiteral("data")).toArray();
     if (!inner.isEmpty())
     {
         const auto first = inner.first().toObject();
         extract(first.value(QStringLiteral("user_count")));
+        const auto aliveVal = first.value(QStringLiteral("alive_state"));
+        if (aliveVal.isDouble())
+        {
+            this->setLive(aliveVal.toInt() == 2);
+        }
     }
 
     if (count > 0)

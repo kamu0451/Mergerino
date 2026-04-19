@@ -63,7 +63,6 @@ private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 
-    QString source_;
     QString username_;
     QString roomId_;
     QString statusText_;

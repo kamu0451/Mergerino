@@ -120,10 +120,9 @@ struct TikTokLiveChat::Impl {
 };
 
 TikTokLiveChat::TikTokLiveChat(QString source)
-    : source_(std::move(source))
+    : username_(TikTokLiveChat::normalizeSource(source))
     , lifetimeGuard_(std::make_shared<bool>(true))
 {
-    this->username_ = TikTokLiveChat::normalizeSource(this->source_);
 }
 
 TikTokLiveChat::~TikTokLiveChat()
@@ -351,6 +350,9 @@ void TikTokLiveChat::stop()
     this->running_ = false;
     this->setLive(false);
     this->impl_.reset();
+    this->roomId_.clear();
+    this->liveTitle_.clear();
+    this->statusText_.clear();
 }
 
 bool TikTokLiveChat::isLive() const

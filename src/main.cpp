@@ -219,5 +219,21 @@ int main(int argc, char **argv)
 
         runGui(a, *paths, settings, args, updates);
     }
+
+    if (g_prevMessageHandler != nullptr)
+    {
+        qInstallMessageHandler(g_prevMessageHandler);
+        g_prevMessageHandler = nullptr;
+    }
+    {
+        QMutexLocker lock(&g_logFileMutex);
+        if (g_logFile != nullptr)
+        {
+            g_logFile->close();
+            delete g_logFile;
+            g_logFile = nullptr;
+        }
+    }
+
     return 0;
 }

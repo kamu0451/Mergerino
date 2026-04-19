@@ -85,6 +85,13 @@ public:
     static QString messageKey(const MessagePtr &message,
                               MessagePlatform platform);
 
+    /// Returns the number of milliseconds the caller should wait before
+    /// attempting another send, given the last send time, the current time,
+    /// and the platform's minimum interval. Returns 0 if a send is allowed
+    /// immediately (including when lastSendMs == 0 meaning "never sent").
+    static qint64 sendWaitMs(qint64 lastSendMs, qint64 nowMs,
+                             qint64 intervalMs);
+
 private:
     void initializeSources();
     void connectSourceSignals(const ChannelPtr &source, MessagePlatform platform,

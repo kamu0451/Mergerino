@@ -198,6 +198,38 @@ TEST(MergedChannelHelpers, messageKeyIdDominatesContent)
               MergedChannel::messageKey(msgB, MessagePlatform::AnyOrTwitch));
 }
 
+// ---------- sendWaitMs ----------
+
+TEST(MergedChannelHelpers, sendWaitMsReturnsZeroOnFirstSend)
+{
+    // lastSendMs == 0 is the "never sent" sentinel; must not throttle.
+    EXPECT_EQ(MergedChannel::sendWaitMs(0, 1'000'000, 1500), 0);
+    EXPECT_EQ(MergedChannel::sendWaitMs(-1, 1'000'000, 1500), 0);
+}
+
+TEST(MergedChannelHelpers, sendWaitMsReturnsZeroWhenIntervalElapsed)
+{
+    EXPECT_EQ(MergedChannel::sendWaitMs(1000, 2500, 1500), 0);
+    EXPECT_EQ(MergedChannel::sendWaitMs(1000, 3000, 1500), 0);  // well past
+}
+
+TEST(MergedChannelHelpers, sendWaitMsReturnsRemainingWaitInsideInterval)
+{
+    // Sent 500ms ago, 1500ms interval - 1000ms left.
+    EXPECT_EQ(MergedChannel::sendWaitMs(1000, 1500, 1500), 1000);
+    // Sent 1ms ago - nearly full interval left.
+    EXPECT_EQ(MergedChannel::sendWaitMs(1000, 1001, 1500), 1499);
+    // Sent at the exact same millisecond - full interval.
+    EXPECT_EQ(MergedChannel::sendWaitMs(1000, 1000, 1500), 1500);
+}
+
+TEST(MergedChannelHelpers, sendWaitMsTreatsZeroIntervalAsPermissive)
+{
+    // No configured interval means no throttle.
+    EXPECT_EQ(MergedChannel::sendWaitMs(1000, 1001, 0), 0);
+    EXPECT_EQ(MergedChannel::sendWaitMs(1000, 1000, -1), 0);
+}
+
 // ---------- MergedChannelConfig ----------
 
 TEST(MergedChannelConfig, displayNamePrefersTabNameWhenSet)

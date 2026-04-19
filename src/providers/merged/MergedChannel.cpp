@@ -234,12 +234,12 @@ void MergedChannel::sendMessage(const QString &message)
         {
             unavailablePlatforms.append("Twitch");
         }
-        else if (now - this->lastTwitchSendMs_ < TWITCH_SEND_INTERVAL_MS)
+        else if (const auto wait = sendWaitMs(this->lastTwitchSendMs_, now,
+                                              TWITCH_SEND_INTERVAL_MS);
+                 wait > 0)
         {
             throttledPlatforms.append("Twitch");
-            nextAllowedMs = std::max(
-                nextAllowedMs,
-                this->lastTwitchSendMs_ + TWITCH_SEND_INTERVAL_MS - now);
+            nextAllowedMs = std::max(nextAllowedMs, wait);
         }
         else
         {
@@ -255,12 +255,12 @@ void MergedChannel::sendMessage(const QString &message)
         {
             unavailablePlatforms.append("Kick");
         }
-        else if (now - this->lastKickSendMs_ < KICK_SEND_INTERVAL_MS)
+        else if (const auto wait = sendWaitMs(this->lastKickSendMs_, now,
+                                              KICK_SEND_INTERVAL_MS);
+                 wait > 0)
         {
             throttledPlatforms.append("Kick");
-            nextAllowedMs = std::max(
-                nextAllowedMs,
-                this->lastKickSendMs_ + KICK_SEND_INTERVAL_MS - now);
+            nextAllowedMs = std::max(nextAllowedMs, wait);
         }
         else
         {
@@ -1081,6 +1081,21 @@ EmotePtr MergedChannel::platformBadge(MessagePlatform platform)
     auto badge = cachedOrMakeEmotePtr(std::move(emote), cache);
     cache[badge->name] = badge;
     return badge;
+}
+
+qint64 MergedChannel::sendWaitMs(qint64 lastSendMs, qint64 nowMs,
+                                 qint64 intervalMs)
+{
+    if (lastSendMs <= 0 || intervalMs <= 0)
+    {
+        return 0;
+    }
+    const qint64 elapsed = nowMs - lastSendMs;
+    if (elapsed >= intervalMs)
+    {
+        return 0;
+    }
+    return intervalMs - elapsed;
 }
 
 QString MergedChannel::messageKey(const MessagePtr &message,

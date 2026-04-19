@@ -554,6 +554,19 @@ void MergedChannel::initializeSources()
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->liveStatusChanged, [this] {
                 this->youtubeLive_ = this->youtubeLiveChat_->isLive();
+                if (this->youtubeLive_)
+                {
+                    if (!this->youtubeLiveJoinAnnounced_)
+                    {
+                        this->announceJoinedLiveChat(
+                            MessagePlatform::YouTube,
+                            this->youtubeLiveChat_->liveTitle());
+                    }
+                }
+                else
+                {
+                    this->youtubeLiveJoinAnnounced_ = false;
+                }
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
             });
@@ -916,6 +929,10 @@ void MergedChannel::announceJoinedLiveChat(MessagePlatform platform,
     else if (platform == MessagePlatform::TikTok)
     {
         this->tiktokLiveJoinAnnounced_ = true;
+    }
+    else if (platform == MessagePlatform::YouTube)
+    {
+        this->youtubeLiveJoinAnnounced_ = true;
     }
 
     this->addSystemStatusMessage(message);

@@ -110,7 +110,6 @@ private:
 
     std::shared_ptr<bool> lifetimeGuard_;
     std::unordered_set<QString> seenMessageIds_;
-    QString joinedLiveVideoId_;
 };
 
 }  // namespace chatterino

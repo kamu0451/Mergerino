@@ -148,6 +148,7 @@ private:
     bool twitchLiveJoinAnnounced_{false};
     bool kickLiveJoinAnnounced_{false};
     bool tiktokLiveJoinAnnounced_{false};
+    bool youtubeLiveJoinAnnounced_{false};
 };
 
 }  // namespace chatterino

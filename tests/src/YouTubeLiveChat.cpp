@@ -258,3 +258,25 @@ TEST(YouTubeLiveChat, extractLiveStreamTitleReturnsEmptyOnMissingShape)
     EXPECT_TRUE(
         YouTubeLiveChat::extractLiveStreamTitle(QJsonObject{}).isEmpty());
 }
+
+TEST(YouTubeLiveChat, computeBackoffDelayBaseAtZeroOrOne)
+{
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(0), 3000);
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(-1), 3000);
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(1), 3000);
+}
+
+TEST(YouTubeLiveChat, computeBackoffDelayDoublesPerFailure)
+{
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(2), 6000);
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(3), 12000);
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(4), 24000);
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(5), 48000);
+}
+
+TEST(YouTubeLiveChat, computeBackoffDelayCapsAt60Seconds)
+{
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(6), 60000);
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(10), 60000);
+    EXPECT_EQ(YouTubeLiveChat::computeBackoffDelay(100), 60000);
+}

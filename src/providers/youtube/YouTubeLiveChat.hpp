@@ -48,6 +48,7 @@ public:
     static QString extractLiveChatContinuation(
         const QJsonObject &liveChatRenderer);
     static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
+    static int computeBackoffDelay(int failureStreak);
 
 private:
     void resolveVideoId();
@@ -93,6 +94,11 @@ private:
     QString liveTitle_;
 
     unsigned viewerCount_{0};
+
+    // Consecutive HTTP failures on the live-chat poll / fetch path. Used to
+    // back off exponentially so a YouTube-side outage doesn't drive a 3s
+    // retry loop indefinitely. Reset on any successful response.
+    int pollFailureStreak_{0};
 
     bool running_{false};
     bool live_{false};

@@ -57,6 +57,7 @@ QJsonObject makeYoutubeClientContext(const QString &clientVersion)
 const QString YOUTUBE_BOOTSTRAP_URL = "https://www.youtube.com/embed/jNQXAC9IVRw";
 const QColor YOUTUBE_PLATFORM_ACCENT(255, 48, 64, 60);
 constexpr int YOUTUBE_RECONNECT_DELAY_MS = 3000;
+constexpr int YOUTUBE_RECONNECT_MAX_DELAY_MS = 60000;
 
 std::vector<std::pair<QByteArray, QByteArray>> youtubeHeaders()
 {
@@ -615,6 +616,7 @@ void YouTubeLiveChat::fetchLiveChatPage()
 
             this->liveTitle_ = extractLiveStreamTitle(json);
             this->failureReported_ = false;
+            this->pollFailureStreak_ = 0;
             this->activePollStreak_ = 0;
             if (this->joinedLiveVideoId_ != this->videoId_)
             {
@@ -651,10 +653,17 @@ void YouTubeLiveChat::fetchLiveChatPage()
                 return;
             }
 
-            this->setStatusText("Couldn't load the YouTube live chat page.",
-                                !this->failureReported_);
+            this->pollFailureStreak_ += 1;
+            const int delay =
+                YouTubeLiveChat::computeBackoffDelay(this->pollFailureStreak_);
+            this->setStatusText(
+                QString("Couldn't load the YouTube live chat page "
+                        "(retry %1 in %2s).")
+                    .arg(this->pollFailureStreak_)
+                    .arg(delay / 1000),
+                !this->failureReported_);
             this->failureReported_ = true;
-            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
+            this->scheduleResolve(delay);
         })
         .execute();
 }
@@ -829,6 +838,7 @@ void YouTubeLiveChat::poll()
             }
 
             this->failureReported_ = false;
+            this->pollFailureStreak_ = 0;
             this->setLive(true);
 
             // Stagger the batch so messages flow in rather than landing in a
@@ -873,11 +883,17 @@ void YouTubeLiveChat::poll()
             this->setLive(false);
             this->continuation_.clear();
             this->activePollStreak_ = 0;
+            this->pollFailureStreak_ += 1;
+            const int delay =
+                YouTubeLiveChat::computeBackoffDelay(this->pollFailureStreak_);
             this->setStatusText(
-                "YouTube live chat polling failed. Reconnecting.",
+                QString("YouTube live chat polling failed "
+                        "(retry %1 in %2s).")
+                    .arg(this->pollFailureStreak_)
+                    .arg(delay / 1000),
                 !this->failureReported_);
             this->failureReported_ = true;
-            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
+            this->scheduleResolve(delay);
         })
         .execute();
 }
@@ -1132,6 +1148,24 @@ bool YouTubeLiveChat::shouldResolveLiveStreamFromSource() const
 QString YouTubeLiveChat::resolvedSource() const
 {
     return normalizeSource(this->streamUrl_);
+}
+
+int YouTubeLiveChat::computeBackoffDelay(int failureStreak)
+{
+    // After N consecutive HTTP failures, wait 3s * 2^(N-1) before retrying,
+    // capped at 60s. The sequence is 3s, 6s, 12s, 24s, 48s, 60s, 60s...
+    if (failureStreak <= 0)
+    {
+        return YOUTUBE_RECONNECT_DELAY_MS;
+    }
+    const int shift = std::min(failureStreak - 1, 5);
+    const long long scaled =
+        static_cast<long long>(YOUTUBE_RECONNECT_DELAY_MS) << shift;
+    if (scaled >= YOUTUBE_RECONNECT_MAX_DELAY_MS)
+    {
+        return YOUTUBE_RECONNECT_MAX_DELAY_MS;
+    }
+    return static_cast<int>(scaled);
 }
 
 QString YouTubeLiveChat::maybeExtractVideoId(const QString &urlString)

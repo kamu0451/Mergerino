@@ -596,8 +596,11 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
 
     if (kind == QStringLiteral("ws-open"))
     {
-        this->setLive(true);
-        this->setStatusText(QStringLiteral("Joined TikTok live chat"), true);
+        // A WebSocket opening tells us nothing about whether this user is
+        // actually live - TikTok opens im-ws sockets on offline profile
+        // pages too. Wait for alive_state == 2 from check_alive or an
+        // actual decoded chat event before treating the room as live.
+        this->setStatusText(QStringLiteral("Connected to TikTok"));
         return;
     }
     if (kind == QStringLiteral("ws-close"))
@@ -630,6 +633,15 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
             return;
         }
         const auto frame = tiktok::decodeWebcastPushFrame(raw);
+        const bool hasLiveContent =
+            !frame.chatMessages.empty() || !frame.likeEvents.empty() ||
+            !frame.memberEvents.empty() || !frame.socialEvents.empty() ||
+            !frame.giftEvents.empty();
+        if (hasLiveContent)
+        {
+            // Fallback live signal when check_alive hasn't fired yet.
+            this->setLive(true);
+        }
         for (const auto &chat : frame.chatMessages)
         {
             this->messageReceived.invoke(this->buildChatMessage(chat));

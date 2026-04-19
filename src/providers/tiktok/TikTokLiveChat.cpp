@@ -3,6 +3,7 @@
 
 #include "providers/tiktok/TikTokLiveChat.hpp"
 
+#include "common/QLogging.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
@@ -637,6 +638,7 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         // actually live - TikTok opens im-ws sockets on offline profile
         // pages too. Wait for alive_state == 2 from check_alive or an
         // actual decoded chat event before treating the room as live.
+        qCDebug(chatterinoTikTok) << "ws-open for" << this->username_;
         this->setStatusText(QStringLiteral("Connected to TikTok"));
         if (this->impl_)
         {
@@ -666,7 +668,11 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
     }
     if (kind == QStringLiteral("room-info"))
     {
-        this->handleRoomInfo(obj.value(QStringLiteral("data")).toObject());
+        const auto data = obj.value(QStringLiteral("data")).toObject();
+        qCDebug(chatterinoTikTok).nospace()
+            << "room-info: "
+            << QJsonDocument(data).toJson(QJsonDocument::Compact);
+        this->handleRoomInfo(data);
         return;
     }
     if (kind == QStringLiteral("ws-binary"))

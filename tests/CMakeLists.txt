@@ -67,6 +67,7 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/YouTubeLiveChat.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/MergedChannel.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/GuardedCallback.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/ViewerCountDeltaTracker.cpp
 
     ${CMAKE_CURRENT_LIST_DIR}/src/lib/Snapshot.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/lib/Snapshot.hpp

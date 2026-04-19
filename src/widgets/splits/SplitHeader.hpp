@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "util/ViewerCountDeltaTracker.hpp"
 #include "widgets/BaseWidget.hpp"
 #include "widgets/TooltipWidget.hpp"
 
@@ -72,6 +73,10 @@ private:
     bool isLive_{false};
     QString thumbnail_;
     QElapsedTimer lastThumbnail_;
+    // Tracks viewer-count history for this split so the +/-% delta in the
+    // header works for Twitch and Kick single-platform tabs, not just
+    // merged tabs.
+    mutable ViewerCountDeltaTracker viewerDeltaTracker_;
     std::chrono::steady_clock::time_point lastReloadedChannelEmotes_;
     std::chrono::steady_clock::time_point lastReloadedSubEmotes_;
 

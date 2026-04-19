@@ -662,6 +662,8 @@ set(SOURCE_FILES
         util/Variant.hpp
         util/VectorMessageSink.cpp
         util/VectorMessageSink.hpp
+        util/ViewerCountDeltaTracker.cpp
+        util/ViewerCountDeltaTracker.hpp
         util/WidgetHelpers.cpp
         util/WidgetHelpers.hpp
         util/WindowsHelper.cpp

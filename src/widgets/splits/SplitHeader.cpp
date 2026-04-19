@@ -1034,10 +1034,31 @@ void SplitHeader::updateChannelText()
             }
             this->tooltipText_ = formatTooltip(*streamStatus, this->thumbnail_);
             title += formatTitle(*streamStatus, *getSettings());
+            if (getSettings()->headerViewerCount &&
+                streamStatus->viewerCount > 0)
+            {
+                const auto delta =
+                    this->viewerDeltaTracker_.sampleAndCompute(
+                        streamStatus->viewerCount,
+                        QDateTime::currentMSecsSinceEpoch(),
+                        getSettings()
+                            ->mergedViewerDeltaWindowMinutes.getValue());
+                if (delta && std::abs(delta->percent) >= 0.1)
+                {
+                    deltaText = QString(" (%1%2% / %3 min)")
+                                    .arg(delta->percent >= 0 ? "+" : "")
+                                    .arg(delta->percent, 0, 'f', 1)
+                                    .arg(delta->spanMinutes);
+                    deltaColor = delta->percent >= 0
+                                     ? QColor(0x4c, 0xaf, 0x50)
+                                     : QColor(0xef, 0x53, 0x50);
+                }
+            }
         }
         else
         {
             this->tooltipText_ = formatOfflineTooltip(*streamStatus);
+            this->viewerDeltaTracker_.clear();
         }
     }
     else if (auto *kickChannel = dynamic_cast<KickChannel *>(channel.get()))
@@ -1066,10 +1087,30 @@ void SplitHeader::updateChannelText()
             }
             this->tooltipText_ = formatTooltip(twitch, this->thumbnail_, true);
             title += formatTitle(twitch, *getSettings());
+            if (getSettings()->headerViewerCount && stream.viewerCount > 0)
+            {
+                const auto delta =
+                    this->viewerDeltaTracker_.sampleAndCompute(
+                        static_cast<unsigned>(stream.viewerCount),
+                        QDateTime::currentMSecsSinceEpoch(),
+                        getSettings()
+                            ->mergedViewerDeltaWindowMinutes.getValue());
+                if (delta && std::abs(delta->percent) >= 0.1)
+                {
+                    deltaText = QString(" (%1%2% / %3 min)")
+                                    .arg(delta->percent >= 0 ? "+" : "")
+                                    .arg(delta->percent, 0, 'f', 1)
+                                    .arg(delta->spanMinutes);
+                    deltaColor = delta->percent >= 0
+                                     ? QColor(0x4c, 0xaf, 0x50)
+                                     : QColor(0xef, 0x53, 0x50);
+                }
+            }
         }
         else
         {
             this->tooltipText_ = formatOfflineTooltip(twitch);
+            this->viewerDeltaTracker_.clear();
         }
     }
     else if (auto *mergedChannel = dynamic_cast<MergedChannel *>(channel.get()))

@@ -93,8 +93,6 @@ private:
                               MessagePlatform platform);
     std::shared_ptr<Message> createMergedMessage(const MessagePtr &source,
                                                  MessagePlatform platform) const;
-    void addYouTubeMessage(const MessagePtr &message);
-    void addTikTokMessage(const MessagePtr &message);
     void addSystemStatusMessage(const MessagePtr &message);
     void addSystemStatusMessage(const QString &message);
     void announceJoinedLiveChat(MessagePlatform platform,

@@ -489,7 +489,9 @@ void MergedChannel::initializeSources()
             std::make_unique<YouTubeLiveChat>(this->config_.youtubeStreamUrl);
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->messageReceived,
-            [this](const MessagePtr &message) { this->addYouTubeMessage(message); });
+            [this](const MessagePtr &message) {
+                this->appendMergedMessage(message, MessagePlatform::YouTube);
+            });
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->sourceResolved, [this](const QString &source) {
                 if (!source.isEmpty())
@@ -524,7 +526,7 @@ void MergedChannel::initializeSources()
         this->tiktokConnections_.managedConnect(
             this->tiktokLiveChat_->messageReceived,
             [this](const MessagePtr &message) {
-                this->addTikTokMessage(message);
+                this->appendMergedMessage(message, MessagePlatform::TikTok);
             });
         this->tiktokConnections_.managedConnect(
             this->tiktokLiveChat_->sourceResolved,
@@ -814,64 +816,6 @@ std::shared_ptr<Message> MergedChannel::createMergedMessage(
     }
 
     return merged;
-}
-
-void MergedChannel::addYouTubeMessage(const MessagePtr &message)
-{
-    const auto key = messageKey(message, MessagePlatform::YouTube);
-    if (!key.isEmpty() && this->mirroredMessages_.contains(key))
-    {
-        return;
-    }
-
-    auto merged = this->createMergedMessage(message, MessagePlatform::YouTube);
-    if (!merged)
-    {
-        return;
-    }
-
-    if (!key.isEmpty())
-    {
-        this->insertMirror(key, merged);
-    }
-
-    const auto chatterName =
-        !merged->loginName.isEmpty() ? merged->loginName : merged->displayName;
-    if (!chatterName.isEmpty())
-    {
-        this->addRecentChatter(chatterName);
-    }
-
-    this->addMessage(merged, MessageContext::Repost);
-}
-
-void MergedChannel::addTikTokMessage(const MessagePtr &message)
-{
-    const auto key = messageKey(message, MessagePlatform::TikTok);
-    if (!key.isEmpty() && this->mirroredMessages_.contains(key))
-    {
-        return;
-    }
-
-    auto merged = this->createMergedMessage(message, MessagePlatform::TikTok);
-    if (!merged)
-    {
-        return;
-    }
-
-    if (!key.isEmpty())
-    {
-        this->insertMirror(key, merged);
-    }
-
-    const auto chatterName =
-        !merged->loginName.isEmpty() ? merged->loginName : merged->displayName;
-    if (!chatterName.isEmpty())
-    {
-        this->addRecentChatter(chatterName);
-    }
-
-    this->addMessage(merged, MessageContext::Repost);
 }
 
 bool MergedChannel::shouldMirrorSourceMessage(const MessagePtr &message)

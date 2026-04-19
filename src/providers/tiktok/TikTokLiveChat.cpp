@@ -12,6 +12,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QDir>
+#include <QFutureWatcher>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -19,7 +20,9 @@
 #include <QJsonValue>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QThreadPool>
 #include <QTimer>
+#include <QtConcurrent>
 
 #include <algorithm>
 #include <atomic>
@@ -101,6 +104,11 @@ struct TikTokLiveChat::Impl {
     // "Connecting..." forever.
     QTimer stuckConnectionTimer;
 
+    // Dedicated single-thread pool for offloading protobuf decode off the UI
+    // thread. Single-threaded on purpose: preserves frame ordering so chat
+    // messages don't show up reordered under bursty traffic.
+    QThreadPool decodePool;
+
     ~Impl()
     {
         if (webview)
@@ -174,6 +182,7 @@ void TikTokLiveChat::start()
                      [this]() { this->flushPendingJoins(); });
     this->impl_->stuckConnectionTimer.setSingleShot(true);
     this->impl_->stuckConnectionTimer.setInterval(30000);
+    this->impl_->decodePool.setMaxThreadCount(1);
     QObject::connect(&this->impl_->stuckConnectionTimer, &QTimer::timeout,
                      [this]() {
                          if (!this->running_)
@@ -667,41 +676,72 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         {
             return;
         }
-        const QByteArray raw = QByteArray::fromBase64(base64.toLatin1());
+        QByteArray raw = QByteArray::fromBase64(base64.toLatin1());
         if (raw.isEmpty())
         {
             return;
         }
-        const auto frame = tiktok::decodeWebcastPushFrame(raw);
-        const bool hasLiveContent =
-            !frame.chatMessages.empty() || !frame.likeEvents.empty() ||
-            !frame.memberEvents.empty() || !frame.socialEvents.empty() ||
-            !frame.giftEvents.empty();
-        if (hasLiveContent)
+        if (!this->impl_)
         {
-            // Fallback live signal when check_alive hasn't fired yet.
-            this->setLive(true);
+            return;
         }
-        for (const auto &chat : frame.chatMessages)
-        {
-            this->messageReceived.invoke(this->buildChatMessage(chat));
-        }
-        for (const auto &ev : frame.likeEvents)
-        {
-            this->handleLike(ev);
-        }
-        for (const auto &ev : frame.memberEvents)
-        {
-            this->handleMember(ev);
-        }
-        for (const auto &ev : frame.socialEvents)
-        {
-            this->handleSocial(ev);
-        }
-        for (const auto &ev : frame.giftEvents)
-        {
-            this->handleGift(ev);
-        }
+
+        // Protobuf decode can get expensive on busy streams (100+ likes/s).
+        // Run it on the dedicated single-thread decode pool and marshal the
+        // result back to the UI thread via QFutureWatcher so we only touch
+        // UI state here.
+        auto future = QtConcurrent::run(
+            &this->impl_->decodePool, [bytes = std::move(raw)]() {
+                return tiktok::decodeWebcastPushFrame(bytes);
+            });
+
+        auto *watcher = new QFutureWatcher<tiktok::DecodedFrame>();
+        std::weak_ptr<bool> guard = this->lifetimeGuard_;
+        QObject::connect(
+            watcher, &QFutureWatcher<tiktok::DecodedFrame>::finished,
+            [this, watcher, guard]() {
+                auto keepalive = guard.lock();
+                watcher->deleteLater();
+                if (!keepalive || !this->running_)
+                {
+                    return;
+                }
+                this->processDecodedFrame(watcher->result());
+            });
+        watcher->setFuture(future);
+    }
+}
+
+void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
+{
+    const bool hasLiveContent =
+        !frame.chatMessages.empty() || !frame.likeEvents.empty() ||
+        !frame.memberEvents.empty() || !frame.socialEvents.empty() ||
+        !frame.giftEvents.empty();
+    if (hasLiveContent)
+    {
+        // Fallback live signal when check_alive hasn't fired yet.
+        this->setLive(true);
+    }
+    for (const auto &chat : frame.chatMessages)
+    {
+        this->messageReceived.invoke(this->buildChatMessage(chat));
+    }
+    for (const auto &ev : frame.likeEvents)
+    {
+        this->handleLike(ev);
+    }
+    for (const auto &ev : frame.memberEvents)
+    {
+        this->handleMember(ev);
+    }
+    for (const auto &ev : frame.socialEvents)
+    {
+        this->handleSocial(ev);
+    }
+    for (const auto &ev : frame.giftEvents)
+    {
+        this->handleGift(ev);
     }
 }
 

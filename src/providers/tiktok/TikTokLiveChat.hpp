@@ -20,6 +20,7 @@ struct DecodedLikeEvent;
 struct DecodedMemberEvent;
 struct DecodedSocialEvent;
 struct DecodedGiftEvent;
+struct DecodedFrame;
 }  // namespace tiktok
 
 // Reads a TikTok LIVE room by hosting a hidden WebView2 that runs TikTok's
@@ -79,6 +80,7 @@ private:
     void handleWebMessage(const QString &json);
     void handleRoomInfo(const QJsonObject &root);
     void emitSystemMessage(const QString &text);
+    void processDecodedFrame(const tiktok::DecodedFrame &frame);
     MessagePtr buildChatMessage(const tiktok::DecodedChatMessage &chat) const;
     MessagePtr buildActivityMessage(const QString &text,
                                     const QString &loginName = {}) const;

@@ -960,86 +960,66 @@ void MergedChannel::addSystemStatusMessage(const MessagePtr &message)
 
 void MergedChannel::refreshStatusText()
 {
+    // One line per enabled platform, same shape on all four:
+    //   <Platform> — <state>[, N viewers]
+    // Keeps the tooltip scannable; no per-platform special-casing.
+    auto formatLine = [](const char *platform, bool live,
+                         unsigned viewers) -> QString {
+        if (live)
+        {
+            if (viewers > 0)
+            {
+                return QString("%1 \u2014 live, %2 viewers")
+                    .arg(platform, localizeNumbers(viewers));
+            }
+            return QString("%1 \u2014 live").arg(platform);
+        }
+        return QString("%1 \u2014 offline").arg(platform);
+    };
+
     QStringList lines;
 
     if (this->config_.twitchEnabled)
     {
-        QString status = this->twitchLive_ ? QStringLiteral("live")
-                                           : QStringLiteral("offline");
+        unsigned viewers = 0;
         if (this->twitchLive_ && this->twitchChannel_)
         {
             if (auto *twitch =
                     dynamic_cast<TwitchChannel *>(this->twitchChannel_.get()))
             {
-                const auto viewers =
-                    twitch->accessStreamStatus()->viewerCount;
-                if (viewers > 0)
-                {
-                    status = QStringLiteral("live - %1 viewers")
-                                 .arg(localizeNumbers(viewers));
-                }
+                viewers = twitch->accessStreamStatus()->viewerCount;
             }
         }
-        lines.append(QString("Twitch: %1 (%2)")
-                         .arg(this->config_.effectiveTwitchChannelName(),
-                              status));
+        lines.append(formatLine("Twitch", this->twitchLive_, viewers));
     }
     if (this->config_.kickEnabled)
     {
-        QString status = this->kickLive_ ? QStringLiteral("live")
-                                         : QStringLiteral("offline");
+        unsigned viewers = 0;
         if (this->kickLive_ && this->kickChannel_)
         {
             if (auto *kick =
                     dynamic_cast<KickChannel *>(this->kickChannel_.get()))
             {
-                const auto viewers = kick->streamData().viewerCount;
-                if (viewers > 0)
-                {
-                    status = QStringLiteral("live - %1 viewers")
-                                 .arg(localizeNumbers(viewers));
-                }
+                viewers = static_cast<unsigned>(kick->streamData().viewerCount);
             }
         }
-        lines.append(QString("Kick: %1 (%2)")
-                         .arg(this->config_.effectiveKickChannelName(),
-                              status));
+        lines.append(formatLine("Kick", this->kickLive_, viewers));
     }
     if (this->config_.youtubeEnabled)
     {
-        QString status = this->youtubeLive_ ? QStringLiteral("live")
-                                            : QStringLiteral("offline");
-        if (this->youtubeLive_ && this->youtubeLiveChat_)
-        {
-            const auto viewers = this->youtubeLiveChat_->viewerCount();
-            if (viewers > 0)
-            {
-                status = QStringLiteral("live - %1 viewers")
-                             .arg(localizeNumbers(viewers));
-            }
-        }
-        lines.append(QString("YouTube: %1").arg(status));
+        const unsigned viewers =
+            (this->youtubeLive_ && this->youtubeLiveChat_)
+                ? this->youtubeLiveChat_->viewerCount()
+                : 0U;
+        lines.append(formatLine("YouTube", this->youtubeLive_, viewers));
     }
     if (this->config_.tiktokEnabled)
     {
-        QString tiktokStatus =
-            this->tiktokLive_ ? QStringLiteral("live")
-                              : QStringLiteral("waiting for live chat");
-        if (this->tiktokLive_ && this->tiktokLiveChat_)
-        {
-            const auto viewers = this->tiktokLiveChat_->viewerCount();
-            if (viewers > 0)
-            {
-                tiktokStatus = QStringLiteral("live - %1 viewers")
-                                   .arg(localizeNumbers(viewers));
-            }
-        }
-        else if (this->tiktokLiveChat_ &&
-                 !this->tiktokLiveChat_->statusText().trimmed().isEmpty())
-        {
-            tiktokStatus = this->tiktokLiveChat_->statusText();
-        }
-        lines.append(QString("TikTok: %1").arg(tiktokStatus));
+        const unsigned viewers =
+            (this->tiktokLive_ && this->tiktokLiveChat_)
+                ? this->tiktokLiveChat_->viewerCount()
+                : 0U;
+        lines.append(formatLine("TikTok", this->tiktokLive_, viewers));
     }
 
     this->tooltipText_ = lines.join("<br>");

@@ -40,8 +40,19 @@ constexpr qint64 VIEWER_DELTA_MIN_SPAN_MS = 60 * 1000;
 // a stable stream would only ever have one sample and the delta would
 // never appear.
 constexpr qint64 VIEWER_DELTA_SAMPLE_INTERVAL_MS = 30 * 1000;
+// Client-side outbound throttle. Twitch allows 20 msg / 30s for regular
+// users (≈ 1500ms/msg); Kick is undocumented, so use a conservative 1s
+// floor. Mods on either platform can technically send faster; we trade a
+// small fraction of their upper bound for a simpler, safer floor.
+constexpr qint64 TWITCH_SEND_INTERVAL_MS = 1500;
+constexpr qint64 KICK_SEND_INTERVAL_MS = 1000;
 constexpr int VIEWER_DELTA_WINDOW_MIN_MINUTES = 1;
 constexpr int VIEWER_DELTA_WINDOW_MAX_MINUTES = 60;
+// Hard cap on stored samples. Time-based pruning alone doesn't bound growth
+// when the viewer count changes between polls (the sample-interval guard is
+// OR'd, not AND'd, with the "count changed" check), so a bouncing count on
+// a frequent caller can theoretically grow the deque without limit.
+constexpr std::size_t VIEWER_DELTA_MAX_ENTRIES = 200;
 
 QString normalizeChannelName(QString value)
 {
@@ -210,40 +221,72 @@ void MergedChannel::sendMessage(const QString &message)
         return;
     }
 
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
     bool sent = false;
     QStringList unavailablePlatforms;
+    QStringList throttledPlatforms;
+    qint64 nextAllowedMs = 0;
 
     if (this->config_.twitchEnabled && this->twitchChannel_)
     {
-        if (getApp()->getAccounts()->twitch.isLoggedIn())
+        if (!getApp()->getAccounts()->twitch.isLoggedIn())
         {
-            this->twitchChannel_->sendMessage(message);
-            sent = true;
+            unavailablePlatforms.append("Twitch");
+        }
+        else if (const auto wait = sendWaitMs(this->lastTwitchSendMs_, now,
+                                              TWITCH_SEND_INTERVAL_MS);
+                 wait > 0)
+        {
+            throttledPlatforms.append("Twitch");
+            nextAllowedMs = std::max(nextAllowedMs, wait);
         }
         else
         {
-            unavailablePlatforms.append("Twitch");
+            this->twitchChannel_->sendMessage(message);
+            this->lastTwitchSendMs_ = now;
+            sent = true;
         }
     }
 
     if (this->config_.kickEnabled && this->kickChannel_)
     {
-        if (getApp()->getAccounts()->kick.isLoggedIn())
-        {
-            this->kickChannel_->sendMessage(message);
-            sent = true;
-        }
-        else
+        if (!getApp()->getAccounts()->kick.isLoggedIn())
         {
             unavailablePlatforms.append("Kick");
         }
+        else if (const auto wait = sendWaitMs(this->lastKickSendMs_, now,
+                                              KICK_SEND_INTERVAL_MS);
+                 wait > 0)
+        {
+            throttledPlatforms.append("Kick");
+            nextAllowedMs = std::max(nextAllowedMs, wait);
+        }
+        else
+        {
+            this->kickChannel_->sendMessage(message);
+            this->lastKickSendMs_ = now;
+            sent = true;
+        }
     }
 
-    if (!sent && !unavailablePlatforms.isEmpty())
+    if (!sent)
     {
-        this->addSystemStatusMessage(
-            QString("Log in to %1 to send merged chat.")
-                .arg(unavailablePlatforms.join(" or ")));
+        if (!throttledPlatforms.isEmpty())
+        {
+            // Round up so a 1ms remainder still shows as "1s".
+            const qint64 seconds = (nextAllowedMs + 999) / 1000;
+            this->addSystemStatusMessage(
+                QString("Sending too fast on %1 - wait %2s.")
+                    .arg(throttledPlatforms.join(" and "))
+                    .arg(seconds));
+        }
+        else if (!unavailablePlatforms.isEmpty())
+        {
+            this->addSystemStatusMessage(
+                QString("Log in to %1 to send merged chat.")
+                    .arg(unavailablePlatforms.join(" or ")));
+        }
     }
 }
 
@@ -389,12 +432,36 @@ MergedChannel::viewerCountDeltaPercent() const
     {
         this->viewerCountHistory_.pop_front();
     }
+
+    // Discontinuity guard: merged sources connect sequentially at
+    // startup, so the first sample can be tiny (Twitch-only, 5 viewers)
+    // and the current sample is the full multi-platform total (60+),
+    // producing bogus +1000% deltas. If current and oldest disagree by
+    // 3x or more, the window spans two regimes - drop it and restart.
+    if (!this->viewerCountHistory_.empty() && current > 0)
+    {
+        const auto oldestCount = this->viewerCountHistory_.front().second;
+        if (oldestCount > 0)
+        {
+            const unsigned hi = std::max(current, oldestCount);
+            const unsigned lo = std::min(current, oldestCount);
+            if (static_cast<double>(hi) > static_cast<double>(lo) * 3.0)
+            {
+                this->viewerCountHistory_.clear();
+            }
+        }
+    }
+
     if (this->viewerCountHistory_.empty() ||
         this->viewerCountHistory_.back().second != current ||
         now - this->viewerCountHistory_.back().first >=
             VIEWER_DELTA_SAMPLE_INTERVAL_MS)
     {
         this->viewerCountHistory_.emplace_back(now, current);
+        while (this->viewerCountHistory_.size() > VIEWER_DELTA_MAX_ENTRIES)
+        {
+            this->viewerCountHistory_.pop_front();
+        }
     }
 
     if (this->viewerCountHistory_.size() < 2)
@@ -489,7 +556,9 @@ void MergedChannel::initializeSources()
             std::make_unique<YouTubeLiveChat>(this->config_.youtubeStreamUrl);
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->messageReceived,
-            [this](const MessagePtr &message) { this->addYouTubeMessage(message); });
+            [this](const MessagePtr &message) {
+                this->appendMergedMessage(message, MessagePlatform::YouTube);
+            });
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->sourceResolved, [this](const QString &source) {
                 if (!source.isEmpty())
@@ -505,6 +574,19 @@ void MergedChannel::initializeSources()
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->liveStatusChanged, [this] {
                 this->youtubeLive_ = this->youtubeLiveChat_->isLive();
+                if (this->youtubeLive_)
+                {
+                    if (!this->youtubeLiveJoinAnnounced_)
+                    {
+                        this->announceJoinedLiveChat(
+                            MessagePlatform::YouTube,
+                            this->youtubeLiveChat_->liveTitle());
+                    }
+                }
+                else
+                {
+                    this->youtubeLiveJoinAnnounced_ = false;
+                }
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
             });
@@ -524,7 +606,7 @@ void MergedChannel::initializeSources()
         this->tiktokConnections_.managedConnect(
             this->tiktokLiveChat_->messageReceived,
             [this](const MessagePtr &message) {
-                this->addTikTokMessage(message);
+                this->appendMergedMessage(message, MessagePlatform::TikTok);
             });
         this->tiktokConnections_.managedConnect(
             this->tiktokLiveChat_->sourceResolved,
@@ -816,64 +898,6 @@ std::shared_ptr<Message> MergedChannel::createMergedMessage(
     return merged;
 }
 
-void MergedChannel::addYouTubeMessage(const MessagePtr &message)
-{
-    const auto key = messageKey(message, MessagePlatform::YouTube);
-    if (!key.isEmpty() && this->mirroredMessages_.contains(key))
-    {
-        return;
-    }
-
-    auto merged = this->createMergedMessage(message, MessagePlatform::YouTube);
-    if (!merged)
-    {
-        return;
-    }
-
-    if (!key.isEmpty())
-    {
-        this->insertMirror(key, merged);
-    }
-
-    const auto chatterName =
-        !merged->loginName.isEmpty() ? merged->loginName : merged->displayName;
-    if (!chatterName.isEmpty())
-    {
-        this->addRecentChatter(chatterName);
-    }
-
-    this->addMessage(merged, MessageContext::Repost);
-}
-
-void MergedChannel::addTikTokMessage(const MessagePtr &message)
-{
-    const auto key = messageKey(message, MessagePlatform::TikTok);
-    if (!key.isEmpty() && this->mirroredMessages_.contains(key))
-    {
-        return;
-    }
-
-    auto merged = this->createMergedMessage(message, MessagePlatform::TikTok);
-    if (!merged)
-    {
-        return;
-    }
-
-    if (!key.isEmpty())
-    {
-        this->insertMirror(key, merged);
-    }
-
-    const auto chatterName =
-        !merged->loginName.isEmpty() ? merged->loginName : merged->displayName;
-    if (!chatterName.isEmpty())
-    {
-        this->addRecentChatter(chatterName);
-    }
-
-    this->addMessage(merged, MessageContext::Repost);
-}
-
 bool MergedChannel::shouldMirrorSourceMessage(const MessagePtr &message)
 {
     if (!message)
@@ -926,6 +950,10 @@ void MergedChannel::announceJoinedLiveChat(MessagePlatform platform,
     {
         this->tiktokLiveJoinAnnounced_ = true;
     }
+    else if (platform == MessagePlatform::YouTube)
+    {
+        this->youtubeLiveJoinAnnounced_ = true;
+    }
 
     this->addSystemStatusMessage(message);
 }
@@ -952,86 +980,66 @@ void MergedChannel::addSystemStatusMessage(const MessagePtr &message)
 
 void MergedChannel::refreshStatusText()
 {
+    // One line per enabled platform, same shape on all four:
+    //   <Platform> — <state>[, N viewers]
+    // Keeps the tooltip scannable; no per-platform special-casing.
+    auto formatLine = [](const char *platform, bool live,
+                         unsigned viewers) -> QString {
+        if (live)
+        {
+            if (viewers > 0)
+            {
+                return QString("%1 \u2014 live, %2 viewers")
+                    .arg(platform, localizeNumbers(viewers));
+            }
+            return QString("%1 \u2014 live").arg(platform);
+        }
+        return QString("%1 \u2014 offline").arg(platform);
+    };
+
     QStringList lines;
 
     if (this->config_.twitchEnabled)
     {
-        QString status = this->twitchLive_ ? QStringLiteral("live")
-                                           : QStringLiteral("offline");
+        unsigned viewers = 0;
         if (this->twitchLive_ && this->twitchChannel_)
         {
             if (auto *twitch =
                     dynamic_cast<TwitchChannel *>(this->twitchChannel_.get()))
             {
-                const auto viewers =
-                    twitch->accessStreamStatus()->viewerCount;
-                if (viewers > 0)
-                {
-                    status = QStringLiteral("live - %1 viewers")
-                                 .arg(localizeNumbers(viewers));
-                }
+                viewers = twitch->accessStreamStatus()->viewerCount;
             }
         }
-        lines.append(QString("Twitch: %1 (%2)")
-                         .arg(this->config_.effectiveTwitchChannelName(),
-                              status));
+        lines.append(formatLine("Twitch", this->twitchLive_, viewers));
     }
     if (this->config_.kickEnabled)
     {
-        QString status = this->kickLive_ ? QStringLiteral("live")
-                                         : QStringLiteral("offline");
+        unsigned viewers = 0;
         if (this->kickLive_ && this->kickChannel_)
         {
             if (auto *kick =
                     dynamic_cast<KickChannel *>(this->kickChannel_.get()))
             {
-                const auto viewers = kick->streamData().viewerCount;
-                if (viewers > 0)
-                {
-                    status = QStringLiteral("live - %1 viewers")
-                                 .arg(localizeNumbers(viewers));
-                }
+                viewers = static_cast<unsigned>(kick->streamData().viewerCount);
             }
         }
-        lines.append(QString("Kick: %1 (%2)")
-                         .arg(this->config_.effectiveKickChannelName(),
-                              status));
+        lines.append(formatLine("Kick", this->kickLive_, viewers));
     }
     if (this->config_.youtubeEnabled)
     {
-        QString status = this->youtubeLive_ ? QStringLiteral("live")
-                                            : QStringLiteral("offline");
-        if (this->youtubeLive_ && this->youtubeLiveChat_)
-        {
-            const auto viewers = this->youtubeLiveChat_->viewerCount();
-            if (viewers > 0)
-            {
-                status = QStringLiteral("live - %1 viewers")
-                             .arg(localizeNumbers(viewers));
-            }
-        }
-        lines.append(QString("YouTube: %1").arg(status));
+        const unsigned viewers =
+            (this->youtubeLive_ && this->youtubeLiveChat_)
+                ? this->youtubeLiveChat_->viewerCount()
+                : 0U;
+        lines.append(formatLine("YouTube", this->youtubeLive_, viewers));
     }
     if (this->config_.tiktokEnabled)
     {
-        QString tiktokStatus =
-            this->tiktokLive_ ? QStringLiteral("live")
-                              : QStringLiteral("waiting for live chat");
-        if (this->tiktokLive_ && this->tiktokLiveChat_)
-        {
-            const auto viewers = this->tiktokLiveChat_->viewerCount();
-            if (viewers > 0)
-            {
-                tiktokStatus = QStringLiteral("live - %1 viewers")
-                                   .arg(localizeNumbers(viewers));
-            }
-        }
-        else if (this->tiktokLiveChat_ &&
-                 !this->tiktokLiveChat_->statusText().trimmed().isEmpty())
-        {
-            tiktokStatus = this->tiktokLiveChat_->statusText();
-        }
-        lines.append(QString("TikTok: %1").arg(tiktokStatus));
+        const unsigned viewers =
+            (this->tiktokLive_ && this->tiktokLiveChat_)
+                ? this->tiktokLiveChat_->viewerCount()
+                : 0U;
+        lines.append(formatLine("TikTok", this->tiktokLive_, viewers));
     }
 
     this->tooltipText_ = lines.join("<br>");
@@ -1073,6 +1081,45 @@ EmotePtr MergedChannel::platformBadge(MessagePlatform platform)
     auto badge = cachedOrMakeEmotePtr(std::move(emote), cache);
     cache[badge->name] = badge;
     return badge;
+}
+
+void MergedChannel::injectDebugMessage(MessagePlatform platform,
+                                       const QString &user,
+                                       const QString &text)
+{
+    MessageBuilder b;
+    b->platform = platform;
+    b->id = QStringLiteral("sim-%1-%2")
+                .arg(static_cast<int>(platform))
+                .arg(QDateTime::currentMSecsSinceEpoch());
+    b->loginName = user;
+    b->displayName = user;
+    b->localizedName = user;
+    b->channelName = user;
+    b->messageText = text;
+    b->searchText = user + QStringLiteral(": ") + text;
+    b->serverReceivedTime = QDateTime::currentDateTime();
+    b.emplace<TimestampElement>(b->serverReceivedTime.time());
+    b.emplace<TextElement>(user + QStringLiteral(":"),
+                           MessageElementFlag::Username, MessageColor::Text,
+                           FontStyle::ChatMediumBold);
+    b.emplace<TextElement>(text, MessageElementFlag::Text);
+    this->appendMergedMessage(b.release(), platform);
+}
+
+qint64 MergedChannel::sendWaitMs(qint64 lastSendMs, qint64 nowMs,
+                                 qint64 intervalMs)
+{
+    if (lastSendMs <= 0 || intervalMs <= 0)
+    {
+        return 0;
+    }
+    const qint64 elapsed = nowMs - lastSendMs;
+    if (elapsed >= intervalMs)
+    {
+        return 0;
+    }
+    return intervalMs - elapsed;
 }
 
 QString MergedChannel::messageKey(const MessagePtr &message,

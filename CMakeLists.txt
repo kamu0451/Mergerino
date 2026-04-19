@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.15)
 # CMake upgrade notes:
 #  - In CMake >= 3.29, we should deprecate USE_ALTERNATE_LINKER in favour of CMake's CMAKE_LINKER_TYPE
 set(CMAKE_EXPORT_NO_PACKAGE_REGISTRY On) # For rapidjson
+# Emit compile_commands.json for clangd / clang-tidy / editor indexing.
+# No-op on the NMake Makefiles generator used in CI; Ninja dev builds
+# get an accurate, up-to-date index without any extra opt-in.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 cmake_policy(SET CMP0087 NEW) # evaluates generator expressions in `install(CODE/SCRIPT)`
 cmake_policy(SET CMP0091 NEW) # select MSVC runtime library through `CMAKE_MSVC_RUNTIME_LIBRARY`
 if(POLICY CMP0207)

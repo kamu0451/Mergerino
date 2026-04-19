@@ -41,6 +41,27 @@ public:
     pajlada::Signals::NoArgSignal liveStatusChanged;
     pajlada::Signals::NoArgSignal viewerCountChanged;
 
+    // Exposed for unit tests. Pure helpers with no instance state.
+    static QString maybeExtractVideoId(const QString &url);
+    static QString normalizeSource(const QString &source);
+    static bool isLikelyChannelId(const QString &value);
+    static QString extractLiveChatContinuation(
+        const QJsonObject &liveChatRenderer);
+    static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
+    static int computeBackoffDelay(int failureStreak);
+
+    /// Clamps the server-provided timeoutMs to a [1s, 30s] range, treating
+    /// non-positive inputs as "use the minimum". Exposed for testing.
+    static int cappedPollDelay(int timeoutMs);
+
+    /// Biases the next-poll delay earlier when the previous poll delivered
+    /// messages (the stream is active) and compensates for the elapsed
+    /// request time so the effective cadence matches TikTok timeoutMs.
+    /// Exposed for testing.
+    static int adjustedPollDelay(int timeoutMs, qint64 requestElapsedMs,
+                                 int deliveredMessageCount,
+                                 int activePollStreak);
+
 private:
     void resolveVideoId();
     void resolveChannelIdFromVideoId(const QString &videoId,
@@ -63,18 +84,12 @@ private:
     bool shouldResolveLiveStreamFromSource() const;
     QString resolvedSource() const;
 
-    static QString maybeExtractVideoId(const QString &url);
-    static QString normalizeSource(const QString &source);
-    static bool isLikelyChannelId(const QString &value);
     static QString sourceLivePath(const QString &source);
     static bool isLikelyVideoId(const QString &value);
     static QString extractFirstMatch(const QString &text,
                                      const QStringList &patterns);
-    static QString extractLiveChatContinuation(
-        const QJsonObject &liveChatRenderer);
     static QString extractVideoChannelId(const QString &html);
     static QString extractLiveVideoId(const QString &html);
-    static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
     static QString parseText(const QJsonValue &value);
     static MessagePtr parseRendererMessage(const QJsonObject &renderer,
                                           const QString &rendererName,
@@ -92,6 +107,11 @@ private:
 
     unsigned viewerCount_{0};
 
+    // Consecutive HTTP failures on the live-chat poll / fetch path. Used to
+    // back off exponentially so a YouTube-side outage doesn't drive a 3s
+    // retry loop indefinitely. Reset on any successful response.
+    int pollFailureStreak_{0};
+
     bool running_{false};
     bool live_{false};
     bool failureReported_{false};
@@ -102,7 +122,6 @@ private:
 
     std::shared_ptr<bool> lifetimeGuard_;
     std::unordered_set<QString> seenMessageIds_;
-    QString joinedLiveVideoId_;
 };
 
 }  // namespace chatterino

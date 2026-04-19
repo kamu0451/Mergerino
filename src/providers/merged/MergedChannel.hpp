@@ -79,6 +79,28 @@ public:
 
     pajlada::Signals::NoArgSignal streamStatusChanged;
 
+    // Exposed for unit tests. These are pure helpers that operate on message
+    // contents alone; they hold no MergedChannel state.
+    static bool shouldMirrorSourceMessage(const MessagePtr &message);
+    static QString messageKey(const MessagePtr &message,
+                              MessagePlatform platform);
+
+    /// Returns the number of milliseconds the caller should wait before
+    /// attempting another send, given the last send time, the current time,
+    /// and the platform's minimum interval. Returns 0 if a send is allowed
+    /// immediately (including when lastSendMs == 0 meaning "never sent").
+    static qint64 sendWaitMs(qint64 lastSendMs, qint64 nowMs,
+                             qint64 intervalMs);
+
+    /// Debug helper: injects a synthetic platform-tagged message into the
+    /// merged view as if it came from a real source. The message flows
+    /// through the same appendMergedMessage path real source signals use,
+    /// so the platform badge / accent / dedup are applied. Used by the
+    /// /simmsg debug command to exercise the merged-chat UI without real
+    /// streams.
+    void injectDebugMessage(MessagePlatform platform, const QString &user,
+                            const QString &text);
+
 private:
     void initializeSources();
     void connectSourceSignals(const ChannelPtr &source, MessagePlatform platform,
@@ -93,19 +115,14 @@ private:
                               MessagePlatform platform);
     std::shared_ptr<Message> createMergedMessage(const MessagePtr &source,
                                                  MessagePlatform platform) const;
-    void addYouTubeMessage(const MessagePtr &message);
-    void addTikTokMessage(const MessagePtr &message);
     void addSystemStatusMessage(const MessagePtr &message);
     void addSystemStatusMessage(const QString &message);
     void announceJoinedLiveChat(MessagePlatform platform,
                                 const QString &title = {});
     void refreshStatusText();
 
-    static bool shouldMirrorSourceMessage(const MessagePtr &message);
     static QColor platformAccent(MessagePlatform platform);
     static EmotePtr platformBadge(MessagePlatform platform);
-    static QString messageKey(const MessagePtr &message,
-                              MessagePlatform platform);
 
     void insertMirror(const QString &key, const MessagePtr &merged);
     void eraseMirror(const QString &key);
@@ -134,6 +151,12 @@ private:
     // the 5-minute delta shown in the header.
     mutable std::deque<std::pair<qint64, unsigned>> viewerCountHistory_;
 
+    // Client-side outbound rate limiting. Keeps a macro-held Enter from
+    // tripping Twitch/Kick server-side rate limits (which can time the user
+    // out). Values are msSinceEpoch of the last successful fan-out.
+    qint64 lastTwitchSendMs_{0};
+    qint64 lastKickSendMs_{0};
+
     bool twitchLive_{false};
     bool kickLive_{false};
     bool youtubeLive_{false};
@@ -141,6 +164,7 @@ private:
     bool twitchLiveJoinAnnounced_{false};
     bool kickLiveJoinAnnounced_{false};
     bool tiktokLiveJoinAnnounced_{false};
+    bool youtubeLiveJoinAnnounced_{false};
 };
 
 }  // namespace chatterino

@@ -157,3 +157,82 @@ TEST(ActivityMessageUtils, RejectsTwitchBitsBadgeMessages)
     EXPECT_TRUE(isActivityTwitchBitsBadgeMessage(message));
     EXPECT_FALSE(shouldShowMessageInActivityPane(message));
 }
+
+TEST(ActivityMessageUtils, AcceptsYouTubeSubscriptionMessage)
+{
+    Message message;
+    message.platform = MessagePlatform::YouTube;
+    message.flags.set(MessageFlag::Subscription);
+    message.messageText = "Viewer became a member";
+
+    EXPECT_TRUE(isActivityAlertMessage(message));
+    EXPECT_TRUE(shouldShowMessageInActivityPane(message));
+}
+
+TEST(ActivityMessageUtils, AcceptsYouTubeElevatedMessage)
+{
+    Message message;
+    message.platform = MessagePlatform::YouTube;
+    message.flags.set(MessageFlag::ElevatedMessage);
+    message.messageText = "Viewer sent a super chat";
+
+    EXPECT_TRUE(isActivityAlertMessage(message));
+    EXPECT_TRUE(shouldShowMessageInActivityPane(message));
+}
+
+TEST(ActivityMessageUtils, AcceptsTikTokSubscriptionMessage)
+{
+    Message message;
+    message.platform = MessagePlatform::TikTok;
+    message.flags.set(MessageFlag::Subscription);
+    message.flags.set(MessageFlag::System);
+    message.messageText = "alice joined";
+
+    EXPECT_TRUE(isActivityAlertMessage(message));
+    EXPECT_TRUE(shouldShowMessageInActivityPane(message));
+}
+
+TEST(ActivityMessageUtils, TwitchAnnouncementFilterIsPlatformScoped)
+{
+    // The Twitch-specific "Announcement" header must only filter Twitch
+    // messages; the same text on a non-Twitch platform must not be dropped.
+    Message youtubeAnnouncement;
+    youtubeAnnouncement.platform = MessagePlatform::YouTube;
+    youtubeAnnouncement.flags.set(MessageFlag::Subscription);
+    youtubeAnnouncement.flags.set(MessageFlag::System);
+    youtubeAnnouncement.messageText = "Announcement";
+
+    EXPECT_FALSE(
+        isActivityTwitchAnnouncementHeaderMessage(youtubeAnnouncement));
+    EXPECT_TRUE(shouldShowMessageInActivityPane(youtubeAnnouncement));
+}
+
+TEST(ActivityMessageUtils, TwitchBitsBadgeFilterIsPlatformScoped)
+{
+    // If a YouTube chat happened to contain text matching the Twitch
+    // "Bits badge" string, it must not be filtered - the check is
+    // Twitch-only.
+    Message youtubeBitsLike;
+    youtubeBitsLike.platform = MessagePlatform::YouTube;
+    youtubeBitsLike.flags.set(MessageFlag::Subscription);
+    youtubeBitsLike.flags.set(MessageFlag::System);
+    youtubeBitsLike.messageText = "someone just earned a new 1K Bits badge!";
+
+    EXPECT_FALSE(isActivityTwitchBitsBadgeMessage(youtubeBitsLike));
+    EXPECT_TRUE(shouldShowMessageInActivityPane(youtubeBitsLike));
+}
+
+TEST(ActivityMessageUtils, KickRewardFilterIsPlatformScoped)
+{
+    // RedeemedChannelPointReward flag on a non-Kick platform should not be
+    // dropped by the Kick-specific filter.
+    Message youtubeWithRewardFlag;
+    youtubeWithRewardFlag.platform = MessagePlatform::YouTube;
+    youtubeWithRewardFlag.flags.set(MessageFlag::CheerMessage);
+    youtubeWithRewardFlag.flags.set(MessageFlag::RedeemedChannelPointReward);
+    youtubeWithRewardFlag.messageText = "Viewer redeemed something";
+
+    EXPECT_FALSE(
+        isActivityKickRewardRedemptionMessage(youtubeWithRewardFlag));
+    EXPECT_TRUE(shouldShowMessageInActivityPane(youtubeWithRewardFlag));
+}

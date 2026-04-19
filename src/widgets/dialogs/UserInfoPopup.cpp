@@ -887,6 +887,11 @@ void UserInfoPopup::installEvents()
             }));
 }
 
+void UserInfoPopup::setMessagePlatform(MessagePlatform platform)
+{
+    this->messagePlatform_ = platform;
+}
+
 void UserInfoPopup::setData(const QString &name, const ChannelPtr &channel)
 {
     this->setData(name, channel, channel);
@@ -932,7 +937,30 @@ void UserInfoPopup::setData(const QString &name,
     this->ui_.nameLabel->setText(name);
     this->ui_.nameLabel->setProperty("copy-text", name);
 
-    if (this->isKick_)
+    const bool isNonTwitchMergedPlatform =
+        this->messagePlatform_ == MessagePlatform::YouTube ||
+        this->messagePlatform_ == MessagePlatform::TikTok;
+
+    if (isNonTwitchMergedPlatform)
+    {
+        // YouTube / TikTok users don't exist on Twitch Helix or the Kick
+        // REST API, so firing those fetches just produces "Unavailable"
+        // noise. Render a minimal view - show a single platform label in
+        // place of the follower-count slot, hide the Twitch-only rows
+        // (created-date, user-ID, mod timeout, usercard link). The
+        // filtered latest-messages panel below still gives meaningful
+        // context.
+        const QString platformLabel =
+            this->messagePlatform_ == MessagePlatform::YouTube
+                ? QStringLiteral("YouTube user")
+                : QStringLiteral("TikTok user");
+        this->ui_.followerCountLabel->setText(TEXT_FOLLOWERS.arg(platformLabel));
+        this->ui_.createdDateLabel->hide();
+        this->ui_.userIDLabel->hide();
+        this->ui_.timeoutWidget->hide();
+        this->ui_.usercardLabel->hide();
+    }
+    else if (this->isKick_)
     {
         this->updateKickUserData();
     }

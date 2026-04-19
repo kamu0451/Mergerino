@@ -10,6 +10,7 @@
 #include "controllers/commands/CommandContext.hpp"
 #include "controllers/userdata/UserDataController.hpp"
 #include "providers/kick/KickChannel.hpp"
+#include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
@@ -527,6 +528,20 @@ QString openURL(const CommandContext &ctx)
         return "";
     }
 
+    // Scheme allowlist. openUrl would otherwise hand file://, javascript:,
+    // or arbitrary custom-protocol URLs to the OS handler - trivial to
+    // paste by accident and occasionally a vector for attacker-controlled
+    // text copied into chat input. Keep the safe, common web schemes.
+    const auto scheme = url.scheme().toLower();
+    if (scheme != "http" && scheme != "https" && scheme != "mailto")
+    {
+        ctx.channel->addSystemMessage(
+            QString("Refusing to open URL with scheme '%1'. "
+                    "Allowed: http, https, mailto.")
+                .arg(scheme.isEmpty() ? QStringLiteral("(empty)") : scheme));
+        return "";
+    }
+
     auto preferPrivateMode = getSettings()->openLinksIncognito.getValue();
     auto forcePrivateMode = parser.isSet(privateModeOption);
     auto forceNonPrivateMode = parser.isSet(noPrivateModeOption);
@@ -613,6 +628,71 @@ QString injectFakeMessage(const CommandContext &ctx)
     auto ircText = ctx.words.mid(1).join(" ");
     getApp()->getTwitch()->addFakeMessage(ircText);
 
+    return "";
+}
+
+QString simulateMergedMessage(const CommandContext &ctx)
+{
+    // /simmsg <platform> <text...>
+    // Injects a synthetic platform-tagged message into the current merged
+    // channel so the merged UI (badge, accent, dedup) can be exercised
+    // without a live source stream. Requires the active split to be a
+    // merged tab (shows e.g. "name (Twitch + Kick + YouTube live)" in
+    // the header). Won't work in an <empty> split or a single-platform
+    // chat.
+    if (ctx.channel == nullptr || ctx.channel->isEmpty())
+    {
+        return "Open a merged channel tab first, then run /simmsg there.";
+    }
+
+    auto *merged = dynamic_cast<MergedChannel *>(ctx.channel.get());
+    if (merged == nullptr)
+    {
+        ctx.channel->addSystemMessage(
+            "/simmsg only works in a merged channel tab, not in a "
+            "single-platform chat.");
+        return "";
+    }
+
+    if (ctx.words.size() < 3)
+    {
+        ctx.channel->addSystemMessage(
+            "Usage: /simmsg <twitch|kick|youtube|tiktok> <text...>");
+        return "";
+    }
+
+    const auto platformStr = ctx.words[1].toLower();
+    MessagePlatform platform;
+    if (platformStr == "twitch")
+    {
+        platform = MessagePlatform::AnyOrTwitch;
+    }
+    else if (platformStr == "kick")
+    {
+        platform = MessagePlatform::Kick;
+    }
+    else if (platformStr == "youtube" || platformStr == "yt")
+    {
+        platform = MessagePlatform::YouTube;
+    }
+    else if (platformStr == "tiktok" || platformStr == "tt")
+    {
+        platform = MessagePlatform::TikTok;
+    }
+    else
+    {
+        ctx.channel->addSystemMessage(
+            QString("Unknown platform '%1'. Use twitch, kick, youtube, or "
+                    "tiktok.")
+                .arg(platformStr));
+        return "";
+    }
+
+    const auto text = ctx.words.mid(2).join(' ');
+    merged->injectDebugMessage(platform, QStringLiteral("simulator"), text);
+    ctx.channel->addSystemMessage(
+        QString("simmsg injected %1 message: %2")
+            .arg(platformStr, text));
     return "";
 }
 

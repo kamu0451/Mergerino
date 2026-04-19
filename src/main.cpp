@@ -21,7 +21,11 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QDateTime>
+#include <QFile>
 #include <QMessageBox>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QSslSocket>
 #include <QStringList>
 #include <QtCore/QtPlugin>
@@ -36,6 +40,60 @@ Q_IMPORT_PLUGIN(QAVIFPlugin)
 #endif
 
 using namespace chatterino;
+
+namespace {
+
+QFile *g_logFile = nullptr;
+QtMessageHandler g_prevMessageHandler = nullptr;
+QMutex g_logFileMutex;
+
+void fileLogMessageHandler(QtMsgType type, const QMessageLogContext &ctx,
+                           const QString &msg)
+{
+    if (g_prevMessageHandler != nullptr)
+    {
+        g_prevMessageHandler(type, ctx, msg);
+    }
+
+    if (g_logFile == nullptr)
+    {
+        return;
+    }
+
+    const char *typeStr = "???";
+    switch (type)
+    {
+        case QtDebugMsg:
+            typeStr = "DEBUG";
+            break;
+        case QtInfoMsg:
+            typeStr = "INFO";
+            break;
+        case QtWarningMsg:
+            typeStr = "WARN";
+            break;
+        case QtCriticalMsg:
+            typeStr = "CRIT";
+            break;
+        case QtFatalMsg:
+            typeStr = "FATAL";
+            break;
+    }
+
+    const QString line =
+        QStringLiteral("%1 [%2] %3: %4\n")
+            .arg(QDateTime::currentDateTime().toString(Qt::ISODateWithMs),
+                 QString::fromLatin1(typeStr),
+                 QString::fromLatin1(ctx.category != nullptr ? ctx.category
+                                                             : "default"),
+                 msg);
+
+    QMutexLocker lock(&g_logFileMutex);
+    g_logFile->write(line.toUtf8());
+    g_logFile->flush();
+}
+
+}  // namespace
 
 int main(int argc, char **argv)
 {
@@ -80,6 +138,26 @@ int main(int argc, char **argv)
     ipc::initPaths(paths.get());
 
     const Args args(a, *paths);
+
+    if (args.logFile.has_value())
+    {
+        auto *file = new QFile(*args.logFile);
+        if (file->open(QIODevice::WriteOnly | QIODevice::Append |
+                       QIODevice::Text))
+        {
+            g_logFile = file;
+            g_prevMessageHandler = qInstallMessageHandler(fileLogMessageHandler);
+            qCInfo(chatterinoApp).noquote()
+                << "Logging to file:" << *args.logFile;
+        }
+        else
+        {
+            std::cerr << "Failed to open --log-file at "
+                      << args.logFile->toLocal8Bit().constData() << ": "
+                      << file->errorString().toLocal8Bit().constData() << '\n';
+            delete file;
+        }
+    }
 
 #ifdef CHATTERINO_WITH_CRASHPAD
     const auto crashpadHandler = installCrashHandler(args, *paths);
@@ -141,5 +219,21 @@ int main(int argc, char **argv)
 
         runGui(a, *paths, settings, args, updates);
     }
+
+    if (g_prevMessageHandler != nullptr)
+    {
+        qInstallMessageHandler(g_prevMessageHandler);
+        g_prevMessageHandler = nullptr;
+    }
+    {
+        QMutexLocker lock(&g_logFileMutex);
+        if (g_logFile != nullptr)
+        {
+            g_logFile->close();
+            delete g_logFile;
+            g_logFile = nullptr;
+        }
+    }
+
     return 0;
 }

@@ -23,7 +23,13 @@ vcpkg alternative: `vcpkg install` then configure with `-DCMAKE_TOOLCHAIN_FILE="
 
 Run: `build-conan\bin\mergerino.exe`. To produce a standalone bundle: `windeployqt build-conan\bin\mergerino.exe --release --no-compiler-runtime --no-translations --no-opengl-sw --dir build-conan\bin`.
 
-Key CMake options (from `CMakeLists.txt`): `BUILD_TESTS`, `BUILD_BENCHMARKS`, `CHATTERINO_PLUGINS` (Lua/Sol2, on by default), `CHATTERINO_SPELLCHECK` (requires Hunspell — CI turns this on), `BUILD_WITH_CRASHPAD` (off by default, and off in the release workflow), `CHATTERINO_LTO`, `USE_PRECOMPILED_HEADERS`.
+Key CMake options (from `CMakeLists.txt`): `BUILD_TESTS`, `BUILD_BENCHMARKS`, `CHATTERINO_PLUGINS` (Lua/Sol2, on by default), `CHATTERINO_SPELLCHECK` (requires Hunspell — CI turns this on), `BUILD_WITH_CRASHPAD` (off by default, and off in the release workflow), `CHATTERINO_LTO`, `USE_PRECOMPILED_HEADERS`. `CMAKE_EXPORT_COMPILE_COMMANDS` is forced ON so every Ninja build drops a `compile_commands.json` for clangd / VS Code.
+
+## Logging
+
+- **`--log-file <path>`** — tee every Qt log message to the given file with ISO-timestamp/level/category/message columns. Cleared on each run by `.dev-cycle.bat`. Intended for automated tooling and post-mortem review.
+- **`QT_LOGGING_RULES`** — runtime filter syntax, e.g. `chatterino.youtube.debug=true;chatterino.tiktok.*=true`. Category list is in `src/common/QLogging.hpp` (`Q_DECLARE_LOGGING_CATEGORY`). Mergerino-specific categories: `chatterino.youtube`, `chatterino.tiktok`, `chatterino.merged`, `chatterino.kick` (and the full upstream set). Default threshold is Warning in Release and Debug in Debug builds.
+- **`--verbose`** — attaches a console window on Windows so qDebug/qInfo show up even without `--log-file`.
 
 ## Tests
 
@@ -41,8 +47,8 @@ Benchmarks live in `benchmarks/` and are gated behind `-DBUILD_BENCHMARKS=On` (G
 
 ## CI / Release pipeline
 
-- `.github/workflows/build.yml` — builds the Windows x64 package on every push/PR to `main`, uploads `Mergerino-1.5-win64.zip` as an artifact. `.CI/deploy-crt.ps1` pulls in the MSVC runtime DLLs.
-- `.github/workflows/release.yml` — triggered by `workflow_run` on a successful Build. Force-updates the `latest` tag to the new head SHA and replaces the single asset on the `Latest` GitHub release. This is a **rolling release** — there is no per-version tagging flow. The `1.5` in the filename is hard-coded in both workflows; `CMakeLists.txt`'s `project(... VERSION 1.5.0 ...)` drives `src/common/Version.hpp` via `configure_file`, so bumping the version means editing the workflow filenames, `README.md`, and the `project()` VERSION.
+- `.github/workflows/build.yml` — builds the Windows x64 package on every push/PR to `main`, uploads `Mergerino-win64.zip` as an artifact. `.CI/deploy-crt.ps1` pulls in the MSVC runtime DLLs.
+- `.github/workflows/release.yml` — triggered by `workflow_run` on a successful Build. Force-updates the `latest` tag to the new head SHA and replaces the single asset on the `Latest` GitHub release. This is a **rolling release** — there is no per-version tagging flow. The artifact filename is version-less (`Mergerino-win64.zip`); `CMakeLists.txt`'s `project(... VERSION 1.5.0 ...)` flows into `src/common/Version.hpp` via `configure_file`, so a version bump only needs the `project()` VERSION edit.
 - `.github/workflows/test-windows.yml` — runs the GoogleTest suite against `windows-latest` + Qt 6.9.3.
 
 ## Architecture

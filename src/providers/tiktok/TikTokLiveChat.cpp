@@ -3,6 +3,7 @@
 
 #include "providers/tiktok/TikTokLiveChat.hpp"
 
+#include "common/QLogging.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
@@ -12,6 +13,7 @@
 #include <QByteArray>
 #include <QDateTime>
 #include <QDir>
+#include <QFutureWatcher>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -19,7 +21,9 @@
 #include <QJsonValue>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <QThreadPool>
 #include <QTimer>
+#include <QtConcurrent>
 
 #include <algorithm>
 #include <atomic>
@@ -95,6 +99,17 @@ struct TikTokLiveChat::Impl {
     qint32 pendingJoinCount{0};
     QString pendingJoinUser;
 
+    // Watchdog: after ws-open we expect check_alive to report an alive_state
+    // within ~30s. If it never arrives the room is almost certainly offline
+    // or the user is not live; surface it instead of sitting on
+    // "Connecting..." forever.
+    QTimer stuckConnectionTimer;
+
+    // Dedicated single-thread pool for offloading protobuf decode off the UI
+    // thread. Single-threaded on purpose: preserves frame ordering so chat
+    // messages don't show up reordered under bursty traffic.
+    QThreadPool decodePool;
+
     ~Impl()
     {
         if (webview)
@@ -120,10 +135,9 @@ struct TikTokLiveChat::Impl {
 };
 
 TikTokLiveChat::TikTokLiveChat(QString source)
-    : source_(std::move(source))
+    : username_(TikTokLiveChat::normalizeSource(source))
     , lifetimeGuard_(std::make_shared<bool>(true))
 {
-    this->username_ = TikTokLiveChat::normalizeSource(this->source_);
 }
 
 TikTokLiveChat::~TikTokLiveChat()
@@ -167,6 +181,24 @@ void TikTokLiveChat::start()
                      [this]() { this->flushPendingLikes(); });
     QObject::connect(&this->impl_->joinTimer, &QTimer::timeout,
                      [this]() { this->flushPendingJoins(); });
+    this->impl_->stuckConnectionTimer.setSingleShot(true);
+    // 60s: TikTok's check_alive can legitimately take 30+ seconds on a
+    // slow room or rate-limited endpoint, so the earlier 30s threshold
+    // false-positived on real-but-slow live rooms.
+    this->impl_->stuckConnectionTimer.setInterval(60000);
+    this->impl_->decodePool.setMaxThreadCount(1);
+    QObject::connect(&this->impl_->stuckConnectionTimer, &QTimer::timeout,
+                     [this]() {
+                         if (!this->running_)
+                         {
+                             return;
+                         }
+                         this->setStatusText(
+                             QStringLiteral("TikTok live chat unavailable "
+                                            "(no response from room)"),
+                             true);
+                         this->setLive(false);
+                     });
     this->impl_->host = CreateWindowExW(
         0, kWindowClass, L"mergerino-tiktok-host", WS_POPUP, 0, 0, 1, 1,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -351,6 +383,9 @@ void TikTokLiveChat::stop()
     this->running_ = false;
     this->setLive(false);
     this->impl_.reset();
+    this->roomId_.clear();
+    this->liveTitle_.clear();
+    this->statusText_.clear();
 }
 
 bool TikTokLiveChat::isLive() const
@@ -451,14 +486,31 @@ void TikTokLiveChat::setViewerCount(unsigned count)
 
 void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
 {
-    // TikTok's /webcast/room/(enter|info|check_alive) responses wrap the
-    // useful data in a nested "data" object. Different endpoints put the
-    // user count under slightly different paths; probe the ones we've seen
-    // in the wild.
-    const auto data = root.value(QStringLiteral("data")).toObject();
-    if (data.isEmpty())
+    // TikTok's /webcast/room/(enter|info|check_alive) responses arrive in
+    // two top-level shapes:
+    //   A) root.data is an OBJECT (enter / info endpoints, or login errors)
+    //        { "data": { "user_count": N, "room": {..}, "message": "..." } }
+    //      For this shape, room-state info may also appear as a nested
+    //      data[] array: { "data": { "data": [ {alive_state / alive} ] } }
+    //   B) root.data is an ARRAY directly (current check_alive endpoint)
+    //        { "data": [ {"alive": true, "room_id_str": "..."} ] }
+    // Normalise by extracting roomEntries (the array of per-room objects)
+    // and dataObj (the object form, if any) up front.
+    const auto rootDataValue = root.value(QStringLiteral("data"));
+    QJsonObject dataObj;
+    QJsonArray roomEntries;
+    if (rootDataValue.isArray())
     {
-        return;
+        roomEntries = rootDataValue.toArray();
+    }
+    else
+    {
+        dataObj = rootDataValue.toObject();
+        if (dataObj.isEmpty())
+        {
+            return;
+        }
+        roomEntries = dataObj.value(QStringLiteral("data")).toArray();
     }
 
     unsigned count = 0;
@@ -474,32 +526,57 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         }
     };
 
-    // webcast/room/enter and webcast/room/info: data.user_count / total_user
-    extract(data.value(QStringLiteral("user_count")));
-    extract(data.value(QStringLiteral("total_user")));
-
-    // webcast/room/info variant: data.room.user_count
-    const auto room = data.value(QStringLiteral("room")).toObject();
+    // Object form: webcast/room/enter / webcast/room/info variants.
+    extract(dataObj.value(QStringLiteral("user_count")));
+    extract(dataObj.value(QStringLiteral("total_user")));
+    const auto room = dataObj.value(QStringLiteral("room")).toObject();
     if (!room.isEmpty())
     {
         extract(room.value(QStringLiteral("user_count")));
         extract(room.value(QStringLiteral("total_user")));
     }
 
-    // webcast/room/check_alive: data.data[0].alive_state / user_count.
-    // alive_state == 2 means the room is still live; anything else (4 is
-    // the common "ended" code) means the stream has gone offline. The
-    // WebSocket close event is unreliable on stream-end, so treat this
-    // as the authoritative signal.
-    const auto inner = data.value(QStringLiteral("data")).toArray();
-    if (!inner.isEmpty())
+    // Per-room entries: TikTok has used two shapes historically -
+    //   older: { "alive_state": N }  where N == 2 means live, else ended
+    //   newer: { "alive": true|false, "room_id_str": "..." }
+    // Accept either. The WebSocket close event is unreliable on stream-
+    // end, so this is the authoritative live/offline signal.
+    if (!roomEntries.isEmpty())
     {
-        const auto first = inner.first().toObject();
-        extract(first.value(QStringLiteral("user_count")));
-        const auto aliveVal = first.value(QStringLiteral("alive_state"));
-        if (aliveVal.isDouble())
+        bool anyRoomLive = false;
+        bool sawAliveField = false;
+        for (const auto &entry : roomEntries)
         {
-            this->setLive(aliveVal.toInt() == 2);
+            const auto obj = entry.toObject();
+            extract(obj.value(QStringLiteral("user_count")));
+            const auto aliveState = obj.value(QStringLiteral("alive_state"));
+            if (aliveState.isDouble())
+            {
+                sawAliveField = true;
+                if (aliveState.toInt() == 2)
+                {
+                    anyRoomLive = true;
+                }
+            }
+            const auto aliveBool = obj.value(QStringLiteral("alive"));
+            if (aliveBool.isBool())
+            {
+                sawAliveField = true;
+                if (aliveBool.toBool())
+                {
+                    anyRoomLive = true;
+                }
+            }
+        }
+        if (sawAliveField)
+        {
+            // Room responded with a definitive live/offline state - cancel
+            // the stuck-connection watchdog regardless of value.
+            if (this->impl_)
+            {
+                this->impl_->stuckConnectionTimer.stop();
+            }
+            this->setLive(anyRoomLive);
         }
     }
 
@@ -518,7 +595,7 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         }
         if (title.isEmpty())
         {
-            title = data.value(QStringLiteral("title")).toString();
+            title = dataObj.value(QStringLiteral("title")).toString();
         }
         if (!title.isEmpty())
         {
@@ -530,7 +607,7 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
     // via another path yet.
     if (this->roomId_.isEmpty())
     {
-        const auto rid = data.value(QStringLiteral("id_str")).toString();
+        const auto rid = dataObj.value(QStringLiteral("id_str")).toString();
         if (!rid.isEmpty())
         {
             this->roomId_ = rid;
@@ -600,11 +677,31 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         // actually live - TikTok opens im-ws sockets on offline profile
         // pages too. Wait for alive_state == 2 from check_alive or an
         // actual decoded chat event before treating the room as live.
+        qCDebug(chatterinoTikTok) << "ws-open for" << this->username_;
         this->setStatusText(QStringLiteral("Connected to TikTok"));
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.start();
+        }
+        return;
+    }
+    if (kind == QStringLiteral("room-info"))
+    {
+        const auto data = obj.value(QStringLiteral("data")).toObject();
+        qCDebug(chatterinoTikTok).nospace()
+            << "room-info: "
+            << QJsonDocument(data).toJson(QJsonDocument::Compact);
+        this->handleRoomInfo(data);
         return;
     }
     if (kind == QStringLiteral("ws-close"))
     {
+        qCDebug(chatterinoTikTok)
+            << "ws-close code=" << obj.value(QStringLiteral("code")).toInt();
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.stop();
+        }
         this->setLive(false);
         this->setStatusText(QStringLiteral("TikTok live chat disconnected"),
                             true);
@@ -612,12 +709,12 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
     }
     if (kind == QStringLiteral("ws-error"))
     {
+        qCDebug(chatterinoTikTok) << "ws-error";
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.stop();
+        }
         this->setStatusText(QStringLiteral("TikTok live chat error"), true);
-        return;
-    }
-    if (kind == QStringLiteral("room-info"))
-    {
-        this->handleRoomInfo(obj.value(QStringLiteral("data")).toObject());
         return;
     }
     if (kind == QStringLiteral("ws-binary"))
@@ -632,36 +729,72 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         {
             return;
         }
-        const auto frame = tiktok::decodeWebcastPushFrame(raw);
-        const bool hasLiveContent =
-            !frame.chatMessages.empty() || !frame.likeEvents.empty() ||
-            !frame.memberEvents.empty() || !frame.socialEvents.empty() ||
-            !frame.giftEvents.empty();
-        if (hasLiveContent)
+        // Decode inline on the UI thread. Earlier versions offloaded this
+        // to a QtConcurrent worker; that turned out to break message
+        // delivery on some rooms (watchdog would time out even though
+        // frames were flowing). Revert for correctness; if busy-stream
+        // perf becomes an issue again we can revisit with a different
+        // marshal mechanism.
+        this->processDecodedFrame(tiktok::decodeWebcastPushFrame(raw));
+    }
+}
+
+void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
+{
+    // WebcastRoomUserSeqMessage frames carry the current online viewer
+    // count; the HTTP room-info endpoints on the current TikTok page
+    // (check_alive) no longer include it, so this is the authoritative
+    // source for the tooltip's viewer line.
+    if (frame.roomViewerCount > 0)
+    {
+        this->setViewerCount(static_cast<unsigned>(frame.roomViewerCount));
+    }
+
+    // Known follow-up: TikTok's current WebcastPushFrame schema sometimes
+    // gzips the inner payload (envelope field 6 = "gzip"). We don't yet
+    // decompress, so those frames produce no events. Uncompressed frames
+    // (heartbeats, keepalive, occasional raw frames) still decode, which
+    // is why chat / viewer-count works intermittently.
+
+    const bool hasLiveContent =
+        !frame.chatMessages.empty() || !frame.likeEvents.empty() ||
+        !frame.memberEvents.empty() || !frame.socialEvents.empty() ||
+        !frame.giftEvents.empty() || frame.roomViewerCount > 0;
+    if (hasLiveContent)
+    {
+        // Fallback live signal when check_alive hasn't fired yet. Any real
+        // chat/like/join frame is proof the room is live - cancel the
+        // stuck-connection watchdog and clear a prior "unavailable" status
+        // so the user sees the recovery.
+        if (this->impl_)
         {
-            // Fallback live signal when check_alive hasn't fired yet.
-            this->setLive(true);
+            this->impl_->stuckConnectionTimer.stop();
         }
-        for (const auto &chat : frame.chatMessages)
+        if (!this->live_)
         {
-            this->messageReceived.invoke(this->buildChatMessage(chat));
+            this->setStatusText(QStringLiteral("Connected to TikTok"));
         }
-        for (const auto &ev : frame.likeEvents)
-        {
-            this->handleLike(ev);
-        }
-        for (const auto &ev : frame.memberEvents)
-        {
-            this->handleMember(ev);
-        }
-        for (const auto &ev : frame.socialEvents)
-        {
-            this->handleSocial(ev);
-        }
-        for (const auto &ev : frame.giftEvents)
-        {
-            this->handleGift(ev);
-        }
+        this->setLive(true);
+    }
+    for (const auto &chat : frame.chatMessages)
+    {
+        this->messageReceived.invoke(this->buildChatMessage(chat));
+    }
+    for (const auto &ev : frame.likeEvents)
+    {
+        this->handleLike(ev);
+    }
+    for (const auto &ev : frame.memberEvents)
+    {
+        this->handleMember(ev);
+    }
+    for (const auto &ev : frame.socialEvents)
+    {
+        this->handleSocial(ev);
+    }
+    for (const auto &ev : frame.giftEvents)
+    {
+        this->handleGift(ev);
     }
 }
 

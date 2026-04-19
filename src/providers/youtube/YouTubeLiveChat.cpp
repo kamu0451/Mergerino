@@ -6,8 +6,10 @@
 
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
+#include "common/QLogging.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
+#include "util/GuardedCallback.hpp"
 
 #include <QDateTime>
 #include <QDebug>
@@ -21,6 +23,7 @@
 #include <QUrlQuery>
 
 #include <algorithm>
+#include <atomic>
 #include <optional>
 #include <vector>
 
@@ -56,6 +59,7 @@ QJsonObject makeYoutubeClientContext(const QString &clientVersion)
 const QString YOUTUBE_BOOTSTRAP_URL = "https://www.youtube.com/embed/jNQXAC9IVRw";
 const QColor YOUTUBE_PLATFORM_ACCENT(255, 48, 64, 60);
 constexpr int YOUTUBE_RECONNECT_DELAY_MS = 3000;
+constexpr int YOUTUBE_RECONNECT_MAX_DELAY_MS = 60000;
 
 std::vector<std::pair<QByteArray, QByteArray>> youtubeHeaders()
 {
@@ -108,43 +112,6 @@ QDateTime parseTimestampUsec(const QString &timestampUsec)
         .toLocalTime();
 }
 
-int cappedYouTubePollDelay(int timeoutMs)
-{
-    constexpr int minimumDelayMs = 1000;
-    constexpr int maximumDelayMs = 30000;
-
-    if (timeoutMs <= 0)
-    {
-        return minimumDelayMs;
-    }
-
-    return std::clamp(timeoutMs, minimumDelayMs, maximumDelayMs);
-}
-
-int adjustedYouTubePollDelay(int timeoutMs, qint64 requestElapsedMs,
-                             int deliveredMessageCount, int activePollStreak)
-{
-    const auto cappedDelay = cappedYouTubePollDelay(timeoutMs);
-    constexpr int minimumWaitMs = 250;
-    const auto baseEarlyBiasMs = std::clamp(cappedDelay / 10, 75, 150);
-
-    int activityBiasMs = 0;
-    if (deliveredMessageCount > 0)
-    {
-        const auto cappedStreak = std::clamp(activePollStreak, 1, 3);
-        activityBiasMs = deliveredMessageCount >= 3 ? 35 : 20;
-        activityBiasMs += (cappedStreak - 1) * 10;
-    }
-
-    const auto maxEarlyBiasMs =
-        std::min(200, std::max(baseEarlyBiasMs, cappedDelay / 5));
-    const auto earlyBiasMs =
-        std::min(baseEarlyBiasMs + activityBiasMs, maxEarlyBiasMs);
-    return std::max(minimumWaitMs,
-                    cappedDelay - static_cast<int>(requestElapsedMs) -
-                        earlyBiasMs);
-}
-
 }  // namespace
 
 namespace chatterino {
@@ -181,7 +148,6 @@ void YouTubeLiveChat::start()
     this->statusText_.clear();
     this->liveTitle_.clear();
     this->seenMessageIds_.clear();
-    this->joinedLiveVideoId_.clear();
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
     this->immediateSourceProbePending_ = this->shouldResolveLiveStreamFromSource();
@@ -289,13 +255,14 @@ void YouTubeLiveChat::resolveChannelIdFromVideoId(
     }
 
     auto callback = std::make_shared<std::function<void()>>(std::move(onResolved));
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
     NetworkRequest(
         QString("https://www.youtube.com/watch?v=%1").arg(videoId).toStdString())
         .headerList(youtubeHeaders())
         .followRedirects(true)
-        .onSuccess([this, weak, callback](const NetworkResult &result) {
-                if (!weak.lock() || !this->running_)
+        .onSuccess(guardedCallback(
+            this->lifetimeGuard_,
+            [this, callback](const NetworkResult &result) {
+                if (!this->running_)
                 {
                     return;
                 }
@@ -309,15 +276,15 @@ void YouTubeLiveChat::resolveChannelIdFromVideoId(
                 }
 
                 (*callback)();
-            })
-        .onError([this, weak, callback](NetworkResult) {
-            if (!weak.lock() || !this->running_)
-            {
-                return;
-            }
-
-            (*callback)();
-        })
+            }))
+        .onError(guardedCallback(this->lifetimeGuard_,
+                                 [this, callback](NetworkResult) {
+                                     if (!this->running_)
+                                     {
+                                         return;
+                                     }
+                                     (*callback)();
+                                 }))
         .execute();
 }
 
@@ -340,27 +307,27 @@ void YouTubeLiveChat::probeLiveVideoIdFromSource(
     const auto liveUrl = QString("https://www.youtube.com%1").arg(livePath);
     auto callback =
         std::make_shared<std::function<void(QString)>>(std::move(onResolved));
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
     NetworkRequest(liveUrl.toStdString())
         .headerList(youtubeHeaders())
         .followRedirects(true)
-        .onSuccess([this, weak, callback](const NetworkResult &result) {
-            if (!weak.lock() || !this->running_)
-            {
-                return;
-            }
-
-            const auto html = QString::fromUtf8(result.getData());
-            (*callback)(extractLiveVideoId(html));
-        })
-        .onError([this, weak, callback](NetworkResult) {
-            if (!weak.lock() || !this->running_)
-            {
-                return;
-            }
-
-            (*callback)({});
-        })
+        .onSuccess(guardedCallback(
+            this->lifetimeGuard_,
+            [this, callback](const NetworkResult &result) {
+                if (!this->running_)
+                {
+                    return;
+                }
+                const auto html = QString::fromUtf8(result.getData());
+                (*callback)(extractLiveVideoId(html));
+            }))
+        .onError(guardedCallback(this->lifetimeGuard_,
+                                 [this, callback](NetworkResult) {
+                                     if (!this->running_)
+                                     {
+                                         return;
+                                     }
+                                     (*callback)({});
+                                 }))
         .execute();
 }
 
@@ -379,68 +346,71 @@ void YouTubeLiveChat::bootstrapInnertubeContext(std::function<void()> onReady,
         return;
     }
 
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
     NetworkRequest(YOUTUBE_BOOTSTRAP_URL.toStdString())
         .headerList(youtubeHeaders())
         .followRedirects(true)
-        .onSuccess([this, weak, onReady = std::move(onReady), failureText](
-                       const NetworkResult &result) mutable {
-            if (!weak.lock() || !this->running_)
-            {
-                return;
-            }
+        .onSuccess(guardedCallback(
+            this->lifetimeGuard_,
+            [this, onReady = std::move(onReady),
+             failureText](const NetworkResult &result) mutable {
+                if (!this->running_)
+                {
+                    return;
+                }
 
-            const auto html = QString::fromUtf8(result.getData());
-            if (html.contains("Before you continue"))
-            {
-                this->setStatusText(
-                    "YouTube returned a consent gate while loading chat.",
-                    !this->failureReported_);
-                this->failureReported_ = true;
-                return;
-            }
-            if (html.contains("unusual traffic", Qt::CaseInsensitive))
-            {
-                this->setStatusText(
-                    "YouTube blocked the live chat request from this network.",
-                    !this->failureReported_);
-                this->failureReported_ = true;
-                return;
-            }
+                const auto html = QString::fromUtf8(result.getData());
+                if (html.contains("Before you continue"))
+                {
+                    this->setStatusText(
+                        "YouTube returned a consent gate while loading chat.",
+                        !this->failureReported_);
+                    this->failureReported_ = true;
+                    return;
+                }
+                if (html.contains("unusual traffic", Qt::CaseInsensitive))
+                {
+                    this->setStatusText(
+                        "YouTube blocked the live chat request from this "
+                        "network.",
+                        !this->failureReported_);
+                    this->failureReported_ = true;
+                    return;
+                }
 
-            this->apiKey_ = extractFirstMatch(
-                html, {R"yt("INNERTUBE_API_KEY":"([^"]+)")yt",
-                       R"yt("innertubeApiKey":"([^"]+)")yt"});
-            this->clientVersion_ = extractFirstMatch(
-                html, {R"yt("INNERTUBE_CLIENT_VERSION":"([^"]+)")yt",
-                       R"yt("clientVersion":"([^"]+)")yt"});
-            this->visitorData_ = extractFirstMatch(
-                html, {R"yt("VISITOR_DATA":"([^"]+)")yt",
-                       R"yt("visitorData":"([^"]+)")yt"});
+                this->apiKey_ = extractFirstMatch(
+                    html, {R"yt("INNERTUBE_API_KEY":"([^"]+)")yt",
+                           R"yt("innertubeApiKey":"([^"]+)")yt"});
+                this->clientVersion_ = extractFirstMatch(
+                    html, {R"yt("INNERTUBE_CLIENT_VERSION":"([^"]+)")yt",
+                           R"yt("clientVersion":"([^"]+)")yt"});
+                this->visitorData_ = extractFirstMatch(
+                    html, {R"yt("VISITOR_DATA":"([^"]+)")yt",
+                           R"yt("visitorData":"([^"]+)")yt"});
 
-            if (this->apiKey_.isEmpty() || this->clientVersion_.isEmpty() ||
-                this->visitorData_.isEmpty())
-            {
+                if (this->apiKey_.isEmpty() ||
+                    this->clientVersion_.isEmpty() ||
+                    this->visitorData_.isEmpty())
+                {
+                    this->setStatusText(failureText, !this->failureReported_);
+                    this->failureReported_ = true;
+                    this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
+                    return;
+                }
+
+                this->failureReported_ = false;
+                onReady();
+            }))
+        .onError(guardedCallback(
+            this->lifetimeGuard_,
+            [this, failureText = std::move(failureText)](NetworkResult) {
+                if (!this->running_)
+                {
+                    return;
+                }
                 this->setStatusText(failureText, !this->failureReported_);
                 this->failureReported_ = true;
                 this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
-                return;
-            }
-
-            this->failureReported_ = false;
-            onReady();
-        })
-        .onError([this, weak, failureText = std::move(failureText)](
-                     NetworkResult) {
-            if (!weak.lock() || !this->running_)
-            {
-                return;
-            }
-
-            this->setStatusText(failureText, !this->failureReported_);
-            this->failureReported_ = true;
-            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
-        })
+            }))
         .execute();
 }
 
@@ -485,56 +455,62 @@ void YouTubeLiveChat::resolveSourceToVideoId(const QString &source)
                                             this->visitorData_);
     }
 
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
     std::move(request)
-        .onSuccess([this, weak, source](const NetworkResult &result) {
-            if (!weak.lock() || !this->running_)
-            {
-                return;
-            }
+        .onSuccess(guardedCallback(
+            this->lifetimeGuard_,
+            [this, source](const NetworkResult &result) {
+                if (!this->running_)
+                {
+                    return;
+                }
 
-            const auto json = result.parseJson();
-            const auto endpoint = json["endpoint"].toObject();
-            const auto watchEndpoint = endpoint["watchEndpoint"].toObject();
-            const auto videoId = watchEndpoint["videoId"].toString().trimmed();
-            if (!videoId.isEmpty())
-            {
-                this->videoId_ = videoId;
-                this->seenMessageIds_.clear();
-                this->fetchLiveChatPage();
-                return;
-            }
+                const auto json = result.parseJson();
+                const auto endpoint = json["endpoint"].toObject();
+                const auto watchEndpoint =
+                    endpoint["watchEndpoint"].toObject();
+                const auto videoId =
+                    watchEndpoint["videoId"].toString().trimmed();
+                if (!videoId.isEmpty())
+                {
+                    this->videoId_ = videoId;
+                    this->seenMessageIds_.clear();
+                    this->fetchLiveChatPage();
+                    return;
+                }
 
-            if (!endpoint["browseEndpoint"].toObject().isEmpty())
-            {
-                this->waitForNextLive(
-                    QString("Waiting for %1 to go live on YouTube.")
-                        .arg(source),
-                    YOUTUBE_RECONNECT_DELAY_MS);
-                return;
-            }
+                if (!endpoint["browseEndpoint"].toObject().isEmpty())
+                {
+                    this->waitForNextLive(
+                        QString("Waiting for %1 to go live on YouTube.")
+                            .arg(source),
+                        YOUTUBE_RECONNECT_DELAY_MS);
+                    return;
+                }
 
-            this->setStatusText(
-                "Couldn't resolve that YouTube channel. Try one of the "
-                "channel's video links so Mergerino can resolve the channel "
-                "ID automatically.",
-                !this->failureReported_);
-            this->failureReported_ = true;
-        })
-        .onError([this, weak](NetworkResult) {
-            if (!weak.lock() || !this->running_)
-            {
-                return;
-            }
-
-            this->setStatusText(
-                "Couldn't resolve that YouTube channel. Try one of the "
-                "channel's video links so Mergerino can resolve the channel "
-                "ID automatically.",
-                !this->failureReported_);
-            this->failureReported_ = true;
-            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
-        })
+                this->setStatusText(
+                    "Couldn't resolve that YouTube channel. Try one of the "
+                    "channel's video links so Mergerino can resolve the "
+                    "channel ID automatically.",
+                    !this->failureReported_);
+                this->failureReported_ = true;
+            }))
+        .onError(guardedCallback(this->lifetimeGuard_,
+                                 [this](NetworkResult) {
+                                     if (!this->running_)
+                                     {
+                                         return;
+                                     }
+                                     this->setStatusText(
+                                         "Couldn't resolve that YouTube "
+                                         "channel. Try one of the "
+                                         "channel's video links so "
+                                         "Mergerino can resolve the "
+                                         "channel ID automatically.",
+                                         !this->failureReported_);
+                                     this->failureReported_ = true;
+                                     this->scheduleResolve(
+                                         YOUTUBE_RECONNECT_DELAY_MS);
+                                 }))
         .execute();
 }
 
@@ -575,86 +551,92 @@ void YouTubeLiveChat::fetchLiveChatPage()
                                             this->visitorData_);
     }
 
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
     auto requestTimer = std::make_shared<QElapsedTimer>();
     requestTimer->start();
     std::move(request)
-        .onSuccess([this, weak, requestTimer](const NetworkResult &result) {
-            if (!weak.lock() || !this->running_)
+        .onSuccess(guardedCallback(
+            this->lifetimeGuard_,
+            [this, requestTimer](const NetworkResult &result) {
+                if (!this->running_)
+                {
+                    return;
+                }
+
+                const auto json = result.parseJson();
+                const auto liveChatRenderer =
+                    json["contents"]
+                        .toObject()["twoColumnWatchNextResults"]
+                        .toObject()["conversationBar"]
+                        .toObject()["liveChatRenderer"]
+                        .toObject();
+                this->continuation_ =
+                    extractLiveChatContinuation(liveChatRenderer);
+                if (this->continuation_.isEmpty())
+                {
+                    if (this->shouldResolveLiveStreamFromSource())
+                    {
+                        this->waitForNextLive(
+                            "Waiting for a live YouTube stream.",
+                            YOUTUBE_RECONNECT_DELAY_MS);
+                    }
+                    else
+                    {
+                        this->setStatusText(
+                            "Couldn't find the YouTube live chat "
+                            "continuation data.",
+                            !this->failureReported_);
+                        this->failureReported_ = true;
+                        this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
+                    }
+                    return;
+                }
+
+                this->liveTitle_ = extractLiveStreamTitle(json);
+                this->failureReported_ = false;
+                this->pollFailureStreak_ = 0;
+                this->activePollStreak_ = 0;
+                // The "Joined YouTube live chat: <title>" announcement is
+                // now driven by MergedChannel's liveStatusChanged handler
+                // via the same flag pattern Twitch/Kick/TikTok use.
+                // setLive(true) below fires the signal; the title is
+                // already set above so MergedChannel can read it.
+                this->setStatusText(
+                    this->liveTitle_.isEmpty()
+                        ? QString("Watching YouTube live chat for %1")
+                              .arg(this->videoId_)
+                        : QString("Watching YouTube live chat for %1")
+                              .arg(this->liveTitle_));
+                this->setLive(true);
+                // Deliver the first poll's backlog so users see a message
+                // history on join. Subsequent polls only contain new live
+                // messages.
+                this->skipInitialBacklog_ = false;
+                this->poll();
+                this->metadataContinuation_.clear();
+                if (!this->viewerCountPollScheduled_)
+                {
+                    this->viewerCountPollScheduled_ = true;
+                    this->pollViewerCount();
+                }
+            }))
+        .onError(guardedCallback(this->lifetimeGuard_, [this](NetworkResult) {
+            if (!this->running_)
             {
                 return;
             }
 
-            const auto json = result.parseJson();
-            const auto liveChatRenderer =
-                json["contents"]
-                    .toObject()["twoColumnWatchNextResults"]
-                    .toObject()["conversationBar"]
-                    .toObject()["liveChatRenderer"]
-                    .toObject();
-            this->continuation_ = extractLiveChatContinuation(liveChatRenderer);
-            if (this->continuation_.isEmpty())
-            {
-                if (this->shouldResolveLiveStreamFromSource())
-                {
-                    this->waitForNextLive("Waiting for a live YouTube stream.",
-                                          YOUTUBE_RECONNECT_DELAY_MS);
-                }
-                else
-                {
-                    this->setStatusText(
-                        "Couldn't find the YouTube live chat continuation "
-                        "data.",
-                        !this->failureReported_);
-                    this->failureReported_ = true;
-                    this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
-                }
-                return;
-            }
-
-            this->liveTitle_ = extractLiveStreamTitle(json);
-            this->failureReported_ = false;
-            this->activePollStreak_ = 0;
-            if (this->joinedLiveVideoId_ != this->videoId_)
-            {
-                this->joinedLiveVideoId_ = this->videoId_;
-                auto joinedText = this->liveTitle_.isEmpty()
-                                      ? QString("Joined YouTube live chat")
-                                      : QString("Joined YouTube live chat: %1")
-                                            .arg(this->liveTitle_);
-                this->systemMessageReceived.invoke(
-                    makeSystemStatusMessage(joinedText,
-                                            YOUTUBE_PLATFORM_ACCENT));
-            }
+            this->pollFailureStreak_ += 1;
+            const int delay =
+                YouTubeLiveChat::computeBackoffDelay(this->pollFailureStreak_);
             this->setStatusText(
-                this->liveTitle_.isEmpty()
-                    ? QString("Watching YouTube live chat for %1")
-                          .arg(this->videoId_)
-                    : QString("Watching YouTube live chat for %1")
-                          .arg(this->liveTitle_));
-            this->setLive(true);
-            // Deliver the first poll's backlog so users see a message history
-            // on join. Subsequent polls only contain new live messages.
-            this->skipInitialBacklog_ = false;
-            this->poll();
-            this->metadataContinuation_.clear();
-            if (!this->viewerCountPollScheduled_)
-            {
-                this->viewerCountPollScheduled_ = true;
-                this->pollViewerCount();
-            }
-        })
-        .onError([this, weak](NetworkResult) {
-            if (!weak.lock() || !this->running_)
-            {
-                return;
-            }
-
-            this->setStatusText("Couldn't load the YouTube live chat page.",
-                                !this->failureReported_);
+                QString("Couldn't load the YouTube live chat page "
+                        "(retry %1 in %2s).")
+                    .arg(this->pollFailureStreak_)
+                    .arg(delay / 1000),
+                !this->failureReported_);
             this->failureReported_ = true;
-            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
-        })
+            this->scheduleResolve(delay);
+        }))
         .execute();
 }
 
@@ -690,12 +672,13 @@ void YouTubeLiveChat::poll()
                                             this->visitorData_);
     }
 
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
     auto requestTimer = std::make_shared<QElapsedTimer>();
     requestTimer->start();
     std::move(request)
-        .onSuccess([this, weak, requestTimer](const NetworkResult &result) {
-            if (!weak.lock() || !this->running_)
+        .onSuccess(guardedCallback(this->lifetimeGuard_, [this, requestTimer](
+                                                             const NetworkResult
+                                                                 &result) {
+            if (!this->running_)
             {
                 return;
             }
@@ -790,7 +773,7 @@ void YouTubeLiveChat::poll()
                 if (!timed.isEmpty())
                 {
                     this->continuation_ = timed["continuation"].toString();
-                    nextDelay = adjustedYouTubePollDelay(
+                    nextDelay = YouTubeLiveChat::adjustedPollDelay(
                         timed["timeoutMs"].toInt(nextDelay),
                         requestTimer->elapsed(), deliveredMessageCount,
                         this->activePollStreak_);
@@ -805,7 +788,7 @@ void YouTubeLiveChat::poll()
                 {
                     this->continuation_ =
                         invalidation["continuation"].toString();
-                    nextDelay = adjustedYouTubePollDelay(
+                    nextDelay = YouTubeLiveChat::adjustedPollDelay(
                         invalidation["timeoutMs"].toInt(nextDelay),
                         requestTimer->elapsed(), deliveredMessageCount,
                         this->activePollStreak_);
@@ -828,6 +811,7 @@ void YouTubeLiveChat::poll()
             }
 
             this->failureReported_ = false;
+            this->pollFailureStreak_ = 0;
             this->setLive(true);
 
             // Stagger the batch so messages flow in rather than landing in a
@@ -850,21 +834,24 @@ void YouTubeLiveChat::poll()
                     {
                         auto msg = pendingBatch[static_cast<std::size_t>(i)];
                         QTimer::singleShot(
-                            i * intervalMs, [this, weak, msg = std::move(msg)]() {
-                                if (!weak.lock() || !this->running_)
-                                {
-                                    return;
-                                }
-                                this->messageReceived.invoke(msg);
-                            });
+                            i * intervalMs,
+                            guardedCallback(
+                                this->lifetimeGuard_,
+                                [this, msg = std::move(msg)]() {
+                                    if (!this->running_)
+                                    {
+                                        return;
+                                    }
+                                    this->messageReceived.invoke(msg);
+                                }));
                     }
                 }
             }
 
             this->schedulePoll(nextDelay);
-        })
-        .onError([this, weak](NetworkResult) {
-            if (!weak.lock() || !this->running_)
+        }))
+        .onError(guardedCallback(this->lifetimeGuard_, [this](NetworkResult) {
+            if (!this->running_)
             {
                 return;
             }
@@ -872,25 +859,31 @@ void YouTubeLiveChat::poll()
             this->setLive(false);
             this->continuation_.clear();
             this->activePollStreak_ = 0;
+            this->pollFailureStreak_ += 1;
+            const int delay =
+                YouTubeLiveChat::computeBackoffDelay(this->pollFailureStreak_);
             this->setStatusText(
-                "YouTube live chat polling failed. Reconnecting.",
+                QString("YouTube live chat polling failed "
+                        "(retry %1 in %2s).")
+                    .arg(this->pollFailureStreak_)
+                    .arg(delay / 1000),
                 !this->failureReported_);
             this->failureReported_ = true;
-            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
-        })
+            this->scheduleResolve(delay);
+        }))
         .execute();
 }
 
 void YouTubeLiveChat::schedulePoll(int delayMs)
 {
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
-    QTimer::singleShot(delayMs, [this, weak] {
-        if (!weak.lock() || !this->running_)
-        {
-            return;
-        }
-        this->poll();
-    });
+    QTimer::singleShot(delayMs,
+                       guardedCallback(this->lifetimeGuard_, [this] {
+                           if (!this->running_)
+                           {
+                               return;
+                           }
+                           this->poll();
+                       }));
 }
 
 void YouTubeLiveChat::pollViewerCount()
@@ -933,10 +926,11 @@ void YouTubeLiveChat::pollViewerCount()
                                             this->visitorData_);
     }
 
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
     std::move(request)
-        .onSuccess([this, weak](const NetworkResult &result) {
-            if (!weak.lock() || !this->running_)
+        .onSuccess(guardedCallback(this->lifetimeGuard_, [this](
+                                                             const NetworkResult
+                                                                 &result) {
+            if (!this->running_)
             {
                 return;
             }
@@ -1023,29 +1017,29 @@ void YouTubeLiveChat::pollViewerCount()
                 this->metadataContinuation_.clear();
             }
             this->scheduleViewerCountPoll(nextDelay);
-        })
-        .onError([this, weak](NetworkResult) {
-            if (!weak.lock() || !this->running_)
+        }))
+        .onError(guardedCallback(this->lifetimeGuard_, [this](NetworkResult) {
+            if (!this->running_)
             {
                 return;
             }
             this->metadataContinuation_.clear();
             this->scheduleViewerCountPoll(30000);
-        })
+        }))
         .execute();
 }
 
 void YouTubeLiveChat::scheduleViewerCountPoll(int delayMs)
 {
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
-    QTimer::singleShot(delayMs, [this, weak] {
-        if (!weak.lock() || !this->running_ || !this->live_)
-        {
-            this->viewerCountPollScheduled_ = false;
-            return;
-        }
-        this->pollViewerCount();
-    });
+    QTimer::singleShot(delayMs,
+                       guardedCallback(this->lifetimeGuard_, [this] {
+                           if (!this->running_ || !this->live_)
+                           {
+                               this->viewerCountPollScheduled_ = false;
+                               return;
+                           }
+                           this->pollViewerCount();
+                       }));
 }
 
 void YouTubeLiveChat::setViewerCount(unsigned count)
@@ -1065,15 +1059,14 @@ unsigned YouTubeLiveChat::viewerCount() const
 
 void YouTubeLiveChat::scheduleResolve(int delayMs)
 {
-    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
-    QTimer::singleShot(delayMs, [this, weak] {
-        if (!weak.lock() || !this->running_)
-        {
-            return;
-        }
-
-        this->resolveVideoId();
-    });
+    QTimer::singleShot(delayMs,
+                       guardedCallback(this->lifetimeGuard_, [this] {
+                           if (!this->running_)
+                           {
+                               return;
+                           }
+                           this->resolveVideoId();
+                       }));
 }
 
 void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
@@ -1131,6 +1124,62 @@ bool YouTubeLiveChat::shouldResolveLiveStreamFromSource() const
 QString YouTubeLiveChat::resolvedSource() const
 {
     return normalizeSource(this->streamUrl_);
+}
+
+int YouTubeLiveChat::cappedPollDelay(int timeoutMs)
+{
+    constexpr int minimumDelayMs = 1000;
+    constexpr int maximumDelayMs = 30000;
+
+    if (timeoutMs <= 0)
+    {
+        return minimumDelayMs;
+    }
+
+    return std::clamp(timeoutMs, minimumDelayMs, maximumDelayMs);
+}
+
+int YouTubeLiveChat::adjustedPollDelay(int timeoutMs, qint64 requestElapsedMs,
+                                       int deliveredMessageCount,
+                                       int activePollStreak)
+{
+    const auto cappedDelay = YouTubeLiveChat::cappedPollDelay(timeoutMs);
+    constexpr int minimumWaitMs = 250;
+    const auto baseEarlyBiasMs = std::clamp(cappedDelay / 10, 75, 150);
+
+    int activityBiasMs = 0;
+    if (deliveredMessageCount > 0)
+    {
+        const auto cappedStreak = std::clamp(activePollStreak, 1, 3);
+        activityBiasMs = deliveredMessageCount >= 3 ? 35 : 20;
+        activityBiasMs += (cappedStreak - 1) * 10;
+    }
+
+    const auto maxEarlyBiasMs =
+        std::min(200, std::max(baseEarlyBiasMs, cappedDelay / 5));
+    const auto earlyBiasMs =
+        std::min(baseEarlyBiasMs + activityBiasMs, maxEarlyBiasMs);
+    return std::max(minimumWaitMs,
+                    cappedDelay - static_cast<int>(requestElapsedMs) -
+                        earlyBiasMs);
+}
+
+int YouTubeLiveChat::computeBackoffDelay(int failureStreak)
+{
+    // After N consecutive HTTP failures, wait 3s * 2^(N-1) before retrying,
+    // capped at 60s. The sequence is 3s, 6s, 12s, 24s, 48s, 60s, 60s...
+    if (failureStreak <= 0)
+    {
+        return YOUTUBE_RECONNECT_DELAY_MS;
+    }
+    const int shift = std::min(failureStreak - 1, 5);
+    const long long scaled =
+        static_cast<long long>(YOUTUBE_RECONNECT_DELAY_MS) << shift;
+    if (scaled >= YOUTUBE_RECONNECT_MAX_DELAY_MS)
+    {
+        return YOUTUBE_RECONNECT_MAX_DELAY_MS;
+    }
+    return static_cast<int>(scaled);
 }
 
 QString YouTubeLiveChat::maybeExtractVideoId(const QString &urlString)
@@ -1493,9 +1542,24 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     }
     else
     {
-        qWarning().nospace() << "YouTube: unhandled live chat renderer: "
-                             << rendererName;
-        qWarning() << QJsonDocument(renderer).toJson(QJsonDocument::Compact);
+        // Rate-limit diagnostic renderer dumps so a stream with many unknown
+        // renderer types can't flood the log. Five is enough to spot a new
+        // renderer; beyond that the first few already carried the signal.
+        static std::atomic<int> warningCount{0};
+        const int n = warningCount.fetch_add(1, std::memory_order_relaxed);
+        if (n < 5)
+        {
+            qCWarning(chatterinoYouTube).nospace()
+                << "unhandled live chat renderer: " << rendererName;
+            qCWarning(chatterinoYouTube)
+                << QJsonDocument(renderer).toJson(QJsonDocument::Compact);
+        }
+        else if (n == 5)
+        {
+            qCWarning(chatterinoYouTube)
+                << "further unhandled-renderer warnings suppressed for this "
+                   "session";
+        }
         return nullptr;
     }
 

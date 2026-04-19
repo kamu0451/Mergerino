@@ -86,8 +86,13 @@ bool isTwitchSpecialChannelType(Channel::Type type)
 
 PlatformIndicatorMode defaultPlatformIndicatorMode(bool isActivityPane)
 {
-    return isActivityPane ? PlatformIndicatorMode::LineColor
-                          : getSettings()->mergedPlatformIndicatorMode.getEnum();
+    // Previously the activity pane was forced to LineColor so icons
+    // didn't crowd the narrow activity strip. Users want the icons there
+    // too - Twitch / Kick / YouTube / TikTok are visually distinct at
+    // 16px and the alternative (a 2px color bar) isn't a clear enough
+    // signal on a mixed feed. Respect the user's setting in both panes.
+    (void)isActivityPane;
+    return getSettings()->mergedPlatformIndicatorMode.getEnum();
 }
 
 QStringList normalizedFilterIds(const QList<QUuid> &ids)
@@ -1192,6 +1197,16 @@ qreal Split::activityMessageScale() const
 
 PlatformIndicatorMode Split::platformIndicatorMode() const
 {
+    // Activity panes always follow the user's global
+    // mergedPlatformIndicatorMode setting so an existing pane saved
+    // with LineColor before the respect-setting fix doesn't keep
+    // suppressing icons on upgrade. Per-split customisation for
+    // activity panes isn't a real use case - they're a unified view
+    // across all open merged tabs.
+    if (this->isActivityPane())
+    {
+        return getSettings()->mergedPlatformIndicatorMode.getEnum();
+    }
     return this->platformIndicatorMode_;
 }
 

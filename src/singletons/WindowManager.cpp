@@ -522,6 +522,14 @@ void WindowManager::save()
     assertInGuiThread();
     QJsonDocument document;
 
+    // Flush any pending bounds update on every window so a close/save
+    // that fires within 10 ms of a user-initiated move doesn't persist
+    // stale coordinates. No-op for maximized / minimized windows.
+    for (Window *window : this->windows_)
+    {
+        window->syncBoundsForSave();
+    }
+
     // "serialize"
     QJsonArray windowArr;
     for (Window *window : this->windows_)

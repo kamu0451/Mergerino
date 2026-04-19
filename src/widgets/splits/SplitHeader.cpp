@@ -1034,10 +1034,31 @@ void SplitHeader::updateChannelText()
             }
             this->tooltipText_ = formatTooltip(*streamStatus, this->thumbnail_);
             title += formatTitle(*streamStatus, *getSettings());
+            if (getSettings()->headerViewerCount &&
+                streamStatus->viewerCount > 0)
+            {
+                const auto delta =
+                    this->viewerDeltaTracker_.sampleAndCompute(
+                        streamStatus->viewerCount,
+                        QDateTime::currentMSecsSinceEpoch(),
+                        getSettings()
+                            ->mergedViewerDeltaWindowMinutes.getValue());
+                if (delta && std::abs(delta->percent) >= 0.1)
+                {
+                    deltaText = QString(" (%1%2% / %3 min)")
+                                    .arg(delta->percent >= 0 ? "+" : "")
+                                    .arg(delta->percent, 0, 'f', 1)
+                                    .arg(delta->spanMinutes);
+                    deltaColor = delta->percent >= 0
+                                     ? QColor(0x4c, 0xaf, 0x50)
+                                     : QColor(0xef, 0x53, 0x50);
+                }
+            }
         }
         else
         {
             this->tooltipText_ = formatOfflineTooltip(*streamStatus);
+            this->viewerDeltaTracker_.clear();
         }
     }
     else if (auto *kickChannel = dynamic_cast<KickChannel *>(channel.get()))
@@ -1066,16 +1087,99 @@ void SplitHeader::updateChannelText()
             }
             this->tooltipText_ = formatTooltip(twitch, this->thumbnail_, true);
             title += formatTitle(twitch, *getSettings());
+            if (getSettings()->headerViewerCount && stream.viewerCount > 0)
+            {
+                const auto delta =
+                    this->viewerDeltaTracker_.sampleAndCompute(
+                        static_cast<unsigned>(stream.viewerCount),
+                        QDateTime::currentMSecsSinceEpoch(),
+                        getSettings()
+                            ->mergedViewerDeltaWindowMinutes.getValue());
+                if (delta && std::abs(delta->percent) >= 0.1)
+                {
+                    deltaText = QString(" (%1%2% / %3 min)")
+                                    .arg(delta->percent >= 0 ? "+" : "")
+                                    .arg(delta->percent, 0, 'f', 1)
+                                    .arg(delta->spanMinutes);
+                    deltaColor = delta->percent >= 0
+                                     ? QColor(0x4c, 0xaf, 0x50)
+                                     : QColor(0xef, 0x53, 0x50);
+                }
+            }
         }
         else
         {
             this->tooltipText_ = formatOfflineTooltip(twitch);
+            this->viewerDeltaTracker_.clear();
         }
     }
     else if (auto *mergedChannel = dynamic_cast<MergedChannel *>(channel.get()))
     {
         this->isLive_ = mergedChannel->isLive();
         this->tooltipText_ = mergedChannel->tooltipText();
+
+        // If the merged tab has a live Twitch source, prepend the same
+        // stream thumbnail a plain Twitch tab shows. Fetch is driven by
+        // the same thumbnailSizeStream setting and cache-aged the same
+        // way as the Twitch branch above.
+        if (auto twitchSource = mergedChannel->twitchChannel())
+        {
+            if (auto *twitch =
+                    dynamic_cast<TwitchChannel *>(twitchSource.get()))
+            {
+                if (twitch->accessStreamStatus()->live)
+                {
+                    QString url = "https://static-cdn.jtvnw.net/"
+                                  "previews-ttv/live_user_" +
+                                  twitchSource->getName().toLower();
+                    switch (getSettings()->thumbnailSizeStream.getValue())
+                    {
+                        case 1:
+                            url.append("-80x45.jpg");
+                            break;
+                        case 2:
+                            url.append("-160x90.jpg");
+                            break;
+                        case 3:
+                            url.append("-360x203.jpg");
+                            break;
+                        default:
+                            url = "";
+                    }
+                    if (!url.isEmpty() &&
+                        (!this->lastThumbnail_.isValid() ||
+                         this->lastThumbnail_.elapsed() > THUMBNAIL_MAX_AGE_MS))
+                    {
+                        NetworkRequest(url, NetworkRequestType::Get)
+                            .caller(this)
+                            .onSuccess([this](auto result) {
+                                assert(!isAppAboutToQuit());
+                                if (result.status() == 200)
+                                {
+                                    this->thumbnail_ = QString::fromLatin1(
+                                        result.getData().toBase64());
+                                }
+                                else
+                                {
+                                    this->thumbnail_.clear();
+                                }
+                                this->updateChannelText();
+                            })
+                            .execute();
+                        this->lastThumbnail_.restart();
+                    }
+                    if (!this->thumbnail_.isEmpty())
+                    {
+                        this->tooltipText_ =
+                            QString("<p style=\"text-align: center;\">"
+                                    "<img src=\"data:image/jpg;base64, %1\">"
+                                    "</p>%2")
+                                .arg(this->thumbnail_, this->tooltipText_);
+                    }
+                }
+            }
+        }
+
         if (this->isLive_)
         {
             title += mergedChannel->statusSuffix();

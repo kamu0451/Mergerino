@@ -95,6 +95,12 @@ struct TikTokLiveChat::Impl {
     qint32 pendingJoinCount{0};
     QString pendingJoinUser;
 
+    // Watchdog: after ws-open we expect check_alive to report an alive_state
+    // within ~30s. If it never arrives the room is almost certainly offline
+    // or the user is not live; surface it instead of sitting on
+    // "Connecting..." forever.
+    QTimer stuckConnectionTimer;
+
     ~Impl()
     {
         if (webview)
@@ -166,6 +172,20 @@ void TikTokLiveChat::start()
                      [this]() { this->flushPendingLikes(); });
     QObject::connect(&this->impl_->joinTimer, &QTimer::timeout,
                      [this]() { this->flushPendingJoins(); });
+    this->impl_->stuckConnectionTimer.setSingleShot(true);
+    this->impl_->stuckConnectionTimer.setInterval(30000);
+    QObject::connect(&this->impl_->stuckConnectionTimer, &QTimer::timeout,
+                     [this]() {
+                         if (!this->running_)
+                         {
+                             return;
+                         }
+                         this->setStatusText(
+                             QStringLiteral("TikTok live chat unavailable "
+                                            "(no response from room)"),
+                             true);
+                         this->setLive(false);
+                     });
     this->impl_->host = CreateWindowExW(
         0, kWindowClass, L"mergerino-tiktok-host", WS_POPUP, 0, 0, 1, 1,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -501,6 +521,12 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         const auto aliveVal = first.value(QStringLiteral("alive_state"));
         if (aliveVal.isDouble())
         {
+            // Room responded with a definitive live/offline state - cancel
+            // the stuck-connection watchdog regardless of value.
+            if (this->impl_)
+            {
+                this->impl_->stuckConnectionTimer.stop();
+            }
             this->setLive(aliveVal.toInt() == 2);
         }
     }
@@ -603,10 +629,18 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         // pages too. Wait for alive_state == 2 from check_alive or an
         // actual decoded chat event before treating the room as live.
         this->setStatusText(QStringLiteral("Connected to TikTok"));
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.start();
+        }
         return;
     }
     if (kind == QStringLiteral("ws-close"))
     {
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.stop();
+        }
         this->setLive(false);
         this->setStatusText(QStringLiteral("TikTok live chat disconnected"),
                             true);
@@ -614,6 +648,10 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
     }
     if (kind == QStringLiteral("ws-error"))
     {
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.stop();
+        }
         this->setStatusText(QStringLiteral("TikTok live chat error"), true);
         return;
     }

@@ -42,6 +42,11 @@ constexpr qint64 VIEWER_DELTA_MIN_SPAN_MS = 60 * 1000;
 constexpr qint64 VIEWER_DELTA_SAMPLE_INTERVAL_MS = 30 * 1000;
 constexpr int VIEWER_DELTA_WINDOW_MIN_MINUTES = 1;
 constexpr int VIEWER_DELTA_WINDOW_MAX_MINUTES = 60;
+// Hard cap on stored samples. Time-based pruning alone doesn't bound growth
+// when the viewer count changes between polls (the sample-interval guard is
+// OR'd, not AND'd, with the "count changed" check), so a bouncing count on
+// a frequent caller can theoretically grow the deque without limit.
+constexpr std::size_t VIEWER_DELTA_MAX_ENTRIES = 200;
 
 QString normalizeChannelName(QString value)
 {
@@ -395,6 +400,10 @@ MergedChannel::viewerCountDeltaPercent() const
             VIEWER_DELTA_SAMPLE_INTERVAL_MS)
     {
         this->viewerCountHistory_.emplace_back(now, current);
+        while (this->viewerCountHistory_.size() > VIEWER_DELTA_MAX_ENTRIES)
+        {
+            this->viewerCountHistory_.pop_front();
+        }
     }
 
     if (this->viewerCountHistory_.size() < 2)

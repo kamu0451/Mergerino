@@ -23,7 +23,13 @@ vcpkg alternative: `vcpkg install` then configure with `-DCMAKE_TOOLCHAIN_FILE="
 
 Run: `build-conan\bin\mergerino.exe`. To produce a standalone bundle: `windeployqt build-conan\bin\mergerino.exe --release --no-compiler-runtime --no-translations --no-opengl-sw --dir build-conan\bin`.
 
-Key CMake options (from `CMakeLists.txt`): `BUILD_TESTS`, `BUILD_BENCHMARKS`, `CHATTERINO_PLUGINS` (Lua/Sol2, on by default), `CHATTERINO_SPELLCHECK` (requires Hunspell — CI turns this on), `BUILD_WITH_CRASHPAD` (off by default, and off in the release workflow), `CHATTERINO_LTO`, `USE_PRECOMPILED_HEADERS`.
+Key CMake options (from `CMakeLists.txt`): `BUILD_TESTS`, `BUILD_BENCHMARKS`, `CHATTERINO_PLUGINS` (Lua/Sol2, on by default), `CHATTERINO_SPELLCHECK` (requires Hunspell — CI turns this on), `BUILD_WITH_CRASHPAD` (off by default, and off in the release workflow), `CHATTERINO_LTO`, `USE_PRECOMPILED_HEADERS`. `CMAKE_EXPORT_COMPILE_COMMANDS` is forced ON so every Ninja build drops a `compile_commands.json` for clangd / VS Code.
+
+## Logging
+
+- **`--log-file <path>`** — tee every Qt log message to the given file with ISO-timestamp/level/category/message columns. Cleared on each run by `.dev-cycle.bat`. Intended for automated tooling and post-mortem review.
+- **`QT_LOGGING_RULES`** — runtime filter syntax, e.g. `chatterino.youtube.debug=true;chatterino.tiktok.*=true`. Category list is in `src/common/QLogging.hpp` (`Q_DECLARE_LOGGING_CATEGORY`). Mergerino-specific categories: `chatterino.youtube`, `chatterino.tiktok`, `chatterino.merged`, `chatterino.kick` (and the full upstream set). Default threshold is Warning in Release and Debug in Debug builds.
+- **`--verbose`** — attaches a console window on Windows so qDebug/qInfo show up even without `--log-file`.
 
 ## Tests
 

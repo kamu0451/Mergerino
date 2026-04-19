@@ -1197,6 +1197,16 @@ qreal Split::activityMessageScale() const
 
 PlatformIndicatorMode Split::platformIndicatorMode() const
 {
+    // Activity panes always follow the user's global
+    // mergedPlatformIndicatorMode setting so an existing pane saved
+    // with LineColor before the respect-setting fix doesn't keep
+    // suppressing icons on upgrade. Per-split customisation for
+    // activity panes isn't a real use case - they're a unified view
+    // across all open merged tabs.
+    if (this->isActivityPane())
+    {
+        return getSettings()->mergedPlatformIndicatorMode.getEnum();
+    }
     return this->platformIndicatorMode_;
 }
 

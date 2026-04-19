@@ -35,6 +35,7 @@ Q_LOGGING_CATEGORY(chatterinoLiveupdates, "chatterino.liveupdates",
                    logThreshold);
 Q_LOGGING_CATEGORY(chatterinoLua, "chatterino.lua", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoMain, "chatterino.main", logThreshold);
+Q_LOGGING_CATEGORY(chatterinoMerged, "chatterino.merged", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoMessage, "chatterino.message", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoNativeMessage, "chatterino.nativemessage",
                    logThreshold);
@@ -57,6 +58,7 @@ Q_LOGGING_CATEGORY(chatterinoStreamerMode, "chatterino.streamermode",
                    logThreshold);
 Q_LOGGING_CATEGORY(chatterinoStreamlink, "chatterino.streamlink", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoTheme, "chatterino.theme", logThreshold);
+Q_LOGGING_CATEGORY(chatterinoTikTok, "chatterino.tiktok", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoTokenizer, "chatterino.tokenizer", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoTwitch, "chatterino.twitch", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoTwitchEventSub, "chatterino.twitch.eventsub",
@@ -69,3 +71,4 @@ Q_LOGGING_CATEGORY(chatterinoWidget, "chatterino.widget", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoWindowmanager, "chatterino.windowmanager",
                    logThreshold);
 Q_LOGGING_CATEGORY(chatterinoXDG, "chatterino.xdg", logThreshold);
+Q_LOGGING_CATEGORY(chatterinoYouTube, "chatterino.youtube", logThreshold);

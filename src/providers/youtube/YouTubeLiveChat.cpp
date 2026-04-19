@@ -6,6 +6,7 @@
 
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
+#include "common/QLogging.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
 #include "util/GuardedCallback.hpp"
@@ -1547,14 +1548,16 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
         const int n = warningCount.fetch_add(1, std::memory_order_relaxed);
         if (n < 5)
         {
-            qWarning().nospace() << "YouTube: unhandled live chat renderer: "
-                                 << rendererName;
-            qWarning() << QJsonDocument(renderer).toJson(QJsonDocument::Compact);
+            qCWarning(chatterinoYouTube).nospace()
+                << "unhandled live chat renderer: " << rendererName;
+            qCWarning(chatterinoYouTube)
+                << QJsonDocument(renderer).toJson(QJsonDocument::Compact);
         }
         else if (n == 5)
         {
-            qWarning() << "YouTube: further unhandled-renderer warnings "
-                          "suppressed for this session";
+            qCWarning(chatterinoYouTube)
+                << "further unhandled-renderer warnings suppressed for this "
+                   "session";
         }
         return nullptr;
     }

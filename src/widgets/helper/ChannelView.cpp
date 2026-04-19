@@ -3319,6 +3319,7 @@ void ChannelView::showUserInfoPopup(const QString &userName,
 
     auto *userPopup =
         new UserInfoPopup(getSettings()->autoCloseUserPopup, this->split_);
+    userPopup->setMessagePlatform(platform);
 
     auto openingChannel = this->hasSourceChannel() ? this->sourceChannel_
                                                    : this->underlyingChannel_;

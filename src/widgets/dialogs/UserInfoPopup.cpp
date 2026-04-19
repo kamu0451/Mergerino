@@ -887,6 +887,11 @@ void UserInfoPopup::installEvents()
             }));
 }
 
+void UserInfoPopup::setMessagePlatform(MessagePlatform platform)
+{
+    this->messagePlatform_ = platform;
+}
+
 void UserInfoPopup::setData(const QString &name, const ChannelPtr &channel)
 {
     this->setData(name, channel, channel);
@@ -932,7 +937,28 @@ void UserInfoPopup::setData(const QString &name,
     this->ui_.nameLabel->setText(name);
     this->ui_.nameLabel->setProperty("copy-text", name);
 
-    if (this->isKick_)
+    const bool isNonTwitchMergedPlatform =
+        this->messagePlatform_ == MessagePlatform::YouTube ||
+        this->messagePlatform_ == MessagePlatform::TikTok;
+
+    if (isNonTwitchMergedPlatform)
+    {
+        // YouTube / TikTok users don't exist on Twitch Helix or the Kick
+        // REST API, so firing those fetches just produces "Unavailable"
+        // noise. Render a minimal view - the filtered latest messages
+        // below still give the user meaningful context.
+        const QString platformLabel =
+            this->messagePlatform_ == MessagePlatform::YouTube
+                ? QStringLiteral("YouTube user")
+                : QStringLiteral("TikTok user");
+        this->ui_.followerCountLabel->setText(TEXT_FOLLOWERS.arg(platformLabel));
+        this->ui_.createdDateLabel->setText(
+            TEXT_CREATED.arg(TEXT_UNAVAILABLE));
+        this->ui_.userIDLabel->setText(u"ID " % TEXT_UNAVAILABLE);
+        this->ui_.userIDLabel->setProperty("copy-text",
+                                           TEXT_UNAVAILABLE.toString());
+    }
+    else if (this->isKick_)
     {
         this->updateKickUserData();
     }

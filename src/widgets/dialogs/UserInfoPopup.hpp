@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "messages/Message.hpp"
 #include "singletons/Paths.hpp"
 #include "widgets/BaseWindow.hpp"
 #include "widgets/DraggablePopup.hpp"
@@ -42,6 +43,12 @@ public:
      * @param split Will be used as the popup's parent. Must not be null
      */
     UserInfoPopup(bool closeAutomatically, Split *split);
+
+    /// Set the platform of the message the popup was opened from. Must be
+    /// called before setData(). Twitch / Kick continue to run their
+    /// provider-specific user-data fetches; YouTube / TikTok skip those
+    /// (the user doesn't exist on Twitch Helix) and render a minimal view.
+    void setMessagePlatform(MessagePlatform platform);
 
     void setData(const QString &name, const ChannelPtr &channel);
     void setData(const QString &name, const ChannelPtr &contextChannel,
@@ -144,6 +151,7 @@ private:
 
     bool isKick_ = false;
     uint64_t kickUserID_ = 0;
+    MessagePlatform messagePlatform_ = MessagePlatform::AnyOrTwitch;
 
     class TimeoutWidget : public BaseWidget
     {

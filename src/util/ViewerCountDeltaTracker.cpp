@@ -22,6 +22,26 @@ ViewerCountDeltaTracker::sampleAndCompute(unsigned currentCount, qint64 nowMs,
         this->samples_.pop_front();
     }
 
+    // Discontinuity guard: if the current count is wildly different from
+    // the oldest sample in the window (>3x up or down), the window now
+    // straddles two regimes (e.g. another merged source just came
+    // online, bumping the total from 126 to 647). That produces a bogus
+    // "+400%" delta that isn't real viewer flux. Drop the prior window
+    // and start fresh from this sample.
+    if (!this->samples_.empty())
+    {
+        const auto oldest = this->samples_.front().second;
+        if (oldest > 0 && currentCount > 0)
+        {
+            const auto hi = std::max(currentCount, oldest);
+            const auto lo = std::min(currentCount, oldest);
+            if (static_cast<double>(hi) > static_cast<double>(lo) * 3.0)
+            {
+                this->samples_.clear();
+            }
+        }
+    }
+
     // Push a fresh sample if empty, the count changed, or the sampling
     // interval has elapsed since the last sample. The interval keeps a
     // stable count from spamming entries; the change check keeps a

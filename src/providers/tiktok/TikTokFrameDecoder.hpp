@@ -67,6 +67,9 @@ struct DecodedFrame {
     std::vector<DecodedMemberEvent> memberEvents;
     std::vector<DecodedSocialEvent> socialEvents;
     std::vector<DecodedGiftEvent> giftEvents;
+    // Latest online-viewer count observed from WebcastRoomUserSeqMessage.
+    // 0 means "no count in this frame" (consumer should keep previous value).
+    qint64 roomViewerCount{0};
 };
 
 DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes);

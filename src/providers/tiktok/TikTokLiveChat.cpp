@@ -738,10 +738,19 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
 
 void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
 {
+    // WebcastRoomUserSeqMessage frames carry the current online viewer
+    // count; the HTTP room-info endpoints on the current TikTok page
+    // (check_alive) no longer include it, so this is the authoritative
+    // source for the tooltip's viewer line.
+    if (frame.roomViewerCount > 0)
+    {
+        this->setViewerCount(static_cast<unsigned>(frame.roomViewerCount));
+    }
+
     const bool hasLiveContent =
         !frame.chatMessages.empty() || !frame.likeEvents.empty() ||
         !frame.memberEvents.empty() || !frame.socialEvents.empty() ||
-        !frame.giftEvents.empty();
+        !frame.giftEvents.empty() || frame.roomViewerCount > 0;
     if (hasLiveContent)
     {
         // Fallback live signal when check_alive hasn't fired yet. Any real

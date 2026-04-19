@@ -432,8 +432,48 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
             out.giftEvents.push_back(std::move(ev));
         }
     }
-    // Other methods (room user sequence, control, room notify, ...) are left
-    // for follow-up work and ignored here.
+    else if (method == QStringLiteral("WebcastRoomUserSeqMessage"))
+    {
+        // Schema (best-effort, from public RE): field 3 total (historical
+        // total viewers), field 4/6 online (current viewers). Field names
+        // have drifted over TikTok versions. Scan every int64-typed field
+        // in the 3-10 range and take the largest - that's almost always
+        // the current live count.
+        qint64 best = 0;
+        Reader r = Reader::fromSpan(payload);
+        std::uint32_t fld{};
+        WireType wt{};
+        while (r.hasMore())
+        {
+            if (!r.readTag(fld, wt))
+            {
+                break;
+            }
+            if (wt == WireType::Varint && fld >= 3 && fld <= 10)
+            {
+                std::uint64_t v{};
+                if (!r.readVarint(v))
+                {
+                    break;
+                }
+                const auto signedV = static_cast<qint64>(v);
+                if (signedV > best)
+                {
+                    best = signedV;
+                }
+            }
+            else if (!r.skip(wt))
+            {
+                break;
+            }
+        }
+        if (best > out.roomViewerCount)
+        {
+            out.roomViewerCount = best;
+        }
+    }
+    // Other methods (control, room notify, ...) are left for follow-up
+    // work and ignored here.
     return true;
 }
 

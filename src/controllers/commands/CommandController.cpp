@@ -399,6 +399,7 @@ CommandController::CommandController(const Paths &paths)
     this->registerCommand("/fakemsg", &commands::injectFakeMessage);
     this->registerCommand("/debug-update-to-no-stream",
                           &commands::injectStreamUpdateNoStream);
+    this->registerCommand("/simmsg", &commands::simulateMergedMessage);
 #endif
 
     this->registerCommand("/copy", &commands::copyToClipboard);

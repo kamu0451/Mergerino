@@ -92,6 +92,15 @@ public:
     static qint64 sendWaitMs(qint64 lastSendMs, qint64 nowMs,
                              qint64 intervalMs);
 
+    /// Debug helper: injects a synthetic platform-tagged message into the
+    /// merged view as if it came from a real source. The message flows
+    /// through the same appendMergedMessage path real source signals use,
+    /// so the platform badge / accent / dedup are applied. Used by the
+    /// /simmsg debug command to exercise the merged-chat UI without real
+    /// streams.
+    void injectDebugMessage(MessagePlatform platform, const QString &user,
+                            const QString &text);
+
 private:
     void initializeSources();
     void connectSourceSignals(const ChannelPtr &source, MessagePlatform platform,

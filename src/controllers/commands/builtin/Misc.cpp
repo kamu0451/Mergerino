@@ -10,6 +10,7 @@
 #include "controllers/commands/CommandContext.hpp"
 #include "controllers/userdata/UserDataController.hpp"
 #include "providers/kick/KickChannel.hpp"
+#include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
@@ -627,6 +628,64 @@ QString injectFakeMessage(const CommandContext &ctx)
     auto ircText = ctx.words.mid(1).join(" ");
     getApp()->getTwitch()->addFakeMessage(ircText);
 
+    return "";
+}
+
+QString simulateMergedMessage(const CommandContext &ctx)
+{
+    // /simmsg <platform> <text...>
+    // Injects a synthetic platform-tagged message into the current merged
+    // channel so the merged UI (badge, accent, dedup) can be exercised
+    // without a live source stream.
+    if (ctx.channel == nullptr)
+    {
+        return "";
+    }
+
+    auto *merged = dynamic_cast<MergedChannel *>(ctx.channel.get());
+    if (merged == nullptr)
+    {
+        ctx.channel->addSystemMessage(
+            "/simmsg only works in a merged channel tab.");
+        return "";
+    }
+
+    if (ctx.words.size() < 3)
+    {
+        ctx.channel->addSystemMessage(
+            "Usage: /simmsg <twitch|kick|youtube|tiktok> <text...>");
+        return "";
+    }
+
+    const auto platformStr = ctx.words[1].toLower();
+    MessagePlatform platform;
+    if (platformStr == "twitch")
+    {
+        platform = MessagePlatform::AnyOrTwitch;
+    }
+    else if (platformStr == "kick")
+    {
+        platform = MessagePlatform::Kick;
+    }
+    else if (platformStr == "youtube" || platformStr == "yt")
+    {
+        platform = MessagePlatform::YouTube;
+    }
+    else if (platformStr == "tiktok" || platformStr == "tt")
+    {
+        platform = MessagePlatform::TikTok;
+    }
+    else
+    {
+        ctx.channel->addSystemMessage(
+            QString("Unknown platform '%1'. Use twitch, kick, youtube, or "
+                    "tiktok.")
+                .arg(platformStr));
+        return "";
+    }
+
+    const auto text = ctx.words.mid(2).join(' ');
+    merged->injectDebugMessage(platform, QStringLiteral("simulator"), text);
     return "";
 }
 

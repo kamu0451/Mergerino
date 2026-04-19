@@ -1083,6 +1083,30 @@ EmotePtr MergedChannel::platformBadge(MessagePlatform platform)
     return badge;
 }
 
+void MergedChannel::injectDebugMessage(MessagePlatform platform,
+                                       const QString &user,
+                                       const QString &text)
+{
+    MessageBuilder b;
+    b->platform = platform;
+    b->id = QStringLiteral("sim-%1-%2")
+                .arg(static_cast<int>(platform))
+                .arg(QDateTime::currentMSecsSinceEpoch());
+    b->loginName = user;
+    b->displayName = user;
+    b->localizedName = user;
+    b->channelName = user;
+    b->messageText = text;
+    b->searchText = user + QStringLiteral(": ") + text;
+    b->serverReceivedTime = QDateTime::currentDateTime();
+    b.emplace<TimestampElement>(b->serverReceivedTime.time());
+    b.emplace<TextElement>(user + QStringLiteral(":"),
+                           MessageElementFlag::Username, MessageColor::Text,
+                           FontStyle::ChatMediumBold);
+    b.emplace<TextElement>(text, MessageElementFlag::Text);
+    this->appendMergedMessage(b.release(), platform);
+}
+
 qint64 MergedChannel::sendWaitMs(qint64 lastSendMs, qint64 nowMs,
                                  qint64 intervalMs)
 {

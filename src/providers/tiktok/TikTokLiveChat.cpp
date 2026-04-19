@@ -685,39 +685,18 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         {
             return;
         }
-        QByteArray raw = QByteArray::fromBase64(base64.toLatin1());
+        const QByteArray raw = QByteArray::fromBase64(base64.toLatin1());
         if (raw.isEmpty())
         {
             return;
         }
-        if (!this->impl_)
-        {
-            return;
-        }
-
-        // Protobuf decode can get expensive on busy streams (100+ likes/s).
-        // Run it on the dedicated single-thread decode pool and marshal the
-        // result back to the UI thread via QFutureWatcher so we only touch
-        // UI state here.
-        auto future = QtConcurrent::run(
-            &this->impl_->decodePool, [bytes = std::move(raw)]() {
-                return tiktok::decodeWebcastPushFrame(bytes);
-            });
-
-        auto *watcher = new QFutureWatcher<tiktok::DecodedFrame>();
-        std::weak_ptr<bool> guard = this->lifetimeGuard_;
-        QObject::connect(
-            watcher, &QFutureWatcher<tiktok::DecodedFrame>::finished,
-            [this, watcher, guard]() {
-                auto keepalive = guard.lock();
-                watcher->deleteLater();
-                if (!keepalive || !this->running_)
-                {
-                    return;
-                }
-                this->processDecodedFrame(watcher->result());
-            });
-        watcher->setFuture(future);
+        // Decode inline on the UI thread. Earlier versions offloaded this
+        // to a QtConcurrent worker; that turned out to break message
+        // delivery on some rooms (watchdog would time out even though
+        // frames were flowing). Revert for correctness; if busy-stream
+        // perf becomes an issue again we can revisit with a different
+        // marshal mechanism.
+        this->processDecodedFrame(tiktok::decodeWebcastPushFrame(raw));
     }
 }
 

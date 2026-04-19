@@ -79,6 +79,12 @@ public:
 
     pajlada::Signals::NoArgSignal streamStatusChanged;
 
+    // Exposed for unit tests. These are pure helpers that operate on message
+    // contents alone; they hold no MergedChannel state.
+    static bool shouldMirrorSourceMessage(const MessagePtr &message);
+    static QString messageKey(const MessagePtr &message,
+                              MessagePlatform platform);
+
 private:
     void initializeSources();
     void connectSourceSignals(const ChannelPtr &source, MessagePlatform platform,
@@ -99,11 +105,8 @@ private:
                                 const QString &title = {});
     void refreshStatusText();
 
-    static bool shouldMirrorSourceMessage(const MessagePtr &message);
     static QColor platformAccent(MessagePlatform platform);
     static EmotePtr platformBadge(MessagePlatform platform);
-    static QString messageKey(const MessagePtr &message,
-                              MessagePlatform platform);
 
     void insertMirror(const QString &key, const MessagePtr &merged);
     void eraseMirror(const QString &key);

@@ -47,8 +47,8 @@ Benchmarks live in `benchmarks/` and are gated behind `-DBUILD_BENCHMARKS=On` (G
 
 ## CI / Release pipeline
 
-- `.github/workflows/build.yml` — builds the Windows x64 package on every push/PR to `main`, uploads `Mergerino-win64.zip` as an artifact. `.CI/deploy-crt.ps1` pulls in the MSVC runtime DLLs.
-- `.github/workflows/release.yml` — triggered by `workflow_run` on a successful Build. Force-updates the `latest` tag to the new head SHA and replaces the single asset on the `Latest` GitHub release. This is a **rolling release** — there is no per-version tagging flow. The artifact filename is version-less (`Mergerino-win64.zip`); `CMakeLists.txt`'s `project(... VERSION 1.5.0 ...)` flows into `src/common/Version.hpp` via `configure_file`, so a version bump only needs the `project()` VERSION edit.
+- `.github/workflows/build.yml` — builds the Windows x64 package on every push/PR to `main`, uploads `Mergerino.zip` as an artifact. `.CI/deploy-crt.ps1` pulls in the MSVC runtime DLLs.
+- `.github/workflows/release.yml` — triggered by `workflow_run` on a successful Build. Force-updates the `latest` tag to the new head SHA and replaces the single asset on the `Latest` GitHub release. This is a **rolling release** — there is no per-version tagging flow. The artifact filename is version-less (`Mergerino.zip`); `CMakeLists.txt`'s `project(... VERSION 1.5.0 ...)` flows into `src/common/Version.hpp` via `configure_file`, so a version bump only needs the `project()` VERSION edit.
 - `.github/workflows/test-windows.yml` — runs the GoogleTest suite against `windows-latest` + Qt 6.9.3.
 
 ## Architecture

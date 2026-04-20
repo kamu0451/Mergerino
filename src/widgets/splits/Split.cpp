@@ -68,6 +68,8 @@ constexpr qreal ALERTS_PRIMARY_RATIO = 0.7;
 constexpr qreal ALERTS_SECONDARY_RATIO = 0.3;
 constexpr qreal MIN_ACTIVITY_MESSAGE_SCALE = 0.75;
 constexpr qreal MAX_ACTIVITY_MESSAGE_SCALE = 1.1;
+constexpr qreal MIN_SLOWER_CHAT_MESSAGES_PER_SECOND = 0.25;
+constexpr qreal MAX_SLOWER_CHAT_MESSAGES_PER_SECOND = 20.0;
 
 bool isTwitchSpecialChannelType(Channel::Type type)
 {
@@ -88,6 +90,17 @@ PlatformIndicatorMode defaultPlatformIndicatorMode(bool isActivityPane)
 {
     return isActivityPane ? PlatformIndicatorMode::LineColor
                           : getSettings()->mergedPlatformIndicatorMode.getEnum();
+}
+
+bool mergedSplitHasTikTokEnabled(const Split *split)
+{
+    if (!split)
+    {
+        return false;
+    }
+
+    auto *merged = dynamic_cast<MergedChannel *>(split->getChannel().get());
+    return merged != nullptr && merged->config().tiktokEnabled;
 }
 
 QStringList normalizedFilterIds(const QList<QUuid> &ids)
@@ -301,13 +314,19 @@ void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
         const auto activityPlatformIndicatorMode =
             activitySplit->platformIndicatorMode();
         const auto activityMessageScale = activitySplit->activityMessageScale();
+        const auto tiktokActivityMinimumDiamonds =
+            activitySplit->tiktokActivityMinimumDiamonds();
 
         activitySplit->setFilterActivity(false);
         activitySplit->setChannel(ownerSplit->getIndirectChannel());
         activitySplit->setFilters(ownerSplit->getFilters());
         activitySplit->setInputEnabled(false);
         activitySplit->setActivityMessageScale(activityMessageScale);
+        activitySplit->setTikTokActivityMinimumDiamonds(
+            tiktokActivityMinimumDiamonds);
         activitySplit->setPlatformIndicatorMode(activityPlatformIndicatorMode);
+        ownerSplit->setTikTokActivityMinimumDiamonds(
+            tiktokActivityMinimumDiamonds);
         ownerSplit->setFilterActivity(true);
         refreshActivityIcons(container);
         return;
@@ -429,6 +448,12 @@ Split::Split(QWidget *parent)
                         << static_cast<int>(openIn);
             }
         });
+
+    this->header_->setSlowChatQueueIndicatorReady(true);
+    QObject::connect(this->view_, &ChannelView::slowChatQueueCountChanged, this,
+                     [this](int) {
+                         this->header_->updateIcons();
+                     });
 
     // this connection can be ignored since the SplitInput is owned by this Split
     std::ignore = this->input_->textChanged.connect(
@@ -1062,9 +1087,29 @@ qreal Split::activityMessageScale() const
     return this->activityMessageScale_;
 }
 
+bool Split::slowerChatEnabled() const
+{
+    return this->slowerChatEnabled_;
+}
+
+qreal Split::slowerChatMessagesPerSecond() const
+{
+    return this->slowerChatMessagesPerSecond_;
+}
+
+bool Split::slowerChatMessageAnimations() const
+{
+    return this->slowerChatMessageAnimations_;
+}
+
 PlatformIndicatorMode Split::platformIndicatorMode() const
 {
     return this->platformIndicatorMode_;
+}
+
+uint32_t Split::tiktokActivityMinimumDiamonds() const
+{
+    return this->tiktokActivityMinimumDiamonds_;
 }
 
 bool Split::eventFilter(QObject *watched, QEvent *event)
@@ -1126,6 +1171,44 @@ void Split::setActivityMessageScale(qreal value)
     getApp()->getWindows()->queueSave();
 }
 
+void Split::setSlowerChatEnabled(bool value)
+{
+    if (this->slowerChatEnabled_ == value)
+    {
+        return;
+    }
+
+    this->slowerChatEnabled_ = value;
+    this->view_->refreshSlowerChatSettings();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setSlowerChatMessagesPerSecond(qreal value)
+{
+    const auto clamped = std::clamp(value, MIN_SLOWER_CHAT_MESSAGES_PER_SECOND,
+                                    MAX_SLOWER_CHAT_MESSAGES_PER_SECOND);
+    if (qFuzzyCompare(this->slowerChatMessagesPerSecond_, clamped))
+    {
+        return;
+    }
+
+    this->slowerChatMessagesPerSecond_ = clamped;
+    this->view_->refreshSlowerChatSettings();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setSlowerChatMessageAnimations(bool value)
+{
+    if (this->slowerChatMessageAnimations_ == value)
+    {
+        return;
+    }
+
+    this->slowerChatMessageAnimations_ = value;
+    this->view_->refreshSlowerChatSettings();
+    getApp()->getWindows()->queueSave();
+}
+
 void Split::setPlatformIndicatorMode(PlatformIndicatorMode value)
 {
     if (this->platformIndicatorMode_ == value)
@@ -1135,6 +1218,18 @@ void Split::setPlatformIndicatorMode(PlatformIndicatorMode value)
 
     this->platformIndicatorMode_ = value;
     this->view_->refreshPlatformIndicatorMode();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setTikTokActivityMinimumDiamonds(uint32_t value)
+{
+    if (this->tiktokActivityMinimumDiamonds_ == value)
+    {
+        return;
+    }
+
+    this->tiktokActivityMinimumDiamonds_ = value;
+    this->view_->refreshMessages();
     getApp()->getWindows()->queueSave();
 }
 
@@ -1472,6 +1567,15 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
                                          ? activityOwnerSplit
                                                ->platformIndicatorMode()
                                          : this->platformIndicatorMode());
+    dialog->setSlowerChatEnabled(activityOwnerSplit
+                                     ? activityOwnerSplit->slowerChatEnabled()
+                                     : this->slowerChatEnabled());
+    dialog->setSlowerChatMessagesPerSecond(
+        activityOwnerSplit ? activityOwnerSplit->slowerChatMessagesPerSecond()
+                           : this->slowerChatMessagesPerSecond());
+    dialog->setSlowerChatMessageAnimations(
+        activityOwnerSplit ? activityOwnerSplit->slowerChatMessageAnimations()
+                           : this->slowerChatMessageAnimations());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(dialogTitle);
     dialog->show();
@@ -1494,6 +1598,12 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
                 dialog->platformIndicatorMode());
             activityOwnerSplit->setFilterActivity(dialog->filterActivity(),
                                                   true);
+            activityOwnerSplit->setSlowerChatEnabled(
+                dialog->slowerChatEnabled());
+            activityOwnerSplit->setSlowerChatMessagesPerSecond(
+                dialog->slowerChatMessagesPerSecond());
+            activityOwnerSplit->setSlowerChatMessageAnimations(
+                dialog->slowerChatMessageAnimations());
         }
 
         callback(acceptedChanges);
@@ -1520,10 +1630,22 @@ void Split::showSettingsDialog()
         return;
     }
 
-    auto *dialog = new SplitSettingsDialog(this->isActivityPane(), this);
+    auto *settingsOwnerSplit =
+        this->isActivityPane() ? findActivityOwnerSplit(this) : this;
+    auto *dialog = new SplitSettingsDialog(
+        this->isActivityPane(),
+        this->isActivityPane() && mergedSplitHasTikTokEnabled(settingsOwnerSplit),
+        this);
     dialog->setPlatformIndicatorMode(this->platformIndicatorMode());
     dialog->setFilterActivity(this->filterActivity());
     dialog->setActivityMessageScale(this->activityMessageScale());
+    dialog->setSlowerChatEnabled(this->slowerChatEnabled());
+    dialog->setSlowerChatMessagesPerSecond(
+        this->slowerChatMessagesPerSecond());
+    dialog->setSlowerChatMessageAnimations(
+        this->slowerChatMessageAnimations());
+    dialog->setTikTokActivityMinimumDiamonds(
+        this->tiktokActivityMinimumDiamonds());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(this->isActivityPane() ? this->activityPaneTitle()
                                                   : "Split settings");
@@ -1536,10 +1658,22 @@ void Split::showSettingsDialog()
             if (this->isActivityPane())
             {
                 this->setActivityMessageScale(dialog->activityMessageScale());
+                this->setTikTokActivityMinimumDiamonds(
+                    dialog->tiktokActivityMinimumDiamonds());
+                if (auto *ownerSplit = findActivityOwnerSplit(this))
+                {
+                    ownerSplit->setTikTokActivityMinimumDiamonds(
+                        dialog->tiktokActivityMinimumDiamonds());
+                }
             }
             else
             {
                 this->setFilterActivity(dialog->filterActivity(), true);
+                this->setSlowerChatEnabled(dialog->slowerChatEnabled());
+                this->setSlowerChatMessagesPerSecond(
+                    dialog->slowerChatMessagesPerSecond());
+                this->setSlowerChatMessageAnimations(
+                    dialog->slowerChatMessageAnimations());
             }
         }
     });
@@ -1746,6 +1880,7 @@ void Split::openAlertsPane()
 
     alertsSplit->setInputEnabled(false);
     alertsSplit->setFilterActivity(false);
+    alertsSplit->setSlowerChatEnabled(false);
     alertsSplit->setPlatformIndicatorMode(defaultPlatformIndicatorMode(true));
     this->setFilterActivity(true);
     container->setSelected(alertsSplit);
@@ -1782,6 +1917,13 @@ void Split::popup()
     split->setFilterActivity(this->filterActivity(),
                              this->filterActivityExplicit());
     split->setActivityMessageScale(this->activityMessageScale());
+    split->setSlowerChatEnabled(this->slowerChatEnabled());
+    split->setSlowerChatMessagesPerSecond(
+        this->slowerChatMessagesPerSecond());
+    split->setSlowerChatMessageAnimations(
+        this->slowerChatMessageAnimations());
+    split->setTikTokActivityMinimumDiamonds(
+        this->tiktokActivityMinimumDiamonds());
     split->setPlatformIndicatorMode(this->platformIndicatorMode());
 
     window.getNotebook().getOrAddSelectedPage()->insertSplit(split);

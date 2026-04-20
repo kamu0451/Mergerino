@@ -727,6 +727,15 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
                        node->getSplit()->filterActivityExplicit());
             obj.insert("activityMessageScale",
                        node->getSplit()->activityMessageScale());
+            obj.insert("slowerChatEnabled",
+                       node->getSplit()->slowerChatEnabled());
+            obj.insert("slowerChatMessagesPerSecond",
+                       node->getSplit()->slowerChatMessagesPerSecond());
+            obj.insert("slowerChatMessageAnimations",
+                       node->getSplit()->slowerChatMessageAnimations());
+            obj.insert("tiktokActivityMinimumDiamonds",
+                       static_cast<qint64>(
+                           node->getSplit()->tiktokActivityMinimumDiamonds()));
             obj.insert("platformIndicatorMode",
                        qmagicenum::enumNameString(
                            node->getSplit()->platformIndicatorMode())
@@ -838,6 +847,8 @@ void WindowManager::encodeChannel(IndirectChannel channel, QJsonObject &obj)
             obj.insert("kickChannel", config.kickChannelName);
             obj.insert("youtubeEnabled", config.youtubeEnabled);
             obj.insert("youtubeStreamUrl", config.youtubeStreamUrl);
+            obj.insert("tiktokEnabled", config.tiktokEnabled);
+            obj.insert("tiktokSource", config.tiktokSource);
         }
         break;
 
@@ -909,6 +920,8 @@ IndirectChannel WindowManager::decodeChannel(const SplitDescriptor &descriptor)
             .kickChannelName = descriptor.mergedKickChannelName_,
             .youtubeEnabled = descriptor.mergedYoutubeEnabled,
             .youtubeStreamUrl = descriptor.mergedYoutubeStreamUrl_,
+            .tiktokEnabled = descriptor.mergedTikTokEnabled,
+            .tiktokSource = descriptor.mergedTikTokSource_,
         }));
     }
 

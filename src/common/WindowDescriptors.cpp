@@ -120,6 +120,14 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
     }
     descriptor.activityMessageScale_ =
         root.value("activityMessageScale").toDouble(0.9);
+    descriptor.slowerChatEnabled_ =
+        root.value("slowerChatEnabled").toBool(false);
+    descriptor.slowerChatMessagesPerSecond_ =
+        root.value("slowerChatMessagesPerSecond").toDouble(5.0);
+    descriptor.slowerChatMessageAnimations_ =
+        root.value("slowerChatMessageAnimations").toBool(true);
+    descriptor.tiktokActivityMinimumDiamonds_ = static_cast<uint32_t>(
+        root.value("tiktokActivityMinimumDiamonds").toInt(0));
     if (auto platformIndicatorMode = root["platformIndicatorMode"];
         platformIndicatorMode.isString())
     {
@@ -160,6 +168,8 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
             data["youtubeEnabled"].toBool(false);
         descriptor.mergedYoutubeStreamUrl_ =
             data["youtubeStreamUrl"].toString();
+        descriptor.mergedTikTokEnabled = data["tiktokEnabled"].toBool(false);
+        descriptor.mergedTikTokSource_ = data["tiktokSource"].toString();
     }
 }
 

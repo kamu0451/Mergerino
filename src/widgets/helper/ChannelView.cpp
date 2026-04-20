@@ -29,6 +29,7 @@
 #include "providers/links/LinkInfo.hpp"
 #include "providers/links/LinkResolver.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
+#include "providers/twitch/TwitchBadge.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Resources.hpp"
@@ -88,6 +89,82 @@ constexpr size_t TOOLTIP_EMOTE_ENTRIES_LIMIT = 7;
 using namespace chatterino;
 
 constexpr int SCROLLBAR_PADDING = 8;
+constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY = 0.4;
+constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY_HOLD = 0.0;
+constexpr qreal SLOW_CHAT_MESSAGE_OPACITY_PROGRESS_SCALE = 1.05;
+constexpr auto MESSAGE_LAYOUT_SHIFT_ANIMATION_DURATION =
+    std::chrono::milliseconds(160);
+constexpr auto SLOW_CHAT_MESSAGE_ANIMATION_DURATION =
+    std::chrono::milliseconds(500);
+
+enum class SlowChatQueuePriority {
+    Normal,
+    Vip,
+    Moderator,
+};
+
+SlowChatQueuePriority slowChatQueuePriority(const MessagePtr &message)
+{
+    if (!message)
+    {
+        return SlowChatQueuePriority::Normal;
+    }
+
+    bool isVip = false;
+
+    for (const auto &badge : message->twitchBadges)
+    {
+        if (badge.key_ == "moderator" || badge.key_ == "lead_moderator")
+        {
+            return SlowChatQueuePriority::Moderator;
+        }
+
+        if (badge.key_ == "vip")
+        {
+            isVip = true;
+        }
+    }
+
+    for (const auto &element : message->elements)
+    {
+        if (!element)
+        {
+            continue;
+        }
+
+        const auto type = element->type();
+        if (type == ModBadgeElement::TYPE)
+        {
+            return SlowChatQueuePriority::Moderator;
+        }
+
+        if (type == VipBadgeElement::TYPE)
+        {
+            isVip = true;
+            continue;
+        }
+
+        if (type != BadgeElement::TYPE)
+        {
+            continue;
+        }
+
+        const auto &tooltip = element->getTooltip();
+        if (tooltip.startsWith("Moderator", Qt::CaseInsensitive) ||
+            tooltip.startsWith("Lead Moderator", Qt::CaseInsensitive))
+        {
+            return SlowChatQueuePriority::Moderator;
+        }
+
+        if (tooltip.startsWith("VIP", Qt::CaseInsensitive))
+        {
+            isVip = true;
+        }
+    }
+
+    return isVip ? SlowChatQueuePriority::Vip
+                 : SlowChatQueuePriority::Normal;
+}
 
 QColor blendColorTowards(const QColor &base, const QColor &target, qreal factor)
 {
@@ -100,6 +177,39 @@ QColor blendColorTowards(const QColor &base, const QColor &target, qreal factor)
                    base.blueF() * (1.0 - factor) + target.blueF() * factor,
                    base.alphaF() * (1.0 - factor) + target.alphaF() * factor);
     return result;
+}
+
+qreal slowChatArrivalOpacity(qreal progress)
+{
+    const auto clampedProgress = std::clamp(progress, 0.0, 1.0);
+    if (clampedProgress <= SLOW_CHAT_MESSAGE_INITIAL_OPACITY_HOLD)
+    {
+        return SLOW_CHAT_MESSAGE_INITIAL_OPACITY;
+    }
+
+    // Keep entering messages visibly dim until they are almost settled.
+    static const QEasingCurve curve(QEasingCurve::InCubic);
+    const auto normalizedProgress = std::clamp(
+        (clampedProgress - SLOW_CHAT_MESSAGE_INITIAL_OPACITY_HOLD) /
+            (1.0 - SLOW_CHAT_MESSAGE_INITIAL_OPACITY_HOLD) *
+            SLOW_CHAT_MESSAGE_OPACITY_PROGRESS_SCALE,
+        0.0, 1.0);
+    const auto eased = curve.valueForProgress(normalizedProgress);
+    return SLOW_CHAT_MESSAGE_INITIAL_OPACITY +
+           ((1.0 - SLOW_CHAT_MESSAGE_INITIAL_OPACITY) * eased);
+}
+
+qreal slowChatArrivalOffset(qreal progress, qreal height)
+{
+    static const QEasingCurve curve(QEasingCurve::OutCubic);
+    const auto eased = curve.valueForProgress(std::clamp(progress, 0.0, 1.0));
+    return (1.0 - eased) * height;
+}
+
+qreal messageLayoutShiftProgress(qreal progress)
+{
+    static const QEasingCurve curve(QEasingCurve::OutCubic);
+    return curve.valueForProgress(std::clamp(progress, 0.0, 1.0));
 }
 
 void addEmoteContextMenuItems(QMenu *menu, const Emote &emote, QStringView kind)
@@ -386,6 +496,49 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
 
         this->updatePauses();
     });
+
+    this->slowChatTimer_.setSingleShot(true);
+    QObject::connect(&this->slowChatTimer_, &QTimer::timeout, this, [this] {
+        this->drainSlowChatQueue();
+    });
+
+    this->messageLayoutShiftAnimationTimer_.setInterval(16);
+    QObject::connect(&this->messageLayoutShiftAnimationTimer_, &QTimer::timeout,
+                     this, [this] {
+                         const auto now = SteadyClock::now();
+                         std::erase_if(
+                             this->messageLayoutShiftAnimations_,
+                             [now](const auto &animation) {
+                                 return now - animation.startedAt >=
+                                        MESSAGE_LAYOUT_SHIFT_ANIMATION_DURATION;
+                             });
+
+                         if (this->messageLayoutShiftAnimations_.empty())
+                         {
+                             this->messageLayoutShiftAnimationTimer_.stop();
+                         }
+
+                         this->queueUpdate();
+                     });
+
+    this->messageArrivalAnimationTimer_.setInterval(16);
+    QObject::connect(&this->messageArrivalAnimationTimer_, &QTimer::timeout,
+                     this, [this] {
+                         const auto now = SteadyClock::now();
+                         std::erase_if(
+                             this->messageArrivalAnimations_,
+                             [now](const auto &animation) {
+                                 return now - animation.startedAt >=
+                                        SLOW_CHAT_MESSAGE_ANIMATION_DURATION;
+                             });
+
+                         if (this->messageArrivalAnimations_.empty())
+                         {
+                             this->messageArrivalAnimationTimer_.stop();
+                         }
+
+                         this->queueUpdate();
+                     });
 
     // This shortcut is not used in splits, it's used in views that
     // don't have a SplitInput like the SearchPopup or EmotePopup.
@@ -746,29 +899,89 @@ void ChannelView::performLayout(bool causedByScrollbar, bool causedByShow)
         this->scrollBar_->isAtBottom() ||
         (!this->scrollBar_->isVisible() && !causedByScrollbar);
 
+    const bool shouldAnimateLayoutShifts =
+        this->isVisible() && !this->isActivityPaneView() && this->split_ &&
+        this->split_->slowerChatMessageAnimations() &&
+        this->messageArrivalAnimations_.empty() && !causedByScrollbar;
+
+    struct VisibleMessagePosition {
+        MessageLayoutPtr layout;
+        qreal y;
+    };
+    auto collectVisibleMessagePositions =
+        [this, &messages]() -> std::vector<VisibleMessagePosition> {
+        const auto relativeCurrentValue =
+            this->scrollBar_->getRelativeCurrentValue();
+        const auto start = size_t(relativeCurrentValue);
+        std::vector<VisibleMessagePosition> positions;
+        if (messages.size() <= start)
+        {
+            return positions;
+        }
+
+        auto y =
+            -(messages[start]->getHeight() * (fmod(relativeCurrentValue, 1)));
+        for (auto i = start; i < messages.size() && y <= this->height(); i++)
+        {
+            positions.push_back({messages[i], y});
+            y += messages[i]->getHeight();
+        }
+        return positions;
+    };
+    const auto oldVisiblePositions =
+        shouldAnimateLayoutShifts ? collectVisibleMessagePositions()
+                                  : std::vector<VisibleMessagePosition>{};
+
     /// Layout visible messages
-    this->layoutVisibleMessages(messages);
+    const auto redrawRequired = this->layoutVisibleMessages(messages);
 
     /// Update scrollbar
     this->updateScrollbar(messages, causedByScrollbar, causedByShow);
+
+    if (redrawRequired)
+    {
+        if (shouldAnimateLayoutShifts)
+        {
+            std::unordered_map<MessageLayout *, qreal> oldYByLayout;
+            oldYByLayout.reserve(oldVisiblePositions.size());
+            for (const auto &position : oldVisiblePositions)
+            {
+                oldYByLayout.emplace(position.layout.get(), position.y);
+            }
+
+            for (const auto &position : collectVisibleMessagePositions())
+            {
+                const auto it = oldYByLayout.find(position.layout.get());
+                if (it == oldYByLayout.end())
+                {
+                    continue;
+                }
+
+                this->startOrUpdateMessageLayoutShiftAnimation(
+                    position.layout, it->second, position.y);
+            }
+        }
+
+        this->queueUpdate();
+    }
 
     this->goToBottom_->setVisible(this->enableScrollingToBottom_ &&
                                   this->scrollBar_->isVisible() &&
                                   !this->scrollBar_->isAtBottom());
 }
 
-void ChannelView::layoutVisibleMessages(
+bool ChannelView::layoutVisibleMessages(
     const std::vector<MessageLayoutPtr> &messages)
 {
-    const auto start = size_t(this->scrollBar_->getRelativeCurrentValue());
+    const auto relativeCurrentValue = this->scrollBar_->getRelativeCurrentValue();
+    const auto start = size_t(relativeCurrentValue);
     const auto layoutWidth = this->getLayoutWidth();
     const auto flags = this->getFlags();
     auto redrawRequired = false;
 
     if (messages.size() > start)
     {
-        auto y = -(messages[start]->getHeight() *
-                   (fmod(this->scrollBar_->getRelativeCurrentValue(), 1)));
+        auto y = -(messages[start]->getHeight() * (fmod(relativeCurrentValue, 1)));
 
         for (auto i = start; i < messages.size() && y <= this->height(); i++)
         {
@@ -789,10 +1002,7 @@ void ChannelView::layoutVisibleMessages(
         this->bufferInvalidationQueued_ = false;
     }
 
-    if (redrawRequired)
-    {
-        this->queueUpdate();
-    }
+    return redrawRequired;
 }
 
 void ChannelView::updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
@@ -860,6 +1070,13 @@ void ChannelView::updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
 
 void ChannelView::clearMessages()
 {
+    this->pendingSlowChatMessages_.clear();
+    this->nextSlowChatMessageAt_.reset();
+    this->slowChatTimer_.stop();
+    this->notifySlowChatQueueCountChanged();
+    this->clearMessageLayoutShiftAnimations();
+    this->clearMessageArrivalAnimations();
+
     // Clear all stored messages in this chat widget
     this->messages_.clear();
     this->scrollBar_->clearHighlights();
@@ -1066,7 +1283,9 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         return std::nullopt;
     }
 
-    if (!shouldShowMessageInActivityPane(*message))
+    if (!shouldShowMessageInActivityPane(
+            *message,
+            this->split_ ? this->split_->tiktokActivityMinimumDiamonds() : 0))
     {
         return std::nullopt;
     }
@@ -1089,6 +1308,8 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
 
 void ChannelView::rebuildActivityMessages()
 {
+    this->clearMessageLayoutShiftAnimations();
+    this->clearMessageArrivalAnimations();
     auto snapshot = this->channel_->getMessageSnapshot();
 
     this->messages_.clear();
@@ -1142,6 +1363,333 @@ void ChannelView::rebuildActivityMessages()
     this->queueLayout();
 }
 
+void ChannelView::enqueueOrAddProxyMessage(
+    const MessagePtr &message, std::optional<MessageFlags> overridingFlags,
+    bool emitAddedToChannel)
+{
+    if (!this->shouldQueueSlowChatMessages())
+    {
+        this->appendProxyMessage(message, overridingFlags, emitAddedToChannel);
+        return;
+    }
+
+    const auto priority = slowChatQueuePriority(message);
+    if (priority == SlowChatQueuePriority::Moderator)
+    {
+        this->appendProxyMessage(message, overridingFlags, emitAddedToChannel);
+        return;
+    }
+
+    const auto now = SteadyClock::now();
+    if (this->pendingSlowChatMessages_.empty() &&
+        (!this->nextSlowChatMessageAt_ || now >= *this->nextSlowChatMessageAt_))
+    {
+        const auto rate = std::max<qreal>(
+            0.01, this->split_->slowerChatMessagesPerSecond());
+        this->nextSlowChatMessageAt_ =
+            now + std::chrono::milliseconds(static_cast<int>(
+                      std::round(1000.0 / static_cast<double>(rate))));
+        this->appendProxyMessage(message, overridingFlags, emitAddedToChannel);
+        return;
+    }
+
+    PendingSlowChatMessage pending{message, overridingFlags, emitAddedToChannel};
+    if (priority == SlowChatQueuePriority::Vip)
+    {
+        this->pendingSlowChatMessages_.push_front(std::move(pending));
+    }
+    else
+    {
+        this->pendingSlowChatMessages_.push_back(std::move(pending));
+    }
+    this->notifySlowChatQueueCountChanged();
+    this->scheduleSlowChatDrain();
+}
+
+void ChannelView::appendProxyMessage(const MessagePtr &message,
+                                     std::optional<MessageFlags> overridingFlags,
+                                     bool emitAddedToChannel)
+{
+    this->channel_->addMessage(message, MessageContext::Repost, overridingFlags);
+    if (emitAddedToChannel)
+    {
+        auto emittedMessage = message;
+        this->messageAddedToChannel(emittedMessage);
+    }
+}
+
+bool ChannelView::shouldQueueSlowChatMessages() const
+{
+    return this->split_ != nullptr && !this->isActivityPaneView() &&
+           this->split_->slowerChatEnabled();
+}
+
+bool ChannelView::shouldAnimateSlowChatMessages() const
+{
+    return this->shouldQueueSlowChatMessages() &&
+           this->split_->slowerChatMessageAnimations();
+}
+
+int ChannelView::pendingSlowChatMessageCount() const
+{
+    return static_cast<int>(this->pendingSlowChatMessages_.size());
+}
+
+void ChannelView::notifySlowChatQueueCountChanged()
+{
+    const int count = this->pendingSlowChatMessageCount();
+    if (count == this->lastSlowChatQueueCount_)
+    {
+        return;
+    }
+
+    this->lastSlowChatQueueCount_ = count;
+    Q_EMIT this->slowChatQueueCountChanged(count);
+}
+
+void ChannelView::drainSlowChatQueue()
+{
+    if (!this->shouldQueueSlowChatMessages())
+    {
+        this->flushSlowChatQueue();
+        return;
+    }
+
+    if (this->pendingSlowChatMessages_.empty())
+    {
+        this->slowChatTimer_.stop();
+        return;
+    }
+
+    const auto now = SteadyClock::now();
+    if (this->nextSlowChatMessageAt_ && now < *this->nextSlowChatMessageAt_)
+    {
+        this->scheduleSlowChatDrain();
+        return;
+    }
+
+    auto nextMessage = this->pendingSlowChatMessages_.front();
+    this->pendingSlowChatMessages_.pop_front();
+    this->notifySlowChatQueueCountChanged();
+
+    const auto rate =
+        std::max<qreal>(0.01, this->split_->slowerChatMessagesPerSecond());
+    this->nextSlowChatMessageAt_ =
+        now + std::chrono::milliseconds(static_cast<int>(
+                  std::round(1000.0 / static_cast<double>(rate))));
+
+    this->appendProxyMessage(nextMessage.message, nextMessage.overridingFlags,
+                             nextMessage.emitAddedToChannel);
+
+    if (this->pendingSlowChatMessages_.empty())
+    {
+        this->slowChatTimer_.stop();
+        return;
+    }
+
+    this->scheduleSlowChatDrain();
+}
+
+void ChannelView::scheduleSlowChatDrain()
+{
+    if (this->pendingSlowChatMessages_.empty())
+    {
+        this->slowChatTimer_.stop();
+        return;
+    }
+
+    if (!this->shouldQueueSlowChatMessages())
+    {
+        this->flushSlowChatQueue();
+        return;
+    }
+
+    const auto now = SteadyClock::now();
+    const auto delay = this->nextSlowChatMessageAt_
+                           ? std::max(std::chrono::duration_cast<
+                                          std::chrono::milliseconds>(
+                                          *this->nextSlowChatMessageAt_ - now),
+                                      std::chrono::milliseconds(0))
+                           : std::chrono::milliseconds(0);
+
+    this->slowChatTimer_.start(static_cast<int>(delay.count()));
+}
+
+void ChannelView::flushSlowChatQueue()
+{
+    this->slowChatTimer_.stop();
+    while (!this->pendingSlowChatMessages_.empty())
+    {
+        auto nextMessage = this->pendingSlowChatMessages_.front();
+        this->pendingSlowChatMessages_.pop_front();
+        this->appendProxyMessage(nextMessage.message, nextMessage.overridingFlags,
+                                 nextMessage.emitAddedToChannel);
+    }
+    this->nextSlowChatMessageAt_.reset();
+    this->notifySlowChatQueueCountChanged();
+}
+
+bool ChannelView::updatePendingSlowChatMessage(const MessagePtr &prev,
+                                               const MessagePtr &replacement)
+{
+    for (auto it = this->pendingSlowChatMessages_.begin();
+         it != this->pendingSlowChatMessages_.end(); ++it)
+    {
+        if (it->message != prev &&
+            (prev->id.isEmpty() || it->message->id != prev->id))
+        {
+            continue;
+        }
+
+        if (replacement)
+        {
+            it->message = replacement;
+        }
+        else
+        {
+            this->pendingSlowChatMessages_.erase(it);
+            this->notifySlowChatQueueCountChanged();
+        }
+        return true;
+    }
+
+    return false;
+}
+
+void ChannelView::clearMessageLayoutShiftAnimations()
+{
+    this->messageLayoutShiftAnimationTimer_.stop();
+    this->messageLayoutShiftAnimations_.clear();
+}
+
+void ChannelView::startOrUpdateMessageLayoutShiftAnimation(
+    const MessageLayoutPtr &layout, qreal fromY, qreal toY)
+{
+    if (qFuzzyCompare(fromY + 1.0, toY + 1.0))
+    {
+        return;
+    }
+
+    const auto now = SteadyClock::now();
+    for (auto &animation : this->messageLayoutShiftAnimations_)
+    {
+        if (animation.layout != layout)
+        {
+            continue;
+        }
+
+        const auto elapsed = now - animation.startedAt;
+        if (elapsed < MESSAGE_LAYOUT_SHIFT_ANIMATION_DURATION)
+        {
+            const auto progress = static_cast<qreal>(
+                                      std::chrono::duration_cast<
+                                          std::chrono::milliseconds>(elapsed)
+                                          .count()) /
+                                  static_cast<qreal>(
+                                      MESSAGE_LAYOUT_SHIFT_ANIMATION_DURATION
+                                          .count());
+            const auto eased = messageLayoutShiftProgress(progress);
+            fromY = animation.toY + ((animation.fromY - animation.toY) *
+                                     (1.0 - eased));
+        }
+
+        animation.fromY = fromY;
+        animation.toY = toY;
+        animation.startedAt = now;
+        if (!this->messageLayoutShiftAnimationTimer_.isActive())
+        {
+            this->messageLayoutShiftAnimationTimer_.start();
+        }
+        return;
+    }
+
+    this->messageLayoutShiftAnimations_.push_back(
+        MessageLayoutShiftAnimation{layout, fromY, toY, now});
+    if (!this->messageLayoutShiftAnimationTimer_.isActive())
+    {
+        this->messageLayoutShiftAnimationTimer_.start();
+    }
+}
+
+std::optional<qreal> ChannelView::messageLayoutShiftAnimationY(
+    const MessageLayoutPtr &layout) const
+{
+    const auto now = SteadyClock::now();
+    for (const auto &animation : this->messageLayoutShiftAnimations_)
+    {
+        if (animation.layout != layout)
+        {
+            continue;
+        }
+
+        const auto elapsed = now - animation.startedAt;
+        if (elapsed >= MESSAGE_LAYOUT_SHIFT_ANIMATION_DURATION)
+        {
+            return std::nullopt;
+        }
+
+        const auto progress = static_cast<qreal>(
+                                  std::chrono::duration_cast<
+                                      std::chrono::milliseconds>(elapsed)
+                                      .count()) /
+                              static_cast<qreal>(
+                                  MESSAGE_LAYOUT_SHIFT_ANIMATION_DURATION
+                                      .count());
+        const auto eased = messageLayoutShiftProgress(progress);
+        return animation.toY +
+               ((animation.fromY - animation.toY) * (1.0 - eased));
+    }
+
+    return std::nullopt;
+}
+
+void ChannelView::clearMessageArrivalAnimations()
+{
+    this->messageArrivalAnimationTimer_.stop();
+    this->messageArrivalAnimations_.clear();
+}
+
+void ChannelView::addMessageArrivalAnimation(const MessageLayoutPtr &layout)
+{
+    // Keep a single active arrival animation so fast queue drains don't
+    // visually compress multiple entering messages into each other.
+    this->messageArrivalAnimations_.clear();
+    this->messageArrivalAnimations_.push_back(
+        MessageArrivalAnimation{layout, SteadyClock::now()});
+    if (!this->messageArrivalAnimationTimer_.isActive())
+    {
+        this->messageArrivalAnimationTimer_.start();
+    }
+}
+
+std::optional<qreal> ChannelView::messageArrivalAnimationProgress(
+    const MessageLayoutPtr &layout) const
+{
+    const auto now = SteadyClock::now();
+    for (const auto &animation : this->messageArrivalAnimations_)
+    {
+        if (animation.layout != layout)
+        {
+            continue;
+        }
+
+        const auto elapsed = now - animation.startedAt;
+        if (elapsed >= SLOW_CHAT_MESSAGE_ANIMATION_DURATION)
+        {
+            return std::nullopt;
+        }
+
+        const auto progress = static_cast<qreal>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(elapsed)
+                .count()) /
+                              static_cast<qreal>(
+                                  SLOW_CHAT_MESSAGE_ANIMATION_DURATION.count());
+        return std::clamp(progress, 0.0, 1.0);
+    }
+
+    return std::nullopt;
+}
+
 void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
 {
     /// Clear connections from the last channel
@@ -1176,11 +1724,9 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
                                            QLocale::LongFormat),
                         QTime(0, 0));
                     msg->flags.set(MessageFlag::DoNotLog);
-                    this->channel_->addMessage(msg, MessageContext::Original);
+                    this->enqueueOrAddProxyMessage(msg);
                 }
-                this->channel_->addMessage(message, MessageContext::Repost,
-                                           overridingFlags);
-                this->messageAddedToChannel(message);
+                this->enqueueOrAddProxyMessage(message, overridingFlags, true);
             }
         });
 
@@ -1202,7 +1748,16 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
     this->channelConnections_.managedConnect(
         underlyingChannel->messageReplaced,
         [this](auto index, const auto &prev, const auto &replacement) {
-            if (this->shouldIncludeMessage(replacement))
+            const bool shouldIncludeReplacement =
+                this->shouldIncludeMessage(replacement);
+
+            if (this->updatePendingSlowChatMessage(
+                    prev, shouldIncludeReplacement ? replacement : MessagePtr{}))
+            {
+                return;
+            }
+
+            if (shouldIncludeReplacement)
             {
                 this->channel_->replaceMessage(index, prev, replacement);
             }
@@ -1354,6 +1909,30 @@ void ChannelView::refreshMessages()
     this->setChannel(this->underlyingChannel_);
 }
 
+void ChannelView::refreshSlowerChatSettings()
+{
+    if (!this->split_ || !this->split_->slowerChatMessageAnimations())
+    {
+        this->clearMessageLayoutShiftAnimations();
+    }
+
+    if (!this->shouldAnimateSlowChatMessages())
+    {
+        this->clearMessageArrivalAnimations();
+    }
+
+    if (!this->shouldQueueSlowChatMessages())
+    {
+        this->flushSlowChatQueue();
+        return;
+    }
+
+    if (!this->pendingSlowChatMessages_.empty())
+    {
+        this->scheduleSlowChatDrain();
+    }
+}
+
 void ChannelView::setFilters(const QList<QUuid> &ids)
 {
     this->channelFilters_ = std::make_shared<FilterSet>(ids);
@@ -1379,9 +1958,20 @@ FilterSetPtr ChannelView::getFilterSet() const
 bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
 {
     if (this->split_ && this->split_->filterActivity() &&
-        !this->split_->isActivityPane() && isActivityAlertMessage(*m))
+        !this->split_->isActivityPane())
     {
-        return false;
+        if (isActivityTikTokGiftMessage(*m))
+        {
+            if (shouldShowTikTokGiftInActivityPane(
+                    *m, this->split_->tiktokActivityMinimumDiamonds()))
+            {
+                return false;
+            }
+        }
+        else if (isActivityAlertMessage(*m))
+        {
+            return false;
+        }
     }
 
     if (this->channelFilters_)
@@ -1448,6 +2038,12 @@ void ChannelView::messageAppended(MessagePtr &message,
     }
     this->lastMessageHasAlternateBackground_ =
         !this->lastMessageHasAlternateBackground_;
+
+    if (this->shouldAnimateSlowChatMessages() && this->isVisible() &&
+        (this->showingLatestMessages_ || !this->showScrollBar_))
+    {
+        this->addMessageArrivalAnimation(messageRef);
+    }
 
     if (this->paused())
     {
@@ -1607,6 +2203,7 @@ void ChannelView::messagesUpdated()
 
     auto snapshot = this->channel_->getMessageSnapshot();
 
+    this->clearMessageArrivalAnimations();
     this->messages_.clear();
     this->scrollBar_->clearHighlights();
     this->scrollBar_->resetBounds();
@@ -1893,7 +2490,8 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
 {
     auto &messagesSnapshot = this->getMessagesSnapshot();
 
-    const auto start = size_t(this->scrollBar_->getRelativeCurrentValue());
+    const auto relativeCurrentValue = this->scrollBar_->getRelativeCurrentValue();
+    const auto start = size_t(relativeCurrentValue);
 
     if (start >= messagesSnapshot.size())
     {
@@ -1901,6 +2499,77 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     }
 
     MessageLayout *end = nullptr;
+    bool showLastMessageIndicator = getSettings()->showLastMessageIndicator;
+    struct ActiveArrivalAnimation {
+        size_t messageIndex;
+        qreal offset;
+    };
+    std::vector<ActiveArrivalAnimation> activeArrivalAnimations;
+    activeArrivalAnimations.reserve(this->messageArrivalAnimations_.size());
+    qreal totalStackAnimationOffset = 0.0;
+    const auto now = SteadyClock::now();
+    for (const auto &animation : this->messageArrivalAnimations_)
+    {
+        const auto it = std::find(messagesSnapshot.begin(), messagesSnapshot.end(),
+                                  animation.layout);
+        if (it == messagesSnapshot.end())
+        {
+            continue;
+        }
+
+        const auto elapsed = now - animation.startedAt;
+        if (elapsed >= SLOW_CHAT_MESSAGE_ANIMATION_DURATION)
+        {
+            continue;
+        }
+
+        const auto progress = static_cast<qreal>(
+                                  std::chrono::duration_cast<
+                                      std::chrono::milliseconds>(elapsed)
+                                      .count()) /
+                              static_cast<qreal>(
+                                  SLOW_CHAT_MESSAGE_ANIMATION_DURATION.count());
+        const auto clampedProgress = std::clamp(progress, 0.0, 1.0);
+        const auto offset = slowChatArrivalOffset(
+            clampedProgress, static_cast<qreal>((*it)->getHeight()));
+        activeArrivalAnimations.push_back(
+            {
+                .messageIndex =
+                    static_cast<size_t>(std::distance(messagesSnapshot.begin(),
+                                                      it)),
+                .offset = offset,
+            });
+        totalStackAnimationOffset += offset;
+    }
+    std::sort(activeArrivalAnimations.begin(), activeArrivalAnimations.end(),
+              [](const auto &lhs, const auto &rhs) {
+                  return lhs.messageIndex < rhs.messageIndex;
+              });
+    auto activeArrivalIt = activeArrivalAnimations.begin();
+    const auto lowestActiveArrivalIndex =
+        activeArrivalAnimations.empty()
+            ? std::optional<size_t>()
+            : std::make_optional(activeArrivalAnimations.back().messageIndex);
+    const bool shortLiveChatArrivalMode =
+        this->showingLatestMessages_ && !this->showScrollBar_;
+
+    size_t renderStart = start;
+    qreal renderStartOffsetBudget =
+        shortLiveChatArrivalMode ? 0.0 : totalStackAnimationOffset;
+    while (renderStart > 0 && renderStartOffsetBudget > 0.0)
+    {
+        --renderStart;
+        renderStartOffsetBudget -=
+            static_cast<qreal>(messagesSnapshot[renderStart]->getHeight());
+    }
+
+    auto initialY = -static_cast<int>(
+        messagesSnapshot[start]->getHeight() *
+        (fmod(relativeCurrentValue, 1)));
+    for (size_t i = renderStart; i < start; ++i)
+    {
+        initialY -= messagesSnapshot[i]->getHeight();
+    }
 
     MessagePaintContext ctx = {
         .painter = painter,
@@ -1916,14 +2585,11 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         .forceFlatEventHighlights = this->isActivityPaneView(),
         .platformIndicatorMode = this->resolvedPlatformIndicatorMode(),
 
-        .y = -static_cast<int>(
-            messagesSnapshot[start]->getHeight() *
-            (fmod(this->scrollBar_->getRelativeCurrentValue(), 1))),
-        .messageIndex = start,
+        .y = initialY,
+        .messageIndex = renderStart,
         .isLastReadMessage = false,
 
     };
-    bool showLastMessageIndicator = getSettings()->showLastMessageIndicator;
 
     // using QRect here, because we can only request updates with a rect
     QRect animationArea;
@@ -1944,25 +2610,70 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
             ctx.isLastReadMessage = false;
         }
 
-        if (areaContainsY(ctx.y) ||
-            areaContainsY(ctx.y + layout->getHeight()) ||
-            (ctx.y < area.y() && layout->getHeight() > area.height()))
+        const auto animationProgress =
+            this->messageArrivalAnimationProgress(
+                messagesSnapshot[ctx.messageIndex]);
+        while (activeArrivalIt != activeArrivalAnimations.end() &&
+               activeArrivalIt->messageIndex < ctx.messageIndex)
         {
-            auto paintResult = layout->paint(ctx);
+            totalStackAnimationOffset -= activeArrivalIt->offset;
+            ++activeArrivalIt;
+        }
+
+        const bool hasActiveArrival =
+            activeArrivalIt != activeArrivalAnimations.end() &&
+            activeArrivalIt->messageIndex == ctx.messageIndex;
+        const qreal currentArrivalOffset =
+            hasActiveArrival ? activeArrivalIt->offset : 0.0;
+
+        qreal renderY = ctx.y;
+        renderY += shortLiveChatArrivalMode ? currentArrivalOffset
+                                            : totalStackAnimationOffset;
+        if (const auto animatedY =
+                this->messageLayoutShiftAnimationY(
+                    messagesSnapshot[ctx.messageIndex]))
+        {
+            renderY = *animatedY;
+        }
+
+        if (areaContainsY(renderY) ||
+            areaContainsY(renderY + layout->getHeight()) ||
+            (renderY < area.y() && layout->getHeight() > area.height()))
+        {
+            auto animatedCtx = ctx;
+            animatedCtx.y = static_cast<int>(std::round(renderY));
+            MessagePaintResult paintResult;
+            const bool shouldFadeArrival =
+                animationProgress && lowestActiveArrivalIndex &&
+                *lowestActiveArrivalIndex == ctx.messageIndex;
+            if (shouldFadeArrival)
+            {
+                painter.save();
+                painter.setOpacity(
+                    painter.opacity() *
+                    slowChatArrivalOpacity(animationProgress.value()));
+                paintResult = layout->paint(animatedCtx);
+                painter.restore();
+            }
+            else
+            {
+                paintResult = layout->paint(animatedCtx);
+            }
+
             if (paintResult.hasAnimatedElements)
             {
                 if (animationArea.isNull())
                 {
                     animationArea = QRect{
                         0,
-                        ctx.y,
+                        animatedCtx.y,
                         layout->getWidth(),
                         layout->getHeight(),
                     };
                 }
                 else
                 {
-                    animationArea.setBottom((ctx.y + layout->getHeight()));
+                    animationArea.setBottom((animatedCtx.y + layout->getHeight()));
                     animationArea.setWidth(
                         std::max(layout->getWidth(), animationArea.width()));
                 }
@@ -1970,20 +2681,26 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
 
             if (this->highlightedMessage_ == layout)
             {
-                painter.fillRect(
+            painter.fillRect(
                     QRect{
                         0,
-                        ctx.y,
+                        animatedCtx.y,
                         layout->getWidth(),
                         layout->getHeight(),
                     },
                     this->highlightAnimation_.currentValue().value<QColor>());
                 if (this->highlightAnimation_.state() ==
                     QVariantAnimation::Stopped)
-                {
-                    this->highlightedMessage_ = nullptr;
+            {
+                this->highlightedMessage_ = nullptr;
                 }
             }
+        }
+
+        if (hasActiveArrival)
+        {
+            totalStackAnimationOffset -= activeArrivalIt->offset;
+            ++activeArrivalIt;
         }
 
         ctx.y += layout->getHeight();
@@ -2019,7 +2736,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
 
     // remove messages that are on screen
     // the messages that are left at the end get their buffers reset
-    for (size_t i = start; i < messagesSnapshot.size(); ++i)
+    for (size_t i = renderStart; i < messagesSnapshot.size(); ++i)
     {
         auto it = this->messagesOnScreen_.find(messagesSnapshot[i]);
         if (it != this->messagesOnScreen_.end())
@@ -2037,7 +2754,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     this->messagesOnScreen_.clear();
 
     // add all messages on screen to the map
-    for (size_t i = start; i < messagesSnapshot.size(); ++i)
+    for (size_t i = renderStart; i < messagesSnapshot.size(); ++i)
     {
         const std::shared_ptr<MessageLayout> &layout = messagesSnapshot[i];
 
@@ -2993,11 +3710,11 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
             }
         }
 
-        if (const auto &messagePtr = layout->getMessagePtr();
-            messagePtr->replyThread != nullptr)
+        if (const auto &threadMessage = layout->getMessagePtr();
+            threadMessage->replyThread != nullptr)
         {
-            menu->addAction("View &thread", [this, &messagePtr] {
-                this->showReplyThreadPopup(messagePtr);
+            menu->addAction("View &thread", [this, &threadMessage] {
+                this->showReplyThreadPopup(threadMessage);
             });
         }
     }
@@ -3315,7 +4032,8 @@ void ChannelView::showUserInfoPopup(const QString &userName,
         return;
     }
 
-    if (platform == MessagePlatform::YouTube)
+    if (platform == MessagePlatform::YouTube ||
+        platform == MessagePlatform::TikTok)
     {
         return;
     }
@@ -3810,6 +4528,9 @@ void ChannelView::updateID()
     boost::hash_combine(seed, this->split_ != nullptr &&
                                   this->split_->filterActivity() &&
                                   !this->split_->isActivityPane());
+    boost::hash_combine(seed, this->split_ != nullptr
+                                  ? this->split_->tiktokActivityMinimumDiamonds()
+                                  : 0U);
 
     this->id_ = seed;
 }

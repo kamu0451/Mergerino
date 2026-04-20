@@ -31,17 +31,21 @@
 #include "widgets/buttons/SvgButton.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/helper/CommonTexts.hpp"
+#include "widgets/helper/ChannelView.hpp"
 #include "widgets/Label.hpp"
 #include "widgets/splits/Split.hpp"
 #include "widgets/splits/SplitContainer.hpp"
 #include "widgets/TooltipWidget.hpp"
 
 #include <QDrag>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMenu>
 #include <QMimeData>
 #include <QPainter>
+#include <QPointer>
+#include <QTimer>
 
 #include <cmath>
 
@@ -56,6 +60,7 @@ constexpr const int BUTTON_WIDTH = 28;
 ///
 /// This matches the scrollbar's full width.
 constexpr const int ADD_SPLIT_BUTTON_WIDTH = 16;
+constexpr const int QUEUED_SLOW_CHAT_COUNT_DIGITS = 4;
 
 // 5 minutes
 constexpr const qint64 THUMBNAIL_MAX_AGE_MS = 5LL * 60 * 1000;
@@ -291,7 +296,6 @@ SplitHeader::SplitHeader(Split *split)
     this->setMouseTracking(true);
     this->updateChannelText();
     this->handleChannelChanged();
-    this->updateIcons();
 
     // The lifetime of these signals are tied to the lifetime of the Split.
     // Since the SplitHeader is owned by the Split, they will always be destroyed
@@ -336,6 +340,12 @@ SplitHeader::SplitHeader(Split *split)
     this->scaleChangedEvent(this->scale());
 }
 
+void SplitHeader::setSlowChatQueueIndicatorReady(bool value)
+{
+    this->slowChatQueueIndicatorReady_ = value;
+    this->updateIcons();
+}
+
 void SplitHeader::initializeLayout()
 {
     assert(this->layout() == nullptr);
@@ -360,7 +370,6 @@ void SplitHeader::initializeLayout()
             .light = ":/buttons/alertsPane-lightMode.svg",
         },
         this, {4, 4});
-    this->alertsButton_->setToolTip("Open donations + subs tab");
 
     this->addButton_ = new DrawnButton(DrawnButton::Symbol::Plus,
                                        {
@@ -375,7 +384,7 @@ void SplitHeader::initializeLayout()
     /// XXX: this never gets disconnected
     QObject::connect(this->dropdownButton_, &Button::leftMousePress, this,
                      [this] {
-                         this->dropdownButton_->setMenu(this->createMainMenu());
+                          this->dropdownButton_->setMenu(this->createMainMenu());
                      });
 
     auto *layout = makeLayout<QHBoxLayout>({
@@ -399,6 +408,14 @@ void SplitHeader::initializeLayout()
             w->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
             w->hide();
             w->setMenu(this->createChatModeMenu());
+        }),
+        // slower chat queued count
+        this->queuedSlowChatCountLabel_ = makeWidget<Label>([](auto w) {
+            w->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Preferred);
+            w->setCentered(true);
+            w->setFontStyle(FontStyle::UiMediumBold);
+            w->setPadding(QMargins(5, 0, 5, 0));
+            w->setText(QString());
         }),
         // alerts
         this->alertsButton_,
@@ -471,7 +488,86 @@ void SplitHeader::initializeLayout()
     layout->setSpacing(0);
     this->setLayout(layout);
 
+    this->titleLabel_->installEventFilter(this);
+    this->queuedSlowChatCountLabel_->installEventFilter(this);
+    this->alertsButton_->installEventFilter(this);
+    this->moderationButton_->installEventFilter(this);
+
     this->setAddButtonVisible(false);
+}
+
+bool SplitHeader::eventFilter(QObject *watched, QEvent *event)
+{
+    const auto eventType = event->type();
+    auto *target = qobject_cast<QWidget *>(watched);
+
+    if (target != nullptr)
+    {
+        if (eventType == QEvent::Enter)
+        {
+            if (watched == this->titleLabel_ && !this->tooltipText_.isEmpty())
+            {
+                this->showHoverTooltip(target, this->tooltipText_, true);
+            }
+            else if (watched == this->queuedSlowChatCountLabel_ &&
+                     !this->queuedSlowChatCountLabel_->getText().isEmpty())
+            {
+                this->showHoverTooltip(target,
+                                       "Queued messages waiting for slower chat.",
+                                       false);
+            }
+            else if (watched == this->alertsButton_ &&
+                     this->alertsButton_->isVisible())
+            {
+                this->showHoverTooltip(target, "Toggle the linked activity tab.",
+                                       false);
+            }
+            else if (watched == this->moderationButton_ &&
+                     this->moderationButton_->isVisible())
+            {
+                this->showHoverTooltip(target, "Toggle moderation mode.", false);
+            }
+        }
+        else if (eventType == QEvent::Leave || eventType == QEvent::Hide ||
+                 eventType == QEvent::MouseButtonPress)
+        {
+            this->hideHoverTooltip();
+        }
+    }
+
+    return BaseWidget::eventFilter(watched, event);
+}
+
+void SplitHeader::showHoverTooltip(QWidget *target, const QString &text,
+                                   bool wordWrap)
+{
+    if (target == nullptr || text.isEmpty())
+    {
+        this->hideHoverTooltip();
+        return;
+    }
+
+    this->tooltipWidget_->setOne({nullptr, text});
+    this->tooltipWidget_->setWordWrap(wordWrap);
+    this->tooltipWidget_->adjustSize();
+
+#ifdef Q_OS_WIN
+    this->tooltipWidget_->show();
+#endif
+
+    auto pos = target->mapToGlobal(target->rect().bottomLeft()) +
+               QPoint((target->width() - this->tooltipWidget_->width()) / 2, 1);
+
+    this->tooltipWidget_->moveTo(pos, widgets::BoundsChecking::CursorPosition);
+
+#ifndef Q_OS_WIN
+    this->tooltipWidget_->show();
+#endif
+}
+
+void SplitHeader::hideHoverTooltip()
+{
+    this->tooltipWidget_->hide();
 }
 
 std::unique_ptr<QMenu> SplitHeader::createMainMenu()
@@ -958,6 +1054,14 @@ void SplitHeader::scaleChangedEvent(float scale)
     this->alertsButton_->setFixedWidth(w);
     this->moderationButton_->setFixedWidth(w);
     this->chattersButton_->setFixedWidth(w);
+    const auto queuedCountFont =
+        getApp()->getFonts()->getFont(FontStyle::UiMediumBold, scale);
+    const auto queuedCountMetrics = QFontMetrics(queuedCountFont);
+    const auto queuedCountWidth =
+        queuedCountMetrics.horizontalAdvance(
+            QString(QUEUED_SLOW_CHAT_COUNT_DIGITS, QChar(u'9'))) +
+        static_cast<int>(std::round(12 * scale));
+    this->queuedSlowChatCountLabel_->setFixedWidth(queuedCountWidth);
 
     this->addButton_->setFixedWidth(addSplitWidth);
 }
@@ -1103,6 +1207,8 @@ void SplitHeader::updateIcons()
 
     if (this->split_->isActivityPane())
     {
+        this->queuedSlowChatCountLabel_->hide();
+        this->queuedSlowChatCountLabel_->setText(QString());
         this->alertsButton_->hide();
         this->moderationButton_->hide();
 
@@ -1117,6 +1223,26 @@ void SplitHeader::updateIcons()
 
         return;
     }
+
+    if (this->slowChatQueueIndicatorReady_)
+    {
+        const int queuedSlowChatMessages =
+            this->split_->getChannelView().pendingSlowChatMessageCount();
+        if (this->split_->slowerChatEnabled() && queuedSlowChatMessages > 0)
+        {
+            this->queuedSlowChatCountLabel_->setText(
+                localizeNumbers(queuedSlowChatMessages));
+        }
+        else
+        {
+            this->queuedSlowChatCountLabel_->setText(QString());
+        }
+    }
+    else
+    {
+        this->queuedSlowChatCountLabel_->setText(QString());
+    }
+    this->queuedSlowChatCountLabel_->show();
 
     this->alertsButton_->show();
     this->alertsButton_->setColor(this->split_->hasLinkedActivityPane()
@@ -1242,54 +1368,37 @@ void SplitHeader::mouseDoubleClickEvent(QMouseEvent *event)
     if (event->button() == Qt::LeftButton)
     {
         this->dragging_ = false;
-        if (this->split_->isActivityPane())
-        {
-            this->split_->showSettingsDialog();
-        }
-        else
-        {
-            this->split_->changeChannel();
-        }
+        this->hideHoverTooltip();
+        QPointer<Split> split = this->split_;
+        const bool isActivityPane = this->split_->isActivityPane();
+        QTimer::singleShot(0, this, [split, isActivityPane] {
+            if (split == nullptr)
+            {
+                return;
+            }
+
+            if (isActivityPane)
+            {
+                split->showSettingsDialog();
+            }
+            else
+            {
+                split->changeChannel();
+            }
+        });
+        event->accept();
     }
     this->doubleClicked_ = true;
 }
 
 void SplitHeader::enterEvent(QEnterEvent *event)
 {
-    if (!this->tooltipText_.isEmpty())
-    {
-        this->tooltipWidget_->setOne({nullptr, this->tooltipText_});
-        this->tooltipWidget_->setWordWrap(true);
-        this->tooltipWidget_->adjustSize();
-
-        // On Windows, a lot of the resizing/activating happens when calling
-        // show() and calling it doesn't synchronously create a visible window,
-        // so moving the window won't cause the visible window to jump.
-        //
-        // On other platforms, this isn't the case, hence we call show() after
-        // moving.
-#ifdef Q_OS_WIN
-        this->tooltipWidget_->show();
-#endif
-
-        auto pos =
-            this->mapToGlobal(this->rect().bottomLeft()) +
-            QPoint((this->width() - this->tooltipWidget_->width()) / 2, 1);
-
-        this->tooltipWidget_->moveTo(pos,
-                                     widgets::BoundsChecking::CursorPosition);
-
-#ifndef Q_OS_WIN
-        this->tooltipWidget_->show();
-#endif
-    }
-
     BaseWidget::enterEvent(event);
 }
 
 void SplitHeader::leaveEvent(QEvent *event)
 {
-    this->tooltipWidget_->hide();
+    this->hideHoverTooltip();
 
     BaseWidget::leaveEvent(event);
 }
@@ -1308,6 +1417,10 @@ void SplitHeader::themeChangedEvent()
         palette.setColor(QPalette::WindowText, this->theme->splits.header.text);
     }
     this->titleLabel_->setPalette(palette);
+
+    auto queuedPalette = QPalette();
+    queuedPalette.setColor(QPalette::WindowText, this->theme->splits.header.text);
+    this->queuedSlowChatCountLabel_->setPalette(queuedPalette);
 
     auto bg = this->theme->splits.header.background;
     this->addButton_->setOptions({

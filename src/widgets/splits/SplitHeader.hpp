@@ -34,6 +34,7 @@ public:
     explicit SplitHeader(Split *split);
 
     void setAddButtonVisible(bool value);
+    void setSlowChatQueueIndicatorReady(bool value);
 
     void updateChannelText();
     void updateIcons();
@@ -42,6 +43,7 @@ public:
     void updateRoomModes();
 
 protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
     void scaleChangedEvent(float scale) override;
     void themeChangedEvent() override;
 
@@ -57,6 +59,8 @@ private:
     void initializeLayout();
     std::unique_ptr<QMenu> createMainMenu();
     std::unique_ptr<QMenu> createChatModeMenu();
+    void showHoverTooltip(QWidget *target, const QString &text, bool wordWrap);
+    void hideHoverTooltip();
 
     /**
      * @brief   Reset the thumbnail data and timer so a new
@@ -80,6 +84,7 @@ private:
     Label *titleLabel_{};
 
     LabelButton *modeButton_{};
+    Label *queuedSlowChatCountLabel_{};
     QAction *modeActionSetEmote{};
     QAction *modeActionSetSub{};
     QAction *modeActionSetSlow{};
@@ -96,6 +101,7 @@ private:
     bool dragging_{false};
     bool doubleClicked_{false};
     bool menuVisible_{false};
+    bool slowChatQueueIndicatorReady_{false};
 
     // managedConnections_ contains connections for signals that are not managed by us
     // and don't change when the parent Split changes its underlying channel

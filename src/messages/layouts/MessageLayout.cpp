@@ -48,6 +48,8 @@ QColor defaultPlatformAccent(MessagePlatform platform)
             return QColor(83, 252, 24);
         case MessagePlatform::YouTube:
             return QColor(255, 48, 64);
+        case MessagePlatform::TikTok:
+            return QColor(37, 244, 238);
         case MessagePlatform::AnyOrTwitch:
         default:
             return QColor(145, 70, 255);

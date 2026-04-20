@@ -26,6 +26,7 @@
 #include <QWidget>
 
 #include <cstdint>
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -169,6 +170,8 @@ public:
     /// @see #underlyingChannel()
     void setChannel(const ChannelPtr &underlyingChannel);
     void refreshMessages();
+    void refreshSlowerChatSettings();
+    int pendingSlowChatMessageCount() const;
 
     void setFilters(const QList<QUuid> &ids);
     QList<QUuid> getFilterIds() const;
@@ -241,6 +244,7 @@ public:
 
     /// This signal fires when a message passed filters and was added to the channel view
     Q_SIGNAL void messageAddedToChannel(MessagePtr &message);
+    Q_SIGNAL void slowChatQueueCountChanged(int count);
 
 protected:
     void themeChangedEvent() override;
@@ -292,7 +296,7 @@ private:
 
     void performLayout(bool causedByScrollbar = false,
                        bool causedByShow = false);
-    void layoutVisibleMessages(const std::vector<MessageLayoutPtr> &messages);
+    bool layoutVisibleMessages(const std::vector<MessageLayoutPtr> &messages);
     void updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
                          bool causedByScrollbar, bool causedByShow);
 
@@ -345,6 +349,30 @@ private:
         const MessagePtr &message, int &pendingGiftRecipients,
         bool &suppressNextAnnouncementMessage) const;
     void rebuildActivityMessages();
+    void enqueueOrAddProxyMessage(
+        const MessagePtr &message,
+        std::optional<MessageFlags> overridingFlags = std::nullopt,
+        bool emitAddedToChannel = false);
+    void appendProxyMessage(const MessagePtr &message,
+                            std::optional<MessageFlags> overridingFlags,
+                            bool emitAddedToChannel);
+    bool shouldQueueSlowChatMessages() const;
+    bool shouldAnimateSlowChatMessages() const;
+    void notifySlowChatQueueCountChanged();
+    void drainSlowChatQueue();
+    void scheduleSlowChatDrain();
+    void flushSlowChatQueue();
+    bool updatePendingSlowChatMessage(const MessagePtr &prev,
+                                      const MessagePtr &replacement);
+    void clearMessageLayoutShiftAnimations();
+    void startOrUpdateMessageLayoutShiftAnimation(const MessageLayoutPtr &layout,
+                                                  qreal fromY, qreal toY);
+    std::optional<qreal> messageLayoutShiftAnimationY(
+        const MessageLayoutPtr &layout) const;
+    void clearMessageArrivalAnimations();
+    void addMessageArrivalAnimation(const MessageLayoutPtr &layout);
+    std::optional<qreal> messageArrivalAnimationProgress(
+        const MessageLayoutPtr &layout) const;
     ChannelViewID id_{};
 
     bool layoutQueued_ = false;
@@ -355,12 +383,33 @@ private:
     bool lastMessageHasAlternateBackground_ = false;
     bool lastMessageHasAlternateBackgroundReverse_ = true;
 
+    struct PendingSlowChatMessage {
+        MessagePtr message;
+        std::optional<MessageFlags> overridingFlags;
+        bool emitAddedToChannel = false;
+    };
+
+    struct MessageArrivalAnimation {
+        MessageLayoutPtr layout;
+        SteadyClock::time_point startedAt;
+    };
+
+    struct MessageLayoutShiftAnimation {
+        MessageLayoutPtr layout;
+        qreal fromY;
+        qreal toY;
+        SteadyClock::time_point startedAt;
+    };
+
     /// Tracks the area of animated elements in the last full repaint.
     /// If this is empty (QRect::isEmpty()), no animated element is shown.
     QRect animationArea_;
 
     bool pausable_ = false;
     QTimer pauseTimer_;
+    QTimer slowChatTimer_;
+    QTimer messageLayoutShiftAnimationTimer_;
+    QTimer messageArrivalAnimationTimer_;
     std::unordered_map<PauseReason, std::optional<SteadyClock::time_point>>
         pauses_;
     std::optional<SteadyClock::time_point> pauseEnd_;
@@ -456,6 +505,11 @@ private:
     const Context context_;
 
     LimitedQueue<MessageLayoutPtr> messages_;
+    std::deque<PendingSlowChatMessage> pendingSlowChatMessages_;
+    int lastSlowChatQueueCount_ = 0;
+    std::vector<MessageLayoutShiftAnimation> messageLayoutShiftAnimations_;
+    std::vector<MessageArrivalAnimation> messageArrivalAnimations_;
+    std::optional<SteadyClock::time_point> nextSlowChatMessageAt_;
 
     pajlada::Signals::SignalHolder signalHolder_;
 

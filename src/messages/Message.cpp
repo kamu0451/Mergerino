@@ -32,6 +32,8 @@ QColor defaultPlatformAccent(MessagePlatform platform)
             return QColor(83, 252, 24);
         case MessagePlatform::YouTube:
             return QColor(255, 48, 64);
+        case MessagePlatform::TikTok:
+            return QColor(37, 244, 238);
         case MessagePlatform::AnyOrTwitch:
         default:
             return QColor(145, 70, 255);
@@ -322,6 +324,7 @@ std::shared_ptr<Message> Message::clone() const
     cloned->reward = this->reward;
     cloned->platform = this->platform;
     cloned->bits = this->bits;
+    cloned->tiktokGiftDiamondCount = this->tiktokGiftDiamondCount;
     std::ranges::transform(this->elements, std::back_inserter(cloned->elements),
                            [](const auto &element) {
                                return element->clone();
@@ -393,6 +396,11 @@ QJsonObject Message::toJson() const
     if (this->bits > 0)
     {
         msg["bits"_L1] = static_cast<qint64>(this->bits);
+    }
+    if (this->tiktokGiftDiamondCount > 0)
+    {
+        msg["tiktokGiftDiamondCount"_L1] =
+            static_cast<qint64>(this->tiktokGiftDiamondCount);
     }
 
     // XXX: figure out if we can add this in tests

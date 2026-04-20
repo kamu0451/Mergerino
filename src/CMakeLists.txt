@@ -434,6 +434,8 @@ set(SOURCE_FILES
         providers/kick/KickMessageBuilder.hpp
         providers/merged/MergedChannel.cpp
         providers/merged/MergedChannel.hpp
+        providers/tiktok/TikTokLiveChat.cpp
+        providers/tiktok/TikTokLiveChat.hpp
 
         providers/links/LinkInfo.cpp
         providers/links/LinkInfo.hpp

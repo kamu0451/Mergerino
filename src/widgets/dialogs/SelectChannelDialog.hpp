@@ -15,10 +15,13 @@
 
 class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
 class QFocusEvent;
 class QLabel;
 class QLineEdit;
 class QRadioButton;
+class QVariantAnimation;
+class QWidget;
 
 namespace chatterino {
 
@@ -47,10 +50,16 @@ public:
     void setActivityPaneEnabled(bool enabled);
     void setFilterActivity(bool enabled);
     void setPlatformIndicatorMode(PlatformIndicatorMode mode);
+    void setSlowerChatEnabled(bool enabled);
+    void setSlowerChatMessagesPerSecond(qreal value);
+    void setSlowerChatMessageAnimations(bool enabled);
     IndirectChannel getSelectedChannel() const;
     bool activityPaneEnabled() const;
     bool filterActivity() const;
     PlatformIndicatorMode platformIndicatorMode() const;
+    bool slowerChatEnabled() const;
+    qreal slowerChatMessagesPerSecond() const;
+    bool slowerChatMessageAnimations() const;
     bool hasSeletedChannel() const;
 
     pajlada::Signals::NoArgSignal closed;
@@ -73,8 +82,18 @@ private:
         QLineEdit *kickName{};
         QCheckBox *enableYouTube{};
         QLineEdit *youtubeUrl{};
+        QCheckBox *enableTikTok{};
+        QLineEdit *tiktokSource{};
         QComboBox *indicatorMode{};
         QCheckBox *filterActivity{};
+        QCheckBox *slowerChat{};
+        QDoubleSpinBox *slowerChatRate{};
+        QCheckBox *messageAnimations{};
+        QWidget *slowerChatRateLabel{};
+        QWidget *slowerChatRateField{};
+        QWidget *messageAnimationsRow{};
+        QVariantAnimation *slowerChatRateAnimation{};
+        qreal slowerChatRateVisibilityProgress = 1.0;
 
         QWidget *specialPage{};
         detail::AutoCheckedRadioButton *whispers{};
@@ -91,6 +110,8 @@ private:
     void setMergedDefaults();
     void loadMergedDefaultsFromChannel(const IndirectChannel &indirectChannel);
     void syncMergedFieldState();
+    void updateSlowerChatVisibility(bool animate = true);
+    void applySlowerChatRateVisibilityProgress(qreal progress);
     bool buildMergedSelection();
     bool buildSpecialSelection();
     void addShortcuts() override;

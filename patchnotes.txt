@@ -1,5 +1,11 @@
 Patch Notes
 
+20/04/2026
+- Added TikTok live chat
+- Added informational tooltips
+- Added slower chat setting
+- Added message animations setting
+
 19/04/2026
 - Added activity filter setting
 - Cleaned up UI

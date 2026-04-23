@@ -68,6 +68,13 @@ public:
     QString tooltipText() const;
     unsigned totalViewerCount() const;
 
+    /// Returns the URL to open in a browser when the user middle-clicks the
+    /// split header. Picks by priority Twitch > Kick > YouTube > TikTok,
+    /// preferring a platform that is currently live; falls back to the
+    /// highest-priority configured platform when nothing is live. Returns
+    /// an empty string if no source is configured.
+    QString browserStreamUrl() const;
+
     struct ViewerDelta {
         double percent;
         int spanMinutes;

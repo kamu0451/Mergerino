@@ -1955,7 +1955,15 @@ void Split::openInBrowser()
 {
     auto channel = this->getChannel();
 
-    if (auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel.get()))
+    {
+        const auto url = merged->browserStreamUrl();
+        if (!url.isEmpty())
+        {
+            QDesktopServices::openUrl(url);
+        }
+    }
+    else if (auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
     {
         QDesktopServices::openUrl("https://www.twitch.tv/" +
                                   twitchChannel->getName());

@@ -382,6 +382,105 @@ QString MergedChannel::tooltipText() const
     return this->tooltipText_;
 }
 
+QString MergedChannel::browserStreamUrl() const
+{
+    auto twitchUrl = [this]() -> QString {
+        const auto name = this->config_.effectiveTwitchChannelName();
+        if (!this->config_.twitchEnabled || name.isEmpty())
+        {
+            return {};
+        }
+        return QStringLiteral("https://www.twitch.tv/") + name;
+    };
+    auto kickUrl = [this]() -> QString {
+        const auto name = this->config_.effectiveKickChannelName();
+        if (!this->config_.kickEnabled || name.isEmpty())
+        {
+            return {};
+        }
+        return QStringLiteral("https://kick.com/") + name;
+    };
+    auto youtubeUrl = [this]() -> QString {
+        if (!this->config_.youtubeEnabled)
+        {
+            return {};
+        }
+        if (this->youtubeLiveChat_)
+        {
+            const auto &videoId = this->youtubeLiveChat_->videoId();
+            if (!videoId.isEmpty())
+            {
+                return QStringLiteral("https://www.youtube.com/watch?v=") +
+                       videoId;
+            }
+        }
+        return this->config_.youtubeStreamUrl;
+    };
+    auto tiktokUrl = [this]() -> QString {
+        QString name;
+        if (this->tiktokLiveChat_)
+        {
+            name = this->tiktokLiveChat_->username();
+        }
+        if (name.isEmpty())
+        {
+            name = TikTokLiveChat::normalizeSource(this->config_.tiktokUsername);
+        }
+        if (!this->config_.tiktokEnabled || name.isEmpty())
+        {
+            return {};
+        }
+        return QStringLiteral("https://www.tiktok.com/@%1/live").arg(name);
+    };
+
+    if (this->twitchLive_)
+    {
+        if (auto url = twitchUrl(); !url.isEmpty())
+        {
+            return url;
+        }
+    }
+    if (this->kickLive_)
+    {
+        if (auto url = kickUrl(); !url.isEmpty())
+        {
+            return url;
+        }
+    }
+    if (this->youtubeLive_)
+    {
+        if (auto url = youtubeUrl(); !url.isEmpty())
+        {
+            return url;
+        }
+    }
+    if (this->tiktokLive_)
+    {
+        if (auto url = tiktokUrl(); !url.isEmpty())
+        {
+            return url;
+        }
+    }
+
+    if (auto url = twitchUrl(); !url.isEmpty())
+    {
+        return url;
+    }
+    if (auto url = kickUrl(); !url.isEmpty())
+    {
+        return url;
+    }
+    if (auto url = youtubeUrl(); !url.isEmpty())
+    {
+        return url;
+    }
+    if (auto url = tiktokUrl(); !url.isEmpty())
+    {
+        return url;
+    }
+    return {};
+}
+
 unsigned MergedChannel::totalViewerCount() const
 {
     unsigned total = 0;

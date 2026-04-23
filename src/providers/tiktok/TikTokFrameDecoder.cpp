@@ -236,6 +236,38 @@ bool decodeSocialMessage(std::span<const std::uint8_t> bytes,
     return true;
 }
 
+// Pulls diamond_count from a nested WebcastGiftMessage.GiftStruct payload.
+// In observed TikTok protos the diamond value lives at field 4 of GiftStruct,
+// but the layout has shifted across versions, so we tolerate the field being
+// absent and leave the count at zero rather than failing the whole frame.
+bool decodeGiftStruct(std::span<const std::uint8_t> bytes, qint32 &diamondCount)
+{
+    Reader r = Reader::fromSpan(bytes);
+    std::uint32_t field{};
+    WireType wire{};
+    while (r.hasMore())
+    {
+        if (!r.readTag(field, wire))
+        {
+            return false;
+        }
+        if (field == 4 && wire == WireType::Varint)
+        {
+            std::uint64_t v{};
+            if (!r.readVarint(v))
+            {
+                return false;
+            }
+            diamondCount = static_cast<qint32>(v);
+        }
+        else if (!r.skip(wire))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool decodeGiftMessage(std::span<const std::uint8_t> bytes,
                        DecodedGiftEvent &out)
 {
@@ -278,6 +310,19 @@ bool decodeGiftMessage(std::span<const std::uint8_t> bytes,
                     return false;
                 }
                 out.repeatEnd = static_cast<qint32>(v);
+                break;
+            }
+            case 15: {  // gift (GiftStruct)
+                std::span<const std::uint8_t> sub;
+                if (!r.readLengthDelimited(sub))
+                {
+                    return false;
+                }
+                qint32 diamond = 0;
+                if (decodeGiftStruct(sub, diamond))
+                {
+                    out.diamondCount = diamond;
+                }
                 break;
             }
             default:

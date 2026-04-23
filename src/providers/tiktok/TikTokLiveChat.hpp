@@ -83,7 +83,8 @@ private:
     void processDecodedFrame(const tiktok::DecodedFrame &frame);
     MessagePtr buildChatMessage(const tiktok::DecodedChatMessage &chat) const;
     MessagePtr buildActivityMessage(const QString &text,
-                                    const QString &loginName = {}) const;
+                                    const QString &loginName = {},
+                                    uint32_t diamondCount = 0) const;
 
     void handleLike(const tiktok::DecodedLikeEvent &ev);
     void handleMember(const tiktok::DecodedMemberEvent &ev);

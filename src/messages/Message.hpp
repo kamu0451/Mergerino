@@ -136,6 +136,10 @@ struct Message {
 
     uint32_t bits{0};
 
+    /// Diamond value of a TikTok gift attached to this message. Zero for
+    /// non-gift messages.
+    uint32_t tiktokGiftDiamondCount{0};
+
     /**
      * Clones this message.
      *

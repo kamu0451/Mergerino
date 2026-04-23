@@ -58,6 +58,10 @@ struct DecodedGiftEvent {
     DecodedUser fromUser;
     qint32 repeatCount{0};
     qint32 repeatEnd{0};  // 1 = final frame of a gift combo; earlier frames = still comboing
+    // Diamond value of a single gift unit (multiply by repeatCount for total).
+    // 0 when the wire payload does not include diamond_count or the nested
+    // GiftStruct field number is not what we probed for.
+    qint32 diamondCount{0};
 };
 
 struct DecodedFrame {

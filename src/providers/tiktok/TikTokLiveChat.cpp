@@ -799,7 +799,8 @@ void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
 }
 
 MessagePtr TikTokLiveChat::buildActivityMessage(const QString &text,
-                                                const QString &loginName) const
+                                                const QString &loginName,
+                                                uint32_t diamondCount) const
 {
     MessageBuilder b;
     b->platform = MessagePlatform::TikTok;
@@ -816,6 +817,7 @@ MessagePtr TikTokLiveChat::buildActivityMessage(const QString &text,
     b->messageText = text;
     b->searchText = text;
     b->serverReceivedTime = QDateTime::currentDateTime();
+    b->tiktokGiftDiamondCount = diamondCount;
     b.emplace<TimestampElement>(b->serverReceivedTime.toLocalTime().time());
     b.emplace<TextElement>(text, MessageElementFlag::Text, MessageColor::System);
     return b.release();
@@ -908,12 +910,25 @@ void TikTokLiveChat::handleGift(const tiktok::DecodedGiftEvent &ev)
         return;
     }
     const int count = std::max(1, static_cast<int>(ev.repeatCount));
-    const QString text = count > 1
-                             ? QStringLiteral("%1 sent a gift x%2")
-                                   .arg(name)
-                                   .arg(count)
-                             : QStringLiteral("%1 sent a gift").arg(name);
-    this->messageReceived.invoke(this->buildActivityMessage(text, name));
+    const qint64 totalDiamonds =
+        static_cast<qint64>(std::max(0, ev.diamondCount)) * count;
+    QString text;
+    if (count > 1)
+    {
+        text = QStringLiteral("%1 sent a gift x%2").arg(name).arg(count);
+    }
+    else
+    {
+        text = QStringLiteral("%1 sent a gift").arg(name);
+    }
+    if (totalDiamonds > 0)
+    {
+        text += QStringLiteral(" (%1 diamonds)").arg(totalDiamonds);
+    }
+    const auto clampedDiamonds =
+        static_cast<uint32_t>(std::min<qint64>(totalDiamonds, UINT32_MAX));
+    this->messageReceived.invoke(
+        this->buildActivityMessage(text, name, clampedDiamonds));
 }
 
 void TikTokLiveChat::flushPendingLikes()

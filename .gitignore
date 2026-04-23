@@ -91,6 +91,7 @@ dependencies
 # AI assistant artifacts (CLAUDE.md at repo root is kept as project docs)
 .claude/
 HANDOFF.md
+IMPROVEMENT_PLAN.md
 .aider*
 .cursor/
 .cursorrules
@@ -140,5 +141,7 @@ aqtinstall.log
 # sccache (CI)
 .sccache
 
-# Local build wrapper (developer-specific, not for CI)
+# Local dev scripts (developer-specific, not for CI)
 .local-build.bat
+.local-run.bat
+.dev-cycle.bat

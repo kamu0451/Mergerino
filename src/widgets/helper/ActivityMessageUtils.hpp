@@ -17,9 +17,13 @@ bool isActivityKickRewardRedemptionMessage(const Message &message);
 bool isActivityTwitchAnnouncementHeaderMessage(const Message &message);
 bool isActivityTwitchAnnouncementFollowupMessage(const Message &message);
 bool isActivityTwitchBitsBadgeMessage(const Message &message);
+bool isActivityTikTokGiftMessage(const Message &message);
+bool shouldShowTikTokGiftInActivityPane(const Message &message,
+                                        uint32_t minimumDiamondCount);
 std::optional<int> getActivityGiftBombRecipientCount(const Message &message);
 bool isActivityGiftRecipientMessage(const Message &message);
 QString compactActivityGiftBombText(const Message &message);
-bool shouldShowMessageInActivityPane(const Message &message);
+bool shouldShowMessageInActivityPane(const Message &message,
+                                     uint32_t tiktokGiftMinimumDiamonds = 0);
 
 }  // namespace chatterino

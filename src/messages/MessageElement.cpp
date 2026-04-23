@@ -715,7 +715,14 @@ TextElement::TextElement(const QString &text, MessageElementFlags flags,
     , color_(color)
     , style_(style)
 {
-    this->words_ = text.split(' ');
+    if (flags.has(MessageElementFlag::Username))
+    {
+        this->words_ = {text};
+    }
+    else
+    {
+        this->words_ = text.split(' ');
+    }
     // fourtf: add logic to store multiple spaces after message
 }
 

@@ -105,6 +105,20 @@ bool isActivityTwitchBitsBadgeMessage(const Message &message)
                .hasMatch();
 }
 
+bool isActivityTikTokGiftMessage(const Message &message)
+{
+    return message.platform == MessagePlatform::TikTok &&
+           message.flags.has(MessageFlag::Subscription) &&
+           message.tiktokGiftDiamondCount > 0;
+}
+
+bool shouldShowTikTokGiftInActivityPane(const Message &message,
+                                        uint32_t minimumDiamondCount)
+{
+    return isActivityTikTokGiftMessage(message) &&
+           message.tiktokGiftDiamondCount >= minimumDiamondCount;
+}
+
 std::optional<int> getActivityGiftBombRecipientCount(const Message &message)
 {
     if (!message.flags.has(MessageFlag::Subscription))
@@ -154,7 +168,8 @@ QString compactActivityGiftBombText(const Message &message)
         .arg(name, QString::number(count), normalizedActivityGiftUnit(count));
 }
 
-bool shouldShowMessageInActivityPane(const Message &message)
+bool shouldShowMessageInActivityPane(const Message &message,
+                                     uint32_t tiktokGiftMinimumDiamonds)
 {
     if (isActivityBotMessage(message))
     {
@@ -167,6 +182,12 @@ bool shouldShowMessageInActivityPane(const Message &message)
         isActivityTwitchBitsBadgeMessage(message))
     {
         return false;
+    }
+
+    if (isActivityTikTokGiftMessage(message))
+    {
+        return shouldShowTikTokGiftInActivityPane(
+            message, tiktokGiftMinimumDiamonds);
     }
 
     return isActivityAlertMessage(message);

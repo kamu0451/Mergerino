@@ -13,6 +13,7 @@
 class QCloseEvent;
 class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
 
 namespace chatterino {
 
@@ -32,6 +33,13 @@ public:
     void setActivityMessageScale(qreal scale);
     qreal activityMessageScale() const;
 
+    void setSlowerChatEnabled(bool enabled);
+    bool slowerChatEnabled() const;
+    void setSlowerChatMessagesPerSecond(qreal value);
+    qreal slowerChatMessagesPerSecond() const;
+    void setSlowerChatMessageAnimations(bool enabled);
+    bool slowerChatMessageAnimations() const;
+
     bool hasAcceptedChanges() const;
 
     pajlada::Signals::NoArgSignal closed;
@@ -46,6 +54,9 @@ private:
         QComboBox *indicatorMode{};
         QCheckBox *filterActivity{};
         QComboBox *activityScale{};
+        QCheckBox *slowerChat{};
+        QDoubleSpinBox *slowerChatRate{};
+        QCheckBox *messageAnimations{};
     } ui_{};
 
     const bool isActivityPane_;

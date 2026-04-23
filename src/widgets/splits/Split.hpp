@@ -64,6 +64,9 @@ public:
     bool hasLinkedActivityPane();
     QString activityPaneTitle() const;
     qreal activityMessageScale() const;
+    bool slowerChatEnabled() const;
+    qreal slowerChatMessagesPerSecond() const;
+    bool slowerChatMessageAnimations() const;
     PlatformIndicatorMode platformIndicatorMode() const;
     bool filterActivity() const;
     bool filterActivityExplicit() const;
@@ -79,6 +82,9 @@ public:
     bool getModerationMode() const;
     void setInputEnabled(bool enabled);
     void setActivityMessageScale(qreal value);
+    void setSlowerChatEnabled(bool value);
+    void setSlowerChatMessagesPerSecond(qreal value);
+    void setSlowerChatMessageAnimations(bool value);
     void setPlatformIndicatorMode(PlatformIndicatorMode value);
     void setFilterActivity(bool value, bool explicitPreference = false);
 
@@ -182,6 +188,9 @@ private:
     bool filterActivity_{false};
     bool filterActivityExplicit_{false};
     qreal activityMessageScale_{0.9};
+    bool slowerChatEnabled_{false};
+    qreal slowerChatMessagesPerSecond_{5.0};
+    bool slowerChatMessageAnimations_{true};
     PlatformIndicatorMode platformIndicatorMode_;
 
     bool isMouseOver_{};

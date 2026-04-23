@@ -14,10 +14,12 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -57,6 +59,9 @@ struct ActivityScaleOption {
     const char *label;
     qreal scale;
 };
+
+constexpr qreal MIN_SLOWER_CHAT_MESSAGES_PER_SECOND = 0.25;
+constexpr qreal MAX_SLOWER_CHAT_MESSAGES_PER_SECOND = 20.0;
 
 constexpr std::array<ActivityScaleOption, 8> ACTIVITY_SCALE_OPTIONS{{
     {"75%", 0.75},
@@ -124,6 +129,47 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane, QWidget *parent)
     }
 
     rootLayout->addWidget(appearanceGroup);
+
+    if (!this->isActivityPane_)
+    {
+        auto *paceGroup = new QGroupBox("Pace");
+        auto *paceLayout = new QFormLayout(paceGroup);
+
+        this->ui_.slowerChat = new QCheckBox("Slow down incoming chat");
+        this->ui_.slowerChat->setToolTip(
+            "Buffer incoming messages and release them at a steady rate. "
+            "Moderator messages bypass the queue; VIP messages jump to the "
+            "front.");
+        paceLayout->addRow(this->ui_.slowerChat);
+
+        this->ui_.slowerChatRate = new QDoubleSpinBox();
+        this->ui_.slowerChatRate->setRange(
+            MIN_SLOWER_CHAT_MESSAGES_PER_SECOND,
+            MAX_SLOWER_CHAT_MESSAGES_PER_SECOND);
+        this->ui_.slowerChatRate->setSingleStep(0.5);
+        this->ui_.slowerChatRate->setDecimals(2);
+        this->ui_.slowerChatRate->setSuffix(" msg/s");
+        this->ui_.slowerChatRate->setToolTip(
+            "How many messages per second are released from the queue.");
+        paceLayout->addRow("Release rate", this->ui_.slowerChatRate);
+
+        this->ui_.messageAnimations = new QCheckBox(
+            "Animate arriving and shifting messages");
+        this->ui_.messageAnimations->setToolTip(
+            "Fade and slide newly released messages into view, and animate "
+            "layout shifts when messages arrive.");
+        paceLayout->addRow(this->ui_.messageAnimations);
+
+        QObject::connect(this->ui_.slowerChat, &QCheckBox::toggled,
+                         this->ui_.slowerChatRate,
+                         &QDoubleSpinBox::setEnabled);
+        QObject::connect(this->ui_.slowerChat, &QCheckBox::toggled,
+                         this->ui_.messageAnimations,
+                         &QCheckBox::setEnabled);
+
+        rootLayout->addWidget(paceGroup);
+    }
+
     rootLayout->addStretch(1);
 
     auto *buttonBox =
@@ -201,6 +247,63 @@ qreal SplitSettingsDialog::activityMessageScale() const
     return this->ui_.activityScale->currentData().toDouble();
 }
 
+void SplitSettingsDialog::setSlowerChatEnabled(bool enabled)
+{
+    if (this->ui_.slowerChat == nullptr)
+    {
+        return;
+    }
+    this->ui_.slowerChat->setChecked(enabled);
+    if (this->ui_.slowerChatRate)
+    {
+        this->ui_.slowerChatRate->setEnabled(enabled);
+    }
+    if (this->ui_.messageAnimations)
+    {
+        this->ui_.messageAnimations->setEnabled(enabled);
+    }
+}
+
+bool SplitSettingsDialog::slowerChatEnabled() const
+{
+    return this->ui_.slowerChat && this->ui_.slowerChat->isChecked();
+}
+
+void SplitSettingsDialog::setSlowerChatMessagesPerSecond(qreal value)
+{
+    if (this->ui_.slowerChatRate == nullptr)
+    {
+        return;
+    }
+    const auto clamped = std::clamp(value, MIN_SLOWER_CHAT_MESSAGES_PER_SECOND,
+                                    MAX_SLOWER_CHAT_MESSAGES_PER_SECOND);
+    this->ui_.slowerChatRate->setValue(clamped);
+}
+
+qreal SplitSettingsDialog::slowerChatMessagesPerSecond() const
+{
+    if (this->ui_.slowerChatRate == nullptr)
+    {
+        return 5.0;
+    }
+    return this->ui_.slowerChatRate->value();
+}
+
+void SplitSettingsDialog::setSlowerChatMessageAnimations(bool enabled)
+{
+    if (this->ui_.messageAnimations == nullptr)
+    {
+        return;
+    }
+    this->ui_.messageAnimations->setChecked(enabled);
+}
+
+bool SplitSettingsDialog::slowerChatMessageAnimations() const
+{
+    return this->ui_.messageAnimations &&
+           this->ui_.messageAnimations->isChecked();
+}
+
 bool SplitSettingsDialog::hasAcceptedChanges() const
 {
     return this->hasAcceptedChanges_;
@@ -235,6 +338,18 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     if (this->ui_.activityScale)
     {
         this->ui_.activityScale->setFont(uiFont);
+    }
+    if (this->ui_.slowerChat)
+    {
+        this->ui_.slowerChat->setFont(uiFont);
+    }
+    if (this->ui_.slowerChatRate)
+    {
+        this->ui_.slowerChatRate->setFont(uiFont);
+    }
+    if (this->ui_.messageAnimations)
+    {
+        this->ui_.messageAnimations->setFont(uiFont);
     }
 }
 

@@ -735,6 +735,12 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
                        node->getSplit()->filterActivityExplicit());
             obj.insert("activityMessageScale",
                        node->getSplit()->activityMessageScale());
+            obj.insert("slowerChatEnabled",
+                       node->getSplit()->slowerChatEnabled());
+            obj.insert("slowerChatMessagesPerSecond",
+                       node->getSplit()->slowerChatMessagesPerSecond());
+            obj.insert("slowerChatMessageAnimations",
+                       node->getSplit()->slowerChatMessageAnimations());
             obj.insert("platformIndicatorMode",
                        qmagicenum::enumNameString(
                            node->getSplit()->platformIndicatorMode())

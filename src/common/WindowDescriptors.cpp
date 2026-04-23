@@ -120,6 +120,12 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
     }
     descriptor.activityMessageScale_ =
         root.value("activityMessageScale").toDouble(0.9);
+    descriptor.slowerChatEnabled_ =
+        root.value("slowerChatEnabled").toBool(false);
+    descriptor.slowerChatMessagesPerSecond_ =
+        root.value("slowerChatMessagesPerSecond").toDouble(5.0);
+    descriptor.slowerChatMessageAnimations_ =
+        root.value("slowerChatMessageAnimations").toBool(true);
     if (auto platformIndicatorMode = root["platformIndicatorMode"];
         platformIndicatorMode.isString())
     {

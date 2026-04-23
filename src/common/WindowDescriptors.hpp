@@ -53,6 +53,9 @@ struct SplitDescriptor {
     std::optional<bool> filterActivity_;
     std::optional<bool> filterActivityExplicit_;
     qreal activityMessageScale_{0.9};
+    bool slowerChatEnabled_{false};
+    qreal slowerChatMessagesPerSecond_{5.0};
+    bool slowerChatMessageAnimations_{true};
     std::optional<PlatformIndicatorMode> platformIndicatorMode_;
 
     std::optional<bool> spellCheckOverride;

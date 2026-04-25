@@ -17,6 +17,7 @@
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
+#include "util/ChatterinoImport.hpp"
 #include "util/FuzzyConvert.hpp"
 #include "util/Helpers.hpp"
 #include "util/IncognitoBrowser.hpp"
@@ -996,6 +997,49 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         QDesktopServices::openUrl(getApp()->getPaths().rootAppDataDirectory);
 #endif
     });
+
+    if (chatterinoImport::chatterino2HasSettings())
+    {
+        layout.addSubtitle("Import from Chatterino2");
+        layout.addDescription(
+            "Copy settings, themes, plugins, chat logs, highlights, ignores, "
+            "and nicknames from an existing Chatterino2 installation in "
+            "%APPDATA%\\Chatterino2. Existing files with the same name will "
+            "be overwritten. Twitch accounts cannot be migrated and must be "
+            "re-linked manually.");
+        layout.addButton("Import settings from Chatterino2", [this] {
+            auto reply = QMessageBox::question(
+                this->window(), "Import settings from Chatterino2",
+                "This will overwrite any existing files in your Mergerino "
+                "data directory with copies from Chatterino2.\n\n"
+                "Mergerino should be restarted afterwards for all changes "
+                "to take effect.\n\nContinue?",
+                QMessageBox::Yes | QMessageBox::No);
+            if (reply != QMessageBox::Yes)
+            {
+                return;
+            }
+
+            auto result = chatterinoImport::importFromChatterino2(
+                getApp()->getPaths().rootAppDataDirectory);
+            if (result.ok)
+            {
+                QMessageBox::information(
+                    this->window(), "Import complete",
+                    QStringLiteral("Imported %1 file(s) from Chatterino2.\n\n"
+                                   "Please restart Mergerino for the changes "
+                                   "to take effect.")
+                        .arg(result.filesCopied));
+            }
+            else
+            {
+                QMessageBox::warning(
+                    this->window(), "Import failed",
+                    "Could not import Chatterino2 settings:\n\n" +
+                        result.error);
+            }
+        });
+    }
 
     layout.addSubtitle("Temporary files (Cache)");
     layout.addDescription(

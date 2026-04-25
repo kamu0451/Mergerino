@@ -605,6 +605,8 @@ set(SOURCE_FILES
         util/BoostJsonWrap.hpp
         util/CancellationToken.hpp
         util/ChannelHelpers.hpp
+        util/ChatterinoImport.cpp
+        util/ChatterinoImport.hpp
         util/Clipboard.cpp
         util/Clipboard.hpp
         util/CustomPlayer.cpp

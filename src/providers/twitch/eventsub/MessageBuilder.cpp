@@ -381,6 +381,8 @@ void makeModerateMessage(
     }
 
     builder.setMessageAndSearchText(text);
+    builder->id = MessageBuilder::makeDeletionNoticeMessageId(
+        action.messageID.qt());
     builder->timeoutUser = action.userLogin.qt();
 }
 

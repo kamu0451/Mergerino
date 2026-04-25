@@ -192,7 +192,7 @@
             ],
             "flags": "System|DoNotTriggerNotification|EventSub|ModerationAction",
             "frozen": true,
-            "id": "",
+            "id": "delete:105f63c6-7a50-4ab3-b705-c626154e2ee9",
             "localizedName": "",
             "loginName": "testaccount_420",
             "messageText": "testaccount_420 deleted message from testaccount_420 in bajlada saying: dfg",

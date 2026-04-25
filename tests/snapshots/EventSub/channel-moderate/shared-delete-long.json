@@ -192,7 +192,7 @@
             ],
             "flags": "System|DoNotTriggerNotification|EventSub|ModerationAction",
             "frozen": true,
-            "id": "",
+            "id": "delete:620bf9d6-0fd1-4f84-a294-6a0db8e5a536",
             "localizedName": "",
             "loginName": "testaccount_420",
             "messageText": "testaccount_420 deleted message from testaccount_420 in bajlada saying: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa…",

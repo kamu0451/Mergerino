@@ -159,7 +159,7 @@
             ],
             "flags": "System|DoNotTriggerNotification|EventSub|ModerationAction",
             "frozen": true,
-            "id": "",
+            "id": "delete:2da2e2d6-61fc-4ee7-8ac4-1586b52b0ff6",
             "localizedName": "",
             "loginName": "testaccount_420",
             "messageText": "testaccount_420 deleted message from testaccount_420 saying: asd",

@@ -361,9 +361,13 @@ void IrcMessageHandler::parseMessageInto(Communi::IrcMessage *message,
             return;
         }
 
+        const auto deletionNoticeId =
+            MessageBuilder::makeDeletionNoticeMessageId(targetID);
+
         msg->flags.set(MessageFlag::Disabled);
         msg->flags.set(MessageFlag::InvalidReplyTarget);
-        if (!getSettings()->hideDeletionActions)
+        if (!getSettings()->hideDeletionActions &&
+            sink.findMessageByID(deletionNoticeId) == nullptr)
         {
             sink.addMessage(MessageBuilder::makeDeletionMessageFromIRC(msg),
                             MessageContext::Original);
@@ -594,9 +598,13 @@ void IrcMessageHandler::handleClearMessageMessage(Communi::IrcMessage *message)
         return;
     }
 
+    const auto deletionNoticeId =
+        MessageBuilder::makeDeletionNoticeMessageId(targetID);
+
     msg->flags.set(MessageFlag::Disabled);
     msg->flags.set(MessageFlag::InvalidReplyTarget);
-    if (!getSettings()->hideDeletionActions)
+    if (!getSettings()->hideDeletionActions &&
+        chan->findMessageByID(deletionNoticeId) == nullptr)
     {
         chan->addMessage(MessageBuilder::makeDeletionMessageFromIRC(msg),
                          MessageContext::Original);

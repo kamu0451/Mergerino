@@ -1298,6 +1298,11 @@ MessagePtr MessageBuilder::makeHostingSystemMessage(const QString &channelName,
     return builder.release();
 }
 
+QString MessageBuilder::makeDeletionNoticeMessageId(const QString &messageId)
+{
+    return QStringLiteral("delete:") + messageId;
+}
+
 MessagePtr MessageBuilder::makeDeletionMessageFromIRC(
     const MessagePtr &originalMessage)
 {
@@ -1330,6 +1335,8 @@ MessagePtr MessageBuilder::makeDeletionMessageFromIRC(
         .emplace<TextElement>(deletedMessageText, MessageElementFlag::Text,
                               MessageColor::Text)
         ->setLink({Link::JumpToMessage, originalMessage->id});
+    builder.message().id =
+        MessageBuilder::makeDeletionNoticeMessageId(originalMessage->id);
     builder.message().timeoutUser = "msg:" + originalMessage->id;
 
     const auto deletionText =

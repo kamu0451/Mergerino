@@ -39,8 +39,11 @@ namespace chatterino {
  **/
 inline const QString CHATTERINO_VERSION =
     QStringLiteral("@PROJECT_VERSION@");
+// Full version is shown in the title bar / "About" dialog. PATCH is
+// auto-derived from `git rev-list --count HEAD` in cmake/GIT.cmake, so this
+// monotonically bumps on every commit without a manual edit.
 inline const QString CHATTERINO_DISPLAY_VERSION =
-    QStringLiteral("@PROJECT_VERSION_MAJOR@.@PROJECT_VERSION_MINOR@");
+    QStringLiteral("@PROJECT_VERSION@");
 
 class Version
 {

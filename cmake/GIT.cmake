@@ -90,4 +90,39 @@ if(DEFINED ENV{GIT_RELEASE})
     set(GIT_RELEASE "$ENV{GIT_RELEASE}")
 endif()
 
+# Auto-bump PATCH from the total commit count so every push monotonically
+# advances the displayed version without a manual edit. MAJOR.MINOR stay
+# under intentional control via the top-level project() call.
+if(GIT_EXECUTABLE AND GIT_REPOSITORY_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-list --count HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE GIT_COMMIT_COUNT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(GIT_COMMIT_COUNT MATCHES "^[0-9]+$")
+        set(PROJECT_VERSION_PATCH "${GIT_COMMIT_COUNT}")
+        set(PROJECT_VERSION
+            "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${GIT_COMMIT_COUNT}")
+        message(STATUS "Auto-version: ${PROJECT_VERSION} (commit count ${GIT_COMMIT_COUNT})")
+    endif()
+
+    # Force a reconfigure when HEAD moves or the followed branch ref advances,
+    # so the cached auto-version doesn't go stale across ninja invocations
+    # (.local-build.bat reuses the existing CMake config by design).
+    if(EXISTS "${CMAKE_SOURCE_DIR}/.git/HEAD")
+        configure_file("${CMAKE_SOURCE_DIR}/.git/HEAD"
+                       "${CMAKE_BINARY_DIR}/git-head-stamp" COPYONLY)
+        file(STRINGS "${CMAKE_SOURCE_DIR}/.git/HEAD" _GIT_HEAD_CONTENTS LIMIT_COUNT 1)
+        if(_GIT_HEAD_CONTENTS MATCHES "^ref: (.*)$")
+            set(_GIT_REF "${CMAKE_MATCH_1}")
+            if(EXISTS "${CMAKE_SOURCE_DIR}/.git/${_GIT_REF}")
+                configure_file("${CMAKE_SOURCE_DIR}/.git/${_GIT_REF}"
+                               "${CMAKE_BINARY_DIR}/git-ref-stamp" COPYONLY)
+            endif()
+        endif()
+    endif()
+endif()
+
 message(STATUS "Injected git values: ${GIT_COMMIT} (${GIT_RELEASE}) modified: ${GIT_MODIFIED}")

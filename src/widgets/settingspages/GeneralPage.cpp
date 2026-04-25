@@ -18,7 +18,9 @@
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
 #include "util/ChatterinoImport.hpp"
+#include "util/Clipboard.hpp"
 #include "util/FuzzyConvert.hpp"
+#include "util/ObsBrowserDockServer.hpp"
 #include "util/Helpers.hpp"
 #include "util/IncognitoBrowser.hpp"
 #include "widgets/BaseWindow.hpp"
@@ -1040,6 +1042,16 @@ void GeneralPage::initLayout(GeneralPageView &layout)
             }
         });
     }
+
+    layout.addSubtitle("OBS browser dock");
+    layout.addDescription(
+        "Mergerino exposes the active tab as a local web page that OBS can "
+        "embed via Sources -> Browser. Add a browser source pointing at the "
+        "URL below; toggle between chat and activity views with the tabs at "
+        "the top of the page.");
+    layout.addButton("Copy OBS dock URL to clipboard", [] {
+        crossPlatformCopy(ObsBrowserDockServer::dockUrl());
+    });
 
     layout.addSubtitle("Temporary files (Cache)");
     layout.addDescription(

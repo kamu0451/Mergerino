@@ -105,6 +105,15 @@ struct TikTokLiveChat::Impl {
     // "Connecting..." forever.
     QTimer stuckConnectionTimer;
 
+    // Set once check_alive (or the inline `alive` field) has returned a
+    // definitive live/offline answer for this session. While false, the
+    // WebSocket fallback can flip live_ on chat/gift frames; once true,
+    // the fallback only stops the watchdog -- the authoritative signal
+    // wins. Without this gate, stale viewer-count or member-join frames
+    // from a recently-ended room flip us back to live and re-fire the
+    // "Joined TikTok live chat" announce.
+    bool checkAliveSeen{false};
+
     // Dedicated single-thread pool for offloading protobuf decode off the UI
     // thread. Single-threaded on purpose: preserves frame ordering so chat
     // messages don't show up reordered under bursty traffic.
@@ -536,6 +545,38 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         extract(room.value(QStringLiteral("total_user")));
     }
 
+    // TikTok's web page issues check_alive batches for OTHER rooms it's
+    // recommending in the sidebar / "for you" feed - not just ours. If we
+    // OR-fold alive across all entries, an unrelated live recommendation
+    // can flip us to live and falsely fire "Joined TikTok live chat".
+    // Filter by our own room_id_str. We pin it from the first batch that
+    // includes a room_id_str if we don't already know it (TikTok queries
+    // our room individually before the recommendation batches).
+    //
+    // Also detect TikTok's "this room has ended" notice (status_code 30003
+    // or data.message == "room has finished") and lock live=false. Those
+    // arrive on the OBJECT-form enter/info response and are the most
+    // direct signal that gevad1ch's room is over.
+    const auto statusCode = root.value(QStringLiteral("status_code")).toInt(0);
+    const auto roomFinishedMsg =
+        dataObj.value(QStringLiteral("message")).toString();
+    if (statusCode == 30003 ||
+        roomFinishedMsg.contains(QStringLiteral("room has finished"),
+                                 Qt::CaseInsensitive) ||
+        roomFinishedMsg.contains(QStringLiteral("LIVE has ended"),
+                                 Qt::CaseInsensitive))
+    {
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.stop();
+            this->impl_->checkAliveSeen = true;
+        }
+        this->setLive(false);
+        // The object-form "finished" response carries no room data, no
+        // viewer count, and no title - nothing else worth processing.
+        return;
+    }
+
     // Per-room entries: TikTok has used two shapes historically -
     //   older: { "alive_state": N }  where N == 2 means live, else ended
     //   newer: { "alive": true|false, "room_id_str": "..." }
@@ -545,9 +586,30 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
     {
         bool anyRoomLive = false;
         bool sawAliveField = false;
+        bool sawOurRoom = false;
+        const bool haveOurRoomId = !this->roomId_.isEmpty();
+        QString firstEntryRoomId;
         for (const auto &entry : roomEntries)
         {
             const auto obj = entry.toObject();
+            const auto entryRoomId =
+                obj.value(QStringLiteral("room_id_str")).toString();
+            if (firstEntryRoomId.isEmpty() && !entryRoomId.isEmpty())
+            {
+                firstEntryRoomId = entryRoomId;
+            }
+
+            // Skip entries for OTHER rooms (TikTok recommendation batches).
+            if (haveOurRoomId && !entryRoomId.isEmpty() &&
+                entryRoomId != this->roomId_)
+            {
+                continue;
+            }
+            if (haveOurRoomId && entryRoomId == this->roomId_)
+            {
+                sawOurRoom = true;
+            }
+
             extract(obj.value(QStringLiteral("user_count")));
             const auto aliveState = obj.value(QStringLiteral("alive_state"));
             if (aliveState.isDouble())
@@ -568,13 +630,25 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
                 }
             }
         }
-        if (sawAliveField)
+
+        // If we didn't know our room ID, pin it from the first entry of
+        // this batch. TikTok queries our specific room before any
+        // recommendation batches, so the first array-form response should
+        // be ours.
+        if (!haveOurRoomId && !firstEntryRoomId.isEmpty())
         {
-            // Room responded with a definitive live/offline state - cancel
-            // the stuck-connection watchdog regardless of value.
+            this->roomId_ = firstEntryRoomId;
+        }
+
+        // Only treat this batch as authoritative if it actually contained
+        // our room - otherwise it's a recommendation batch and we don't
+        // know the alive state of OUR room from it.
+        if (sawAliveField && (!haveOurRoomId || sawOurRoom))
+        {
             if (this->impl_)
             {
                 this->impl_->stuckConnectionTimer.stop();
+                this->impl_->checkAliveSeen = true;
             }
             this->setLive(anyRoomLive);
         }
@@ -756,24 +830,24 @@ void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
     // (heartbeats, keepalive, occasional raw frames) still decode, which
     // is why chat / viewer-count works intermittently.
 
+    // Only chat messages and gift events are unambiguous proof the room is
+    // actively broadcasting. Likes can be replayed from cache; member-join /
+    // social events and roomViewerCount > 0 still arrive on rooms that just
+    // ended, which previously false-positived the room as live.
     const bool hasLiveContent =
-        !frame.chatMessages.empty() || !frame.likeEvents.empty() ||
-        !frame.memberEvents.empty() || !frame.socialEvents.empty() ||
-        !frame.giftEvents.empty() || frame.roomViewerCount > 0;
-    if (hasLiveContent)
+        !frame.chatMessages.empty() || !frame.giftEvents.empty();
+    if (hasLiveContent && this->impl_)
     {
-        // Fallback live signal when check_alive hasn't fired yet. Any real
-        // chat/like/join frame is proof the room is live - cancel the
-        // stuck-connection watchdog and clear a prior "unavailable" status
-        // so the user sees the recovery.
-        if (this->impl_)
-        {
-            this->impl_->stuckConnectionTimer.stop();
-        }
-        if (!this->live_)
-        {
-            this->setStatusText(QStringLiteral("Connected to TikTok"));
-        }
+        this->impl_->stuckConnectionTimer.stop();
+    }
+    if (hasLiveContent && this->impl_ && !this->impl_->checkAliveSeen &&
+        !this->live_)
+    {
+        // Fallback live signal: only used before check_alive has spoken.
+        // Once check_alive has reported a definitive value the fallback
+        // is suppressed -- otherwise stale frames after a stream end
+        // re-flip live_ and re-fire the join announce.
+        this->setStatusText(QStringLiteral("Connected to TikTok"));
         this->setLive(true);
     }
     for (const auto &chat : frame.chatMessages)

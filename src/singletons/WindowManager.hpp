@@ -126,6 +126,13 @@ public:
     void save();
     void closeAll();
 
+    /// Suppress all subsequent layout saves so an externally-restored
+    /// window-layout.json (e.g. a fresh Chatterino2 import) survives until
+    /// the next launch. Stops the debounced save timer and sets the same
+    /// shuttingDown_ guard closeAll() uses, so closeEvent's save() becomes
+    /// a no-op.
+    void suppressFurtherSaves();
+
     int getGeneration() const;
     void incGeneration();
 

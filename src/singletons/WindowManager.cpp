@@ -933,6 +933,17 @@ IndirectChannel WindowManager::decodeChannel(const SplitDescriptor &descriptor)
     return Channel::getEmpty();
 }
 
+void WindowManager::suppressFurtherSaves()
+{
+    qCDebug(chatterinoWindowmanager)
+        << "Suppressing further saves (external layout restore)";
+    this->shuttingDown_ = true;
+    if (this->saveTimer != nullptr)
+    {
+        this->saveTimer->stop();
+    }
+}
+
 void WindowManager::closeAll()
 {
     assertInGuiThread();

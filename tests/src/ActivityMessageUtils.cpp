@@ -73,7 +73,8 @@ TEST(ActivityMessageUtils, CompactsGiftBombMembershipsToSubs)
     message.messageText = "GiftLord gifted 5 memberships to viewers!";
 
     ASSERT_EQ(getActivityGiftBombRecipientCount(message), 5);
-    EXPECT_EQ(compactActivityGiftBombText(message), "GiftLord gifted 5 subs");
+    EXPECT_EQ(compactActivityGiftBombText(message),
+              "GiftLord gifted 5 memberships");
 }
 
 TEST(ActivityMessageUtils, CompactsYouTubeGiftPurchaseAnnouncements)
@@ -84,7 +85,8 @@ TEST(ActivityMessageUtils, CompactsYouTubeGiftPurchaseAnnouncements)
     message.messageText = "Sent 20 Coconut B gift memberships";
 
     ASSERT_EQ(getActivityGiftBombRecipientCount(message), 20);
-    EXPECT_EQ(compactActivityGiftBombText(message), "Halfman gifted 20 subs");
+    EXPECT_EQ(compactActivityGiftBombText(message),
+              "Halfman gifted 20 memberships");
 }
 
 TEST(ActivityMessageUtils, DetectsTwitchAndYouTubeGiftRecipients)

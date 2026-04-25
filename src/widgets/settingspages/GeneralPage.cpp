@@ -32,6 +32,7 @@
 #include <QApplication>
 #include <QDesktopServices>
 #include <QFileDialog>
+#include <QProcess>
 #include <QFontDialog>
 #include <QFormLayout>
 #include <QLabel>
@@ -1016,9 +1017,8 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                 this->window(), "Import settings from Chatterino2",
                 "This will overwrite any existing files in your Mergerino "
                 "data directory with copies from Chatterino2.\n\n"
-                "Mergerino will exit after importing so the new tab "
-                "layout, settings, and themes are loaded on the next "
-                "launch.\n\nContinue?",
+                "Mergerino will restart afterwards so the new tab layout, "
+                "settings, and themes are loaded.\n\nContinue?",
                 QMessageBox::Yes | QMessageBox::No);
             if (reply != QMessageBox::Yes)
             {
@@ -1036,17 +1036,31 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                 return;
             }
 
-            QMessageBox::information(
-                this->window(), "Import complete",
-                QStringLiteral("Imported %1 file(s) from Chatterino2.\n\n"
-                               "Mergerino will now exit. Relaunch it to "
-                               "load the imported settings and tab layout.")
+            QMessageBox doneBox(this->window());
+            doneBox.setWindowTitle("Import complete");
+            doneBox.setIcon(QMessageBox::Information);
+            doneBox.setText(
+                QStringLiteral("Imported %1 file(s) from Chatterino2.")
                     .arg(result.filesCopied));
+            doneBox.setInformativeText(
+                "Mergerino needs to restart so the imported tab layout, "
+                "settings, and themes can take effect.");
+            auto *restartBtn =
+                doneBox.addButton("Restart now", QMessageBox::AcceptRole);
+            doneBox.addButton("Quit only", QMessageBox::RejectRole);
+            doneBox.setDefaultButton(restartBtn);
+            doneBox.exec();
 
             // The in-memory window layout would otherwise overwrite the
             // freshly imported window-layout.json on shutdown. Silence the
             // debounced save and the closeEvent save before quitting.
             getApp()->getWindows()->suppressFurtherSaves();
+
+            if (doneBox.clickedButton() == restartBtn)
+            {
+                QProcess::startDetached(QApplication::applicationFilePath(),
+                                        {});
+            }
             QApplication::quit();
         });
     }

@@ -121,7 +121,8 @@ QColor automaticEventHighlightColor(const Message &message,
         }
     }
 
-    if (message.flags.has(MessageFlag::FirstMessage) &&
+    if ((message.flags.has(MessageFlag::FirstMessage) ||
+         message.flags.has(MessageFlag::FirstMessageSession)) &&
         highlightColor.isValid())
     {
         return highlightColor;
@@ -188,8 +189,10 @@ bool usesAutomaticEventOverlay(const Message &message,
         return true;
     }
 
-    if (message.flags.has(MessageFlag::FirstMessage) &&
-        preferences.enableFirstMessageHighlight)
+    if ((message.flags.has(MessageFlag::FirstMessage) &&
+         preferences.enableFirstMessageHighlight) ||
+        (message.flags.has(MessageFlag::FirstMessageSession) &&
+         preferences.enableFirstMessageSessionHighlight))
     {
         return true;
     }
@@ -220,6 +223,15 @@ bool usesAutomaticEventOverlay(const Message &message,
     }
 
     return isPlatformAlertMessage(message);
+}
+
+bool hasEnabledFirstMessageHighlight(const Message &message,
+                                     const MessagePreferences &preferences)
+{
+    return (message.flags.has(MessageFlag::FirstMessage) &&
+            preferences.enableFirstMessageHighlight) ||
+           (message.flags.has(MessageFlag::FirstMessageSession) &&
+            preferences.enableFirstMessageSessionHighlight);
 }
 
 QColor brightenGradientColor(const QColor &color)
@@ -682,8 +694,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
                                    gradientOverlayColor, solidOverlayColor);
     }
 
-    else if (this->message_->flags.has(MessageFlag::FirstMessage) &&
-             ctx.preferences.enableFirstMessageHighlight)
+    else if (hasEnabledFirstMessageHighlight(*this->message_, ctx.preferences))
     {
         auto firstMessageBaseColor =
             *ctx.colorProvider.color(ColorType::FirstMessageHighlight);

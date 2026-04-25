@@ -300,6 +300,8 @@ void Scrollbar::paintEvent(QPaintEvent * /*event*/)
     bool enableRedeemedHighlights = getSettings()->enableRedeemedHighlight;
     bool enableFirstMessageHighlights =
         getSettings()->enableFirstMessageHighlight;
+    bool enableFirstMessageSessionHighlights =
+        getSettings()->enableFirstMessageSessionHighlight;
     bool enableElevatedMessageHighlights =
         getSettings()->enableElevatedMessageHighlight;
 
@@ -345,6 +347,12 @@ void Scrollbar::paintEvent(QPaintEvent * /*event*/)
 
             if (highlight.isFirstMessageHighlight() &&
                 !enableFirstMessageHighlights)
+            {
+                continue;
+            }
+
+            if (highlight.isFirstMessageSessionHighlight() &&
+                !enableFirstMessageSessionHighlights)
             {
                 continue;
             }

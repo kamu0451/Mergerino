@@ -641,6 +641,8 @@ public:
 
     BoolSetting enableFirstMessageHighlight = {
         "/highlighting/firstMessageHighlight/highlighted", true};
+    BoolSetting enableFirstMessageSessionHighlight = {
+        "/highlighting/firstMessageSessionHighlight/enabled", false};
     //    BoolSetting enableFirstMessageHighlightSound = {
     //        "/highlighting/firstMessageHighlight/enableSound", false};
     //    BoolSetting enableFirstMessageHighlightTaskbar = {

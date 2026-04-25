@@ -17,6 +17,7 @@
 namespace {
 
 constexpr uint8_t MAX_RECURSION = 64;
+constexpr qsizetype MAX_TRACKED_FIRST_MESSAGE_SESSIONS = 8;
 
 struct RecursionGuard {
     constexpr RecursionGuard(uint8_t *count) noexcept
@@ -36,6 +37,62 @@ struct RecursionGuard {
 
     uint8_t *count;
 };
+
+bool shouldTrackSessionFirstMessage(const chatterino::Channel &channel,
+                                    const chatterino::MessagePtr &message,
+                                    chatterino::MessageContext context)
+{
+    if (!message ||
+        message->flags.has(chatterino::MessageFlag::FirstMessageSession))
+    {
+        return false;
+    }
+
+    const bool isOriginal = context == chatterino::MessageContext::Original;
+    const bool isMergedLiveSourceRepost =
+        context == chatterino::MessageContext::Repost &&
+        channel.isMergedChannel() &&
+        (message->platform == chatterino::MessagePlatform::YouTube ||
+         message->platform == chatterino::MessagePlatform::TikTok);
+    if (!isOriginal && !isMergedLiveSourceRepost)
+    {
+        return false;
+    }
+
+    if (message->flags.hasAny({chatterino::MessageFlag::System,
+                               chatterino::MessageFlag::Timeout,
+                               chatterino::MessageFlag::Untimeout,
+                               chatterino::MessageFlag::PubSub,
+                               chatterino::MessageFlag::Disabled,
+                               chatterino::MessageFlag::Whisper,
+                               chatterino::MessageFlag::ConnectedMessage,
+                               chatterino::MessageFlag::DisconnectedMessage,
+                               chatterino::MessageFlag::LiveUpdatesAdd,
+                               chatterino::MessageFlag::LiveUpdatesRemove,
+                               chatterino::MessageFlag::LiveUpdatesUpdate,
+                               chatterino::MessageFlag::ClearChat,
+                               chatterino::MessageFlag::ModerationAction,
+                               chatterino::MessageFlag::AutoModOffendingMessage,
+                               chatterino::MessageFlag::
+                                   AutoModOffendingMessageHeader}))
+    {
+        return false;
+    }
+
+    return !message->userID.isEmpty() || !message->loginName.isEmpty();
+}
+
+QString sessionFirstMessageUserKey(const chatterino::Message &message)
+{
+    auto identity =
+        !message.userID.isEmpty() ? message.userID : message.loginName.toLower();
+    if (identity.isEmpty())
+    {
+        return {};
+    }
+
+    return QString::number(static_cast<int>(message.platform)) + ":" + identity;
+}
 
 }  // namespace
 
@@ -157,6 +214,7 @@ void Channel::addMessage(MessagePtr message, MessageContext context,
         return;
     }
 
+    this->applySessionFirstMessageHighlight(message, context);
     message->freeze();
 
     MessagePtr deleted;
@@ -533,6 +591,55 @@ void Channel::onConnected()
 
 void Channel::messageRemovedFromStart(const MessagePtr &msg)
 {
+}
+
+QString Channel::getCurrentStreamIDForMessage(const Message & /*message*/) const
+{
+    return this->getCurrentStreamID();
+}
+
+void Channel::applySessionFirstMessageHighlight(const MessagePtr &message,
+                                                MessageContext context)
+{
+    if (!shouldTrackSessionFirstMessage(*this, message, context))
+    {
+        return;
+    }
+
+    const auto streamID = this->getCurrentStreamIDForMessage(*message);
+    if (streamID.isEmpty())
+    {
+        return;
+    }
+
+    const auto userKey = sessionFirstMessageUserKey(*message);
+    if (userKey.isEmpty())
+    {
+        return;
+    }
+
+    if (!this->sessionFirstMessageUsersByStream_.contains(streamID))
+    {
+        this->sessionFirstMessageUsersByStream_.insert(streamID, {});
+        this->sessionFirstMessageStreamOrder_.append(streamID);
+
+        while (this->sessionFirstMessageStreamOrder_.size() >
+               MAX_TRACKED_FIRST_MESSAGE_SESSIONS)
+        {
+            auto staleStreamID =
+                this->sessionFirstMessageStreamOrder_.takeFirst();
+            this->sessionFirstMessageUsersByStream_.remove(staleStreamID);
+        }
+    }
+
+    auto &seenUsers = this->sessionFirstMessageUsersByStream_[streamID];
+    if (seenUsers.contains(userKey))
+    {
+        return;
+    }
+
+    seenUsers.insert(userKey);
+    message->flags.set(MessageFlag::FirstMessageSession);
 }
 
 bool Channel::canRecurse() const noexcept

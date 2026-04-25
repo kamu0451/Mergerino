@@ -123,6 +123,7 @@ public:
     bool hasModRights() const override;
     bool hasHighRateLimit() const override;
     bool isLive() const override;
+    QString getCurrentStreamID() const override;
 
     struct StreamData {
         bool isLive = false;
@@ -220,6 +221,7 @@ private:
     bool recentMessagesRequested_ = false;
 
     StreamData streamData_;
+    QString currentStreamID_;
 };
 
 }  // namespace chatterino

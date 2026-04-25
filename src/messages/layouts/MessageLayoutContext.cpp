@@ -68,6 +68,12 @@ void MessagePreferences::connectSettings(Settings *settings,
         },
         holder);
 
+    settings->enableFirstMessageSessionHighlight.connect(
+        [this](const auto &newValue) {
+            this->enableFirstMessageSessionHighlight = newValue;
+        },
+        holder);
+
     settings->enableSubHighlight.connect(
         [this](const auto &newValue) {
             this->enableSubHighlight = newValue;

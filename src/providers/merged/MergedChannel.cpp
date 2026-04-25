@@ -344,6 +344,50 @@ QString MergedChannel::getCurrentStreamID() const
     return {};
 }
 
+QString MergedChannel::getCurrentStreamIDForMessage(
+    const Message &message) const
+{
+    switch (message.platform)
+    {
+        case MessagePlatform::YouTube:
+            if (this->youtubeLiveChat_ &&
+                !this->youtubeLiveChat_->videoId().isEmpty())
+            {
+                return "youtube:" + this->youtubeLiveChat_->videoId();
+            }
+            break;
+
+        case MessagePlatform::TikTok:
+            if (this->tiktokLiveChat_ &&
+                !this->tiktokLiveChat_->roomId().isEmpty())
+            {
+                return "tiktok:" + this->tiktokLiveChat_->roomId();
+            }
+            break;
+
+        case MessagePlatform::Kick:
+            if (this->kickChannel_)
+            {
+                return this->kickChannel_->getCurrentStreamID();
+            }
+            break;
+
+        case MessagePlatform::AnyOrTwitch:
+        default:
+            if (this->twitchChannel_)
+            {
+                auto id = this->twitchChannel_->getCurrentStreamID();
+                if (!id.isEmpty())
+                {
+                    return "twitch:" + id;
+                }
+            }
+            break;
+    }
+
+    return this->getCurrentStreamID();
+}
+
 QString MergedChannel::statusSuffix() const
 {
     if (!this->isLive())

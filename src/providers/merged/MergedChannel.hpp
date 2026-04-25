@@ -86,6 +86,10 @@ public:
 
     pajlada::Signals::NoArgSignal streamStatusChanged;
 
+protected:
+    QString getCurrentStreamIDForMessage(const Message &message) const override;
+
+public:
     // Exposed for unit tests. These are pure helpers that operate on message
     // contents alone; they hold no MergedChannel state.
     static bool shouldMirrorSourceMessage(const MessagePtr &message);

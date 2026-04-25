@@ -36,10 +36,11 @@ public:
         SubRow = 2,
         RedeemedRow = 3,
         FirstMessageRow = 4,
-        ElevatedMessageRow = 5,
-        ThreadMessageRow = 6,
-        AutomodRow = 7,
-        WatchStreakRow = 8,
+        FirstMessageSessionRow = 5,
+        ElevatedMessageRow = 6,
+        ThreadMessageRow = 7,
+        AutomodRow = 8,
+        WatchStreakRow = 9,
     };
 
     enum UserHighlightRowIndexes {

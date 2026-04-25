@@ -13,7 +13,10 @@
 #include <magic_enum/magic_enum.hpp>
 #include <pajlada/signals/signal.hpp>
 #include <QDate>
+#include <QHash>
+#include <QSet>
 #include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <memory>
@@ -164,15 +167,20 @@ public:
 protected:
     virtual void onConnected();
     virtual void messageRemovedFromStart(const MessagePtr &msg);
+    virtual QString getCurrentStreamIDForMessage(const Message &message) const;
     QString platform_;
 
 private:
     bool canRecurse() const noexcept;
+    void applySessionFirstMessageHighlight(const MessagePtr &message,
+                                           MessageContext context);
 
     const QString name_;
     LimitedQueue<MessagePtr> messages_;
     Type type_;
     bool anythingLogged_ = false;
+    QHash<QString, QSet<QString>> sessionFirstMessageUsersByStream_;
+    QStringList sessionFirstMessageStreamOrder_;
 
     /// Recursion count for message signals.
     ///

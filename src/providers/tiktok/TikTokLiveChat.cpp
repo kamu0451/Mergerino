@@ -202,10 +202,19 @@ void TikTokLiveChat::start()
                          {
                              return;
                          }
-                         this->setStatusText(
-                             QStringLiteral("TikTok live chat unavailable "
-                                            "(no response from room)"),
-                             true);
+                         // If we never received a room/enter or room/info
+                         // response, TikTok never opened a live room for
+                         // this user - i.e. they aren't live. Otherwise we
+                         // have a roomId_ but no chat/check_alive activity,
+                         // which is the actual "stuck" case.
+                         const QString msg =
+                             this->roomId_.isEmpty()
+                                 ? QStringLiteral("TikTok: %1 is not live")
+                                       .arg(this->username_)
+                                 : QStringLiteral(
+                                       "TikTok live chat unavailable "
+                                       "(no response from room)");
+                         this->setStatusText(msg, true);
                          this->setLive(false);
                      });
     this->impl_->host = CreateWindowExW(
@@ -588,16 +597,11 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         bool sawAliveField = false;
         bool sawOurRoom = false;
         const bool haveOurRoomId = !this->roomId_.isEmpty();
-        QString firstEntryRoomId;
         for (const auto &entry : roomEntries)
         {
             const auto obj = entry.toObject();
             const auto entryRoomId =
                 obj.value(QStringLiteral("room_id_str")).toString();
-            if (firstEntryRoomId.isEmpty() && !entryRoomId.isEmpty())
-            {
-                firstEntryRoomId = entryRoomId;
-            }
 
             // Skip entries for OTHER rooms (TikTok recommendation batches).
             if (haveOurRoomId && !entryRoomId.isEmpty() &&
@@ -631,19 +635,16 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
             }
         }
 
-        // If we didn't know our room ID, pin it from the first entry of
-        // this batch. TikTok queries our specific room before any
-        // recommendation batches, so the first array-form response should
-        // be ours.
-        if (!haveOurRoomId && !firstEntryRoomId.isEmpty())
-        {
-            this->roomId_ = firstEntryRoomId;
-        }
-
-        // Only treat this batch as authoritative if it actually contained
-        // our room - otherwise it's a recommendation batch and we don't
-        // know the alive state of OUR room from it.
-        if (sawAliveField && (!haveOurRoomId || sawOurRoom))
+        // Only treat this batch as authoritative if our room was actually
+        // in it. We deliberately do NOT pin roomId_ from a check_alive
+        // batch: for offline users, TikTok never queries our (non-existent)
+        // room individually, so the only batches that fire are sidebar
+        // recommendations. Pinning the first entry as "ours" would let an
+        // unrelated live recommendation flip us to live. roomId_ is
+        // instead learned below from the object-form room/enter or
+        // room/info responses, which are issued for our specific user
+        // when the room is actually open.
+        if (sawAliveField && haveOurRoomId && sawOurRoom)
         {
             if (this->impl_)
             {

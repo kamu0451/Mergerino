@@ -165,7 +165,6 @@ void YouTubeLiveChat::start()
     this->joinedLiveVideoId_.clear();
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
-    this->immediateSourceProbePending_ = this->shouldResolveLiveStreamFromSource();
     this->activePollStreak_ = 0;
     this->setLive(false);
     this->resolveVideoId();
@@ -231,33 +230,24 @@ void YouTubeLiveChat::resolveVideoId()
         return;
     }
 
-    if (this->immediateSourceProbePending_)
-    {
-        this->immediateSourceProbePending_ = false;
-        this->probeLiveVideoIdFromSource(source, [this, source](QString videoId) {
-            if (!this->running_)
-            {
-                return;
-            }
+    this->probeLiveVideoIdFromSource(source, [this, source](QString videoId) {
+        if (!this->running_)
+        {
+            return;
+        }
 
-            if (!videoId.isEmpty())
-            {
-                this->videoId_ = std::move(videoId);
-                this->seenMessageIds_.clear();
-                this->fetchLiveChatPage();
-                return;
-            }
+        if (!videoId.isEmpty())
+        {
+            this->videoId_ = std::move(videoId);
+            this->seenMessageIds_.clear();
+            this->fetchLiveChatPage();
+            return;
+        }
 
-            this->bootstrapInnertubeContext(
-                [this, source] { this->resolveSourceToVideoId(source); },
-                "Couldn't initialize YouTube live chat.");
-        });
-        return;
-    }
-
-    this->bootstrapInnertubeContext(
-        [this, source] { this->resolveSourceToVideoId(source); },
-        "Couldn't initialize YouTube live chat.");
+        this->bootstrapInnertubeContext(
+            [this, source] { this->resolveSourceToVideoId(source); },
+            "Couldn't initialize YouTube live chat.");
+    });
 }
 
 void YouTubeLiveChat::resolveChannelIdFromVideoId(
@@ -679,22 +669,9 @@ void YouTubeLiveChat::poll()
                                     .toObject();
             if (continuation.isEmpty())
             {
-                this->setLive(false);
-                if (this->shouldResolveLiveStreamFromSource())
-                {
-                    this->waitForNextLive(
-                        "YouTube stream ended. Waiting for the next live.",
-                        YOUTUBE_RECONNECT_DELAY_MS);
-                }
-                else
-                {
-                    this->setStatusText(
-                        "YouTube live chat is no longer available for this "
-                        "link.",
-                        !this->failureReported_);
-                    this->failureReported_ = true;
-                    this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
-                }
+                this->recoverLiveChat(
+                    "YouTube live chat continuation expired. Reconnecting.",
+                    YOUTUBE_RECONNECT_DELAY_MS);
                 return;
             }
 
@@ -787,14 +764,9 @@ void YouTubeLiveChat::poll()
 
             if (!updatedContinuation)
             {
-                this->setLive(false);
-                this->continuation_.clear();
-                this->activePollStreak_ = 0;
-                this->setStatusText(
+                this->recoverLiveChat(
                     "YouTube live chat continuation expired. Reconnecting.",
-                    !this->failureReported_);
-                this->failureReported_ = true;
-                this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
+                    YOUTUBE_RECONNECT_DELAY_MS);
                 return;
             }
 
@@ -808,14 +780,9 @@ void YouTubeLiveChat::poll()
                 return;
             }
 
-            this->setLive(false);
-            this->continuation_.clear();
-            this->activePollStreak_ = 0;
-            this->setStatusText(
-                "YouTube live chat polling failed. Reconnecting.",
-                !this->failureReported_);
-            this->failureReported_ = true;
-            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
+            this->recoverLiveChat("YouTube live chat polling failed. "
+                                  "Reconnecting.",
+                                  YOUTUBE_RECONNECT_DELAY_MS);
         })
         .execute();
 }
@@ -845,6 +812,16 @@ void YouTubeLiveChat::scheduleResolve(int delayMs)
     });
 }
 
+void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs)
+{
+    this->continuation_.clear();
+    this->activePollStreak_ = 0;
+    this->resetInnertubeContext();
+    this->setStatusText(std::move(text), !this->failureReported_);
+    this->failureReported_ = true;
+    this->scheduleResolve(retryDelayMs);
+}
+
 void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
 {
     this->setLive(false);
@@ -857,6 +834,13 @@ void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
     this->activePollStreak_ = 0;
     this->setStatusText(std::move(text));
     this->scheduleResolve(retryDelayMs);
+}
+
+void YouTubeLiveChat::resetInnertubeContext()
+{
+    this->apiKey_.clear();
+    this->clientVersion_.clear();
+    this->visitorData_.clear();
 }
 
 void YouTubeLiveChat::setLive(bool live)

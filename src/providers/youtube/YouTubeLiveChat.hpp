@@ -52,7 +52,9 @@ private:
     void poll();
     void schedulePoll(int delayMs);
     void scheduleResolve(int delayMs);
+    void recoverLiveChat(QString text, int retryDelayMs);
     void waitForNextLive(QString text, int retryDelayMs);
+    void resetInnertubeContext();
     void setLive(bool live);
     void setStatusText(QString text, bool notifyAsSystemMessage = false);
     bool shouldResolveLiveStreamFromSource() const;
@@ -88,7 +90,6 @@ private:
     bool live_{false};
     bool failureReported_{false};
     bool skipInitialBacklog_{false};
-    bool immediateSourceProbePending_{false};
     int activePollStreak_{0};
 
     std::shared_ptr<bool> lifetimeGuard_;

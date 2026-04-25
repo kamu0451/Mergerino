@@ -113,19 +113,29 @@ private:
             {
                 auto &msg = this->parser.get();
                 auto target = msg.base().target();
-                auto path = QString::fromUtf8(
+                auto requestTarget = QString::fromUtf8(
                     target.data(), static_cast<qsizetype>(target.size()));
                 bool keepAlive = msg.keep_alive();
-                auto [status, resBody] = this->server->handler()(path);
+                auto response = this->server->handler()(HttpServer::Request{
+                    .method = QString::fromLatin1(
+                        msg.method_string().data(),
+                        static_cast<qsizetype>(msg.method_string().size())),
+                    .target = requestTarget,
+                    .body = QByteArray::fromStdString(msg.body()),
+                });
 
                 boost::beast::http::response<
                     boost::beast::http::span_body<char>>
                     res{
-                        static_cast<boost::beast::http::status>(status),
+                        static_cast<boost::beast::http::status>(
+                            response.status),
                         msg.base().version(),
                     };
+                res.set(boost::beast::http::field::content_type,
+                        response.contentType.constData());
                 res.body() = boost::beast::span<char>{
-                    resBody.data(), static_cast<size_t>(resBody.size())};
+                    response.body.data(),
+                    static_cast<size_t>(response.body.size())};
                 res.keep_alive(keepAlive);
                 res.prepare_payload();
                 boost::beast::http::message_generator gen(std::move(res));
@@ -158,9 +168,12 @@ private:
     Parser parser;
 };
 
-std::pair<unsigned, QByteArray> defaultHandler(const QString & /* req */)
+HttpServer::Response defaultHandler(const HttpServer::Request & /* req */)
 {
-    return {404, {}};
+    return {
+        .status = 404,
+        .body = {},
+    };
 }
 
 }  // namespace

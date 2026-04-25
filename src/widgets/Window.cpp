@@ -30,6 +30,7 @@
 #include "widgets/buttons/PixmapButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
 #include "widgets/buttons/TitlebarButton.hpp"
+#include "widgets/dialogs/KickLoginPage.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/dialogs/switcher/QuickSwitcherPopup.hpp"
 #include "widgets/dialogs/UpdateDialog.hpp"
@@ -284,6 +285,14 @@ void Window::addCustomTitlebarButtons()
         TitleBarButtonStyle::Settings);
 
     auto openAccountPopup = [this] {
+        const auto provider = getApp()->getWindows()->activeAccountProvider();
+        if (provider == ProviderId::Kick &&
+            getApp()->getAccounts()->kick.usernames().empty())
+        {
+            KickLoginPage::startLoginFlow(this);
+            return;
+        }
+
         getApp()->getWindows()->showAccountSelectPopup(
             this->userLabel_->mapToGlobal(this->userLabel_->rect().bottomLeft()));
     };

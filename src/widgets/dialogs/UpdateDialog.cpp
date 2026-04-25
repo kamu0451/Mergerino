@@ -31,22 +31,16 @@ UpdateDialog::UpdateDialog()
 
     auto buttons = layout.emplace<QDialogButtonBox>();
 
-    const auto *installText = [] {
-        if (Version::instance().isNightly())
-        {
-            return "Yes";
-        }
-
-        return "Install";
-    }();
     auto *install =
-        buttons->addButton(installText, QDialogButtonBox::AcceptRole);
+        buttons->addButton("Install", QDialogButtonBox::AcceptRole);
     this->ui_.installButton = install;
     auto *dismiss = buttons->addButton("Dismiss", QDialogButtonBox::RejectRole);
 
     QObject::connect(install, &QPushButton::clicked, this, [this] {
+        // Don't close — let the status-change handler swap to a brief
+        // "Downloading..." message until mergerino exits and the updater
+        // takes over.
         getApp()->getUpdates().installUpdates();
-        this->close();
     });
     QObject::connect(dismiss, &QPushButton::clicked, this, [this] {
         this->dismissed.invoke();
@@ -82,9 +76,7 @@ void UpdateDialog::updateStatusChanged(Updates::Status status)
         break;
 
         case Updates::Downloading: {
-            this->ui_.label->setText(
-                "Downloading updates.\n\nMergerino will restart "
-                "automatically when the download is done.");
+            this->ui_.label->setText("Updating...");
         }
         break;
 

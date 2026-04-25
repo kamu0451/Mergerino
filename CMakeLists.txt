@@ -343,6 +343,10 @@ include(cmake/resources/generate_resources.cmake)
 
 add_subdirectory(src)
 
+if(WIN32 AND BUILD_APP)
+    add_subdirectory(tools/MergerinoUpdater)
+endif()
+
 if(BUILD_TESTS)
     add_subdirectory(mocks)
 endif()

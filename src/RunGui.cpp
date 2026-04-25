@@ -260,6 +260,12 @@ void runGui(QApplication &a, const Paths &paths, Settings &settings,
 
     updates.deleteOldFiles();
 
+    // Check for a newer build on GitHub. The result lights up the tab-bar
+    // update indicator (no auto-popup); clicking it opens the releases page.
+    QTimer::singleShot(5 * 1000, [&updates] {
+        updates.checkForUpdates();
+    });
+
     // Clear the cache 1 minute after start.
     QTimer::singleShot(60 * 1000, [cachePath = paths.cacheDirectory(),
                                    crashDirectory = paths.crashdumpDirectory,

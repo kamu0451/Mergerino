@@ -20,18 +20,17 @@ void initUpdateButton(PixmapButton &button,
     QObject::connect(&button, &Button::leftClicked, [&button, relayout] {
         auto *dialog = new UpdateDialog();
 
+        // Anchor the dialog under the button. Don't clamp negative X — on
+        // multi-monitor setups where mergerino lives on a screen left of
+        // primary, those coords are valid; the bounds-check below will keep
+        // the dialog on the same screen as the button.
         auto globalPoint = button.mapToGlobal(
             QPoint(int(-100 * button.scale()), button.height()));
 
-        // Make sure that update dialog will not go off left edge of screen
-        if (globalPoint.x() < 0)
-        {
-            globalPoint.setX(0);
-        }
-
-        dialog->moveTo(globalPoint, widgets::BoundsChecking::DesiredPosition);
-        dialog->show();
+        dialog->showAndMoveTo(globalPoint,
+                              widgets::BoundsChecking::DesiredPosition);
         dialog->raise();
+        dialog->activateWindow();
 
         // We can safely ignore the signal connection because the dialog will always
         // be destroyed before the button is destroyed, since it is destroyed on focus loss

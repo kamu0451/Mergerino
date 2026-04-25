@@ -109,6 +109,12 @@ jobs:
           Copy-Item bin/mergerino.exe $packageDir/
           Get-ChildItem bin -Filter '*.dll' | Copy-Item -Destination $packageDir -Force
           ..\.CI\deploy-crt.ps1 $packageDir
+
+          # Bundle the in-app updater so Updates::installUpdates() can spawn it.
+          $updaterDir = Join-Path $packageDir "updater.1"
+          New-Item -ItemType Directory -Force -Path $updaterDir | Out-Null
+          Copy-Item bin/updater.1/MergerinoUpdater.exe $updaterDir/
+
           if (Test-Path "Mergerino.zip") {
             Remove-Item "Mergerino.zip" -Force
           }

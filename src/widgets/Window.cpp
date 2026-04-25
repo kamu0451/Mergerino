@@ -284,6 +284,12 @@ void Window::addCustomTitlebarButtons()
         },
         TitleBarButtonStyle::Settings);
 
+    // update indicator — hidden until checkForUpdates() flips status to
+    // UpdateAvailable (or an error). Click opens the small UpdateDialog.
+    auto *updateButton =
+        this->addTitleBarButton<PixmapButton>([] {});
+    initUpdateButton(*updateButton, [] {}, this->signalHolder_);
+
     auto openAccountPopup = [this] {
         const auto provider = getApp()->getWindows()->activeAccountProvider();
         if (provider == ProviderId::Kick &&

@@ -119,28 +119,11 @@ int cappedYouTubePollDelay(int timeoutMs)
     return std::clamp(timeoutMs, minimumDelayMs, maximumDelayMs);
 }
 
-int adjustedYouTubePollDelay(int timeoutMs, qint64 requestElapsedMs,
-                             int deliveredMessageCount, int activePollStreak)
+int adjustedYouTubePollDelay(int timeoutMs, qint64 /* requestElapsedMs */,
+                             int /* deliveredMessageCount */,
+                             int /* activePollStreak */)
 {
-    const auto cappedDelay = cappedYouTubePollDelay(timeoutMs);
-    constexpr int minimumWaitMs = 250;
-    const auto baseEarlyBiasMs = std::clamp(cappedDelay / 10, 75, 150);
-
-    int activityBiasMs = 0;
-    if (deliveredMessageCount > 0)
-    {
-        const auto cappedStreak = std::clamp(activePollStreak, 1, 3);
-        activityBiasMs = deliveredMessageCount >= 3 ? 35 : 20;
-        activityBiasMs += (cappedStreak - 1) * 10;
-    }
-
-    const auto maxEarlyBiasMs =
-        std::min(200, std::max(baseEarlyBiasMs, cappedDelay / 5));
-    const auto earlyBiasMs =
-        std::min(baseEarlyBiasMs + activityBiasMs, maxEarlyBiasMs);
-    return std::max(minimumWaitMs,
-                    cappedDelay - static_cast<int>(requestElapsedMs) -
-                        earlyBiasMs);
+    return cappedYouTubePollDelay(timeoutMs);
 }
 
 }  // namespace

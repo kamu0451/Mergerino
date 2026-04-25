@@ -70,6 +70,9 @@ public:
 
     pajlada::Signals::NoArgSignal streamStatusChanged;
 
+protected:
+    QString getCurrentStreamIDForMessage(const Message &message) const override;
+
 private:
     void initializeSources();
     void connectSourceSignals(const ChannelPtr &source, MessagePlatform platform,

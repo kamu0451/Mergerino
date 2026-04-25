@@ -621,6 +621,8 @@ set(SOURCE_FILES
         util/Helpers.hpp
         util/HttpServer.cpp
         util/HttpServer.hpp
+        util/ObsBrowserDockServer.cpp
+        util/ObsBrowserDockServer.hpp
         util/ImageUploader.cpp
         util/ImageUploader.hpp
         util/IncognitoBrowser.cpp

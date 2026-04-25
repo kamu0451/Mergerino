@@ -1,17 +1,15 @@
 # Mergerino
 
-Unofficial Chatterino fork focused on merged streamer chat across Twitch, Kick, and YouTube.
+Mergerino is a desktop chat client that combines a Chatterino-style multi-channel workflow with support for Twitch, Kick, YouTube, and TikTok LIVE in one app. The goal is to keep chat fast and practical while making multi-platform viewing easier from a single desktop client.
 
-Mergerino is a desktop chat client that combines a Chatterino-style multi-channel workflow with support for Twitch, Kick, and YouTube in one app. The goal is to keep chat fast and practical while making multi-platform viewing easier from a single desktop client.
+This repository keeps the source here and ships installable Windows builds through GitHub Releases.
 
-This repository is separate from the upstream Chatterino project. It keeps the source here and ships installable Windows builds through GitHub Releases.
-
-[![Download Windows Build](https://img.shields.io/badge/Download-Windows%20Build-2ea44f?style=for-the-badge)](https://github.com/Fixlation/Mergerino/releases/latest/download/Mergerino.zip)
+[![Download Windows Build](https://img.shields.io/badge/Download-Windows%20Build-2ea44f?style=for-the-badge)](https://github.com/Fixlation/Mergerino/releases/latest/download/Mergerino-1.2.3.zip)
 [![All Releases](https://img.shields.io/badge/GitHub-Releases-1f6feb?style=for-the-badge)](https://github.com/Fixlation/Mergerino/releases)
 
 ## What Is Mergerino?
 
-- Merged desktop chat for Twitch, Kick, and YouTube
+- Merged desktop chat for Twitch, Kick, YouTube, and TikTok LIVE
 - Chatterino-style multi-channel chat workflow in a standalone app
 - 7TV, BTTV, and FFZ integration
 - Windows-only builds packaged around `mergerino.exe`
@@ -23,7 +21,7 @@ If you just want to install the app, do not download the source code zip from th
 Use the latest GitHub release instead:
 
 - Open [the releases page](https://github.com/Fixlation/Mergerino/releases)
-- Download [Mergerino-1.1-win64.zip](https://github.com/Fixlation/Mergerino/releases/latest/download/Mergerino.zip)
+- Download [Mergerino-1.2.3.zip](https://github.com/Fixlation/Mergerino/releases/latest/download/Mergerino-1.2.3.zip)
 - Extract it somewhere you want to keep it
 - Open `mergerino.exe` from inside the extracted folder
 
@@ -31,9 +29,9 @@ Use the latest GitHub release instead:
 
 ### Windows
 
-1. Download `Mergerino.zip`
+1. Download `Mergerino-1.2.3.zip`
 2. Extract the zip
-3. Open the extracted `Mergerino` folder
+3. Open the extracted `Mergerino-1.2.3` folder
 4. Run `mergerino.exe`
 5. Keep the `.exe` inside that folder with the bundled files
 

@@ -357,7 +357,7 @@ private:
                             std::optional<MessageFlags> overridingFlags,
                             bool emitAddedToChannel);
     bool shouldQueueSlowChatMessages() const;
-    bool shouldAnimateSlowChatMessages() const;
+    bool shouldAnimateMessageAnimations() const;
     void notifySlowChatQueueCountChanged();
     void drainSlowChatQueue();
     void scheduleSlowChatDrain();

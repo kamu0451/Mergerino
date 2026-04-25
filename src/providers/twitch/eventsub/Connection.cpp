@@ -204,6 +204,15 @@ void Connection::onChannelModerate(
                 makeModerateMessage(builder, payload.event, action);
                 auto msg = builder.release();
                 runInGuiThread([channel, msg] {
+                    if (!msg->id.isEmpty())
+                    {
+                        if (auto existing = channel->findMessageByID(msg->id))
+                        {
+                            channel->replaceMessage(existing, msg);
+                            return;
+                        }
+                    }
+
                     channel->addMessage(msg, MessageContext::Original);
                 });
             }

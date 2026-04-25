@@ -23,15 +23,22 @@ const QRegularExpression ACTIVITY_GIFT_BOMB_SUMMARY_REGEX(
 
 const QRegularExpression ACTIVITY_GIFT_RECIPIENT_REGEX(
     QStringLiteral(
-        R"((?:^.+\s+gifted\s+(?:(?:an?\s+|\d+\s+months?\s+of\s+an?\s+).*)?\b(?:sub|subscription|membership)\b\s+to\s+.+(?:!|\.)?(?: .*)?$)|(?:^.+\s+received\s+(?:a\s+gift\s+)?membership\s+(?:from|by)\s+.+(?:!|\.)?(?: .*)?$))"),
+        R"((?:^.+\s+gifted\s+(?:(?:an?\s+|\d+\s+months?\s+of\s+an?\s+).*)?\b(?:sub|subscription|membership)\b\s+to\s+.+(?:!|\.)?(?: .*)?$)|(?:^(?:.+\s+)?received\s+(?:a\s+gift\s+)?membership\s+(?:from|by)\s+.+(?:!|\.)?(?: .*)?$))"),
     QRegularExpression::CaseInsensitiveOption);
 
 const QRegularExpression ACTIVITY_TWITCH_BITS_BADGE_REGEX(
     QStringLiteral(R"(^.+\s+just earned a new\s+.+\s+Bits badge!$)"),
     QRegularExpression::CaseInsensitiveOption);
 
-QString normalizedActivityGiftUnit(int count)
+QString normalizedActivityGiftUnit(const QString &matchedUnit, int count)
 {
+    if (matchedUnit.contains(QStringLiteral("membership"),
+                             Qt::CaseInsensitive))
+    {
+        return count == 1 ? QStringLiteral("membership")
+                          : QStringLiteral("memberships");
+    }
+
     return count == 1 ? QStringLiteral("sub") : QStringLiteral("subs");
 }
 
@@ -164,8 +171,9 @@ QString compactActivityGiftBombText(const Message &message)
     }
 
     const int count = match.captured(2).toInt();
+    const auto unit = normalizedActivityGiftUnit(match.captured(3), count);
     return QStringLiteral("%1 gifted %2 %3")
-        .arg(name, QString::number(count), normalizedActivityGiftUnit(count));
+        .arg(name, QString::number(count), unit);
 }
 
 bool shouldShowMessageInActivityPane(const Message &message,

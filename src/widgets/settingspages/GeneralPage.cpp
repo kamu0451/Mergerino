@@ -87,6 +87,7 @@ void addKeyboardModifierSetting(GeneralPageView &layout, const QString &title,
         },
         false);
 }
+
 }  // namespace
 
 namespace chatterino {

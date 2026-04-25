@@ -27,7 +27,7 @@ jobs:
       - name: Download build artifact
         uses: actions/download-artifact@v5
         with:
-          name: Mergerino.zip
+          name: Mergerino-1.2.3.zip
           github-token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           run-id: ${{ github.event.workflow_run.id }}
@@ -36,8 +36,8 @@ jobs:
       - name: Create or update rolling release
         uses: actions/github-script@v8
         env:
-          ASSET_NAME: Mergerino.zip
-          ASSET_PATH: release-artifact/Mergerino.zip
+          ASSET_NAME: Mergerino-1.2.3.zip
+          ASSET_PATH: release-artifact/Mergerino-1.2.3.zip
           RELEASE_NAME: Latest
           RELEASE_TAG: latest
         with:
@@ -86,58 +86,38 @@ jobs:
               });
             }
 
-            let release;
+            let existingRelease = null;
 
             try {
-              release = (await github.rest.repos.getReleaseByTag({
+              existingRelease = (await github.rest.repos.getReleaseByTag({
                 owner,
                 repo,
                 tag,
-              })).data;
-
-              release = (await github.rest.repos.updateRelease({
-                owner,
-                repo,
-                release_id: release.id,
-                tag_name: tag,
-                name: releaseName,
-                body,
-                draft: false,
-                prerelease: false,
               })).data;
             } catch (error) {
               if (error.status !== 404) {
                 throw error;
               }
+            }
 
-              release = (await github.rest.repos.createRelease({
+            if (existingRelease) {
+              await github.rest.repos.deleteRelease({
                 owner,
                 repo,
-                tag_name: tag,
-                target_commitish: headSha,
-                name: releaseName,
-                body,
-                draft: false,
-                prerelease: false,
-              })).data;
+                release_id: existingRelease.id,
+              });
             }
 
-            const assets = await github.paginate(github.rest.repos.listReleaseAssets, {
+            const release = (await github.rest.repos.createRelease({
               owner,
               repo,
-              release_id: release.id,
-              per_page: 100,
-            });
-
-            for (const asset of assets) {
-              if (asset.name === assetName || asset.name === 'Mergerino-win64.zip') {
-                await github.rest.repos.deleteReleaseAsset({
-                  owner,
-                  repo,
-                  asset_id: asset.id,
-                });
-              }
-            }
+              tag_name: tag,
+              target_commitish: headSha,
+              name: releaseName,
+              body,
+              draft: false,
+              prerelease: false,
+            })).data;
 
             const assetData = fs.readFileSync(assetPath);
             const assetSize = fs.statSync(assetPath).size;

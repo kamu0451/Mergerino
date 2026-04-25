@@ -900,8 +900,7 @@ void ChannelView::performLayout(bool causedByScrollbar, bool causedByShow)
         (!this->scrollBar_->isVisible() && !causedByScrollbar);
 
     const bool shouldAnimateLayoutShifts =
-        this->isVisible() && !this->isActivityPaneView() && this->split_ &&
-        this->split_->slowerChatMessageAnimations() &&
+        this->isVisible() && this->shouldAnimateMessageAnimations() &&
         this->messageArrivalAnimations_.empty() && !causedByScrollbar;
 
     struct VisibleMessagePosition {
@@ -1424,9 +1423,9 @@ bool ChannelView::shouldQueueSlowChatMessages() const
            this->split_->slowerChatEnabled();
 }
 
-bool ChannelView::shouldAnimateSlowChatMessages() const
+bool ChannelView::shouldAnimateMessageAnimations() const
 {
-    return this->shouldQueueSlowChatMessages() &&
+    return this->split_ != nullptr && !this->isActivityPaneView() &&
            this->split_->slowerChatMessageAnimations();
 }
 
@@ -1911,12 +1910,12 @@ void ChannelView::refreshMessages()
 
 void ChannelView::refreshSlowerChatSettings()
 {
-    if (!this->split_ || !this->split_->slowerChatMessageAnimations())
+    if (!this->shouldAnimateMessageAnimations())
     {
         this->clearMessageLayoutShiftAnimations();
     }
 
-    if (!this->shouldAnimateSlowChatMessages())
+    if (!this->shouldAnimateMessageAnimations())
     {
         this->clearMessageArrivalAnimations();
     }
@@ -2039,7 +2038,7 @@ void ChannelView::messageAppended(MessagePtr &message,
     this->lastMessageHasAlternateBackground_ =
         !this->lastMessageHasAlternateBackground_;
 
-    if (this->shouldAnimateSlowChatMessages() && this->isVisible() &&
+    if (this->shouldAnimateMessageAnimations() && this->isVisible() &&
         (this->showingLatestMessages_ || !this->showScrollBar_))
     {
         this->addMessageArrivalAnimation(messageRef);

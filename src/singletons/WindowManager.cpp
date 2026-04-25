@@ -188,6 +188,15 @@ WindowManager::WindowManager(const Args &appArgs_, const Paths &paths,
     this->forceLayoutChannelViewsListener.add(settings.timestampFormat);
     this->forceLayoutChannelViewsListener.add(settings.collpseMessagesMinLines);
     this->forceLayoutChannelViewsListener.add(settings.enableRedeemedHighlight);
+    this->forceLayoutChannelViewsListener.add(settings.enableFirstMessageHighlight);
+    this->forceLayoutChannelViewsListener.add(
+        settings.enableFirstMessageSessionHighlight);
+    this->forceLayoutChannelViewsListener.add(
+        settings.enableElevatedMessageHighlight);
+    this->forceLayoutChannelViewsListener.add(settings.enableSubHighlight);
+    this->forceLayoutChannelViewsListener.add(
+        settings.enableWatchStreakHighlight);
+    this->forceLayoutChannelViewsListener.add(settings.enableAutomodHighlight);
     this->forceLayoutChannelViewsListener.add(settings.colorUsernames);
     this->forceLayoutChannelViewsListener.add(settings.boldUsernames);
     this->forceLayoutChannelViewsListener.add(

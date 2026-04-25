@@ -68,6 +68,7 @@ class IController;
 class SpellChecker;
 
 class KickChatServer;
+class ObsBrowserDockServer;
 
 class IApplication
 {
@@ -199,6 +200,7 @@ private:
     std::unique_ptr<pronouns::Pronouns> pronouns;
     std::unique_ptr<SpellChecker> spellChecker;
     std::unique_ptr<KickChatServer> kickChatServer;
+    std::unique_ptr<ObsBrowserDockServer> obsBrowserDockServer;
 #ifdef CHATTERINO_HAVE_PLUGINS
     std::unique_ptr<PluginController> plugins;
 #endif

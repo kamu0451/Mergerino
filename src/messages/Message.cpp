@@ -256,7 +256,8 @@ ScrollbarHighlight Message::getScrollBarHighlight(
         };
     }
 
-    if (this->flags.has(MessageFlag::FirstMessage))
+    if (this->flags.has(MessageFlag::FirstMessage) ||
+        this->flags.has(MessageFlag::FirstMessageSession))
     {
         auto color = platformHighlightColor(
             *this, ColorType::FirstMessageHighlight, platformIndicatorMode,
@@ -269,7 +270,9 @@ ScrollbarHighlight Message::getScrollBarHighlight(
             color,
             ScrollbarHighlight::Default,
             false,
-            true,
+            this->flags.has(MessageFlag::FirstMessage),
+            false,
+            this->flags.has(MessageFlag::FirstMessageSession),
         };
     }
 

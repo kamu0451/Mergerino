@@ -121,7 +121,8 @@ QColor automaticEventHighlightColor(const Message &message,
         }
     }
 
-    if (message.flags.has(MessageFlag::FirstMessage) &&
+    if ((message.flags.has(MessageFlag::FirstMessage) ||
+         message.flags.has(MessageFlag::FirstMessageSession)) &&
         highlightColor.isValid())
     {
         return highlightColor;
@@ -188,8 +189,10 @@ bool usesAutomaticEventOverlay(const Message &message,
         return true;
     }
 
-    if (message.flags.has(MessageFlag::FirstMessage) &&
-        preferences.enableFirstMessageHighlight)
+    if ((message.flags.has(MessageFlag::FirstMessage) &&
+         preferences.enableFirstMessageHighlight) ||
+        (message.flags.has(MessageFlag::FirstMessageSession) &&
+         preferences.enableFirstMessageSessionHighlight))
     {
         return true;
     }
@@ -220,6 +223,15 @@ bool usesAutomaticEventOverlay(const Message &message,
     }
 
     return isPlatformAlertMessage(message);
+}
+
+bool hasEnabledFirstMessageHighlight(const Message &message,
+                                     const MessagePreferences &preferences)
+{
+    return (message.flags.has(MessageFlag::FirstMessage) &&
+            preferences.enableFirstMessageHighlight) ||
+           (message.flags.has(MessageFlag::FirstMessageSession) &&
+            preferences.enableFirstMessageSessionHighlight);
 }
 
 QColor brightenGradientColor(const QColor &color)
@@ -643,6 +655,12 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
 
     // draw background
     QColor backgroundColor = [&] {
+        if (this->message_->flags.has(MessageFlag::WatchStreak) &&
+            ctx.preferences.enableWatchStreakHighlight)
+        {
+            return ctx.messageColors.regularBg;
+        }
+
         if (ctx.preferences.alternateMessages &&
             this->flags.has(MessageLayoutFlag::AlternateBackground))
         {
@@ -655,13 +673,18 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     QColor gradientOverlayColor;
     QColor gradientLeadInColor;
 
+    const bool isWatchStreakEvent =
+        this->message_->flags.has(MessageFlag::WatchStreak) &&
+        ctx.preferences.enableWatchStreakHighlight;
+
     bool suppressMergedPlatformTint =
         usesAutomaticEventOverlay(*this->message_, ctx.preferences,
                                   ctx.forceFlatEventHighlights) &&
         ((ctx.forceFlatEventHighlights &&
           mergedPlatformIndicatorShowsLineColor(ctx.platformIndicatorMode)) ||
          (automaticEventHighlightUsesGradient(ctx) &&
-          !automaticEventIncludesUserMessage(*this->message_)));
+          (isWatchStreakEvent ||
+           !automaticEventIncludesUserMessage(*this->message_))));
 
     if (this->message_->platformAccentColor &&
         mergedPlatformIndicatorShowsLineColor(
@@ -682,8 +705,8 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
                                    gradientOverlayColor, solidOverlayColor);
     }
 
-    else if (this->message_->flags.has(MessageFlag::FirstMessage) &&
-             ctx.preferences.enableFirstMessageHighlight)
+    else if (hasEnabledFirstMessageHighlight(*this->message_,
+                                             ctx.preferences))
     {
         auto firstMessageBaseColor =
             *ctx.colorProvider.color(ColorType::FirstMessageHighlight);

@@ -14,6 +14,22 @@
 
 namespace chatterino {
 
+namespace {
+
+void setRowToolTip(const std::vector<QStandardItem *> &row,
+                   const QString &toolTip)
+{
+    for (auto *item : row)
+    {
+        if (item != nullptr)
+        {
+            item->setToolTip(toolTip);
+        }
+    }
+}
+
+}  // namespace
+
 // commandmodel
 HighlightModel::HighlightModel(QObject *parent)
     : SignalVectorModel<HighlightPhrase>(Column::COUNT, parent)
@@ -80,6 +96,10 @@ void HighlightModel::afterInit()
 
     auto selfColor = ColorProvider::instance().color(ColorType::SelfHighlight);
     setColorItem(usernameRow[Column::Color], *selfColor, false);
+    setRowToolTip(
+        usernameRow,
+        "Display the username highlight when your username is mentioned in "
+        "chat.");
 
     this->insertCustomRow(usernameRow, HighlightRowIndexes::SelfHighlightRow);
 
@@ -104,6 +124,8 @@ void HighlightModel::afterInit()
 
     auto whisperColor = ColorProvider::instance().color(ColorType::Whisper);
     setColorItem(whisperRow[Column::Color], *whisperColor, false);
+    setRowToolTip(whisperRow,
+                  "Display the whisper highlight for incoming whispers.");
 
     this->insertCustomRow(whisperRow, HighlightRowIndexes::WhisperRow);
 
@@ -126,6 +148,10 @@ void HighlightModel::afterInit()
 
     auto subColor = ColorProvider::instance().color(ColorType::Subscription);
     setColorItem(subRow[Column::Color], *subColor, false);
+    setRowToolTip(
+        subRow,
+        "Display the subscription highlight for subscription and "
+        "resubscription messages.");
 
     this->insertCustomRow(subRow, HighlightRowIndexes::SubRow);
 
@@ -151,6 +177,10 @@ void HighlightModel::afterInit()
     auto RedeemedColor =
         ColorProvider::instance().color(ColorType::RedeemedHighlight);
     setColorItem(redeemedRow[Column::Color], *RedeemedColor, false);
+    setRowToolTip(
+        redeemedRow,
+        "Display the Channel Points highlight when a user redeems Highlight "
+        "My Message.");
 
     this->insertCustomRow(redeemedRow, HighlightRowIndexes::RedeemedRow);
 
@@ -177,9 +207,36 @@ void HighlightModel::afterInit()
     auto FirstMessageColor =
         ColorProvider::instance().color(ColorType::FirstMessageHighlight);
     setColorItem(firstMessageRow[Column::Color], *FirstMessageColor, false);
+    setRowToolTip(
+        firstMessageRow,
+        "Display the first message highlight when a platform marks a message "
+        "as a user's first message.");
 
     this->insertCustomRow(firstMessageRow,
                           HighlightRowIndexes::FirstMessageRow);
+
+    std::vector<QStandardItem *> firstMessageSessionRow = this->createRow();
+    setBoolItem(firstMessageSessionRow[Column::Pattern],
+                getSettings()->enableFirstMessageSessionHighlight.getValue(),
+                true, false);
+    firstMessageSessionRow[Column::Pattern]->setData(
+        "First Message (Session)", Qt::DisplayRole);
+    firstMessageSessionRow[Column::ShowInMentions]->setFlags({});
+    firstMessageSessionRow[Column::FlashTaskbar]->setFlags({});
+    firstMessageSessionRow[Column::PlaySound]->setFlags({});
+    firstMessageSessionRow[Column::UseRegex]->setFlags({});
+    firstMessageSessionRow[Column::CaseSensitive]->setFlags({});
+    firstMessageSessionRow[Column::SoundPath]->setFlags(Qt::NoItemFlags);
+
+    setColorItem(firstMessageSessionRow[Column::Color], *FirstMessageColor,
+                 false);
+    setRowToolTip(
+        firstMessageSessionRow,
+        "Display the first message highlight when any user sends their first "
+        "message in the current stream.");
+
+    this->insertCustomRow(firstMessageSessionRow,
+                          HighlightRowIndexes::FirstMessageSessionRow);
 
     // Highlight settings for hype chats
     std::vector<QStandardItem *> elevatedMessageRow = this->createRow();
@@ -204,6 +261,9 @@ void HighlightModel::afterInit()
         ColorProvider::instance().color(ColorType::ElevatedMessageHighlight);
     setColorItem(elevatedMessageRow[Column::Color], *elevatedMessageColor,
                  false);
+    setRowToolTip(elevatedMessageRow,
+                  "Display the Hype Chat highlight for paid Hype Chat "
+                  "messages.");
 
     this->insertCustomRow(elevatedMessageRow,
                           HighlightRowIndexes::ElevatedMessageRow);
@@ -234,6 +294,10 @@ void HighlightModel::afterInit()
     auto threadMessageColor =
         ColorProvider::instance().color(ColorType::ThreadMessageHighlight);
     setColorItem(threadMessageRow[Column::Color], *threadMessageColor, false);
+    setRowToolTip(
+        threadMessageRow,
+        "Display the reply thread highlight for messages in reply threads "
+        "you are subscribed to.");
 
     this->insertCustomRow(threadMessageRow,
                           HighlightRowIndexes::ThreadMessageRow);
@@ -261,6 +325,9 @@ void HighlightModel::afterInit()
     auto automodColor =
         ColorProvider::instance().color(ColorType::AutomodHighlight);
     setColorItem(automodRow[Column::Color], *automodColor, false);
+    setRowToolTip(automodRow,
+                  "Display the AutoMod highlight for messages caught by "
+                  "AutoMod.");
 
     this->insertCustomRow(automodRow, HighlightRowIndexes::AutomodRow);
 
@@ -279,6 +346,9 @@ void HighlightModel::afterInit()
     auto watchStreakColor =
         ColorProvider::instance().color(ColorType::WatchStreak);
     setColorItem(watchStreakRow[Column::Color], *watchStreakColor, false);
+    setRowToolTip(
+        watchStreakRow,
+        "Display the watch streak highlight for watch streak event messages.");
 
     this->insertCustomRow(watchStreakRow, HighlightRowIndexes::WatchStreakRow);
 }
@@ -318,6 +388,12 @@ void HighlightModel::customRowSetData(const std::vector<QStandardItem *> &row,
                 else if (rowIndex == HighlightRowIndexes::FirstMessageRow)
                 {
                     getSettings()->enableFirstMessageHighlight.setValue(
+                        value.toBool());
+                }
+                else if (rowIndex ==
+                         HighlightRowIndexes::FirstMessageSessionRow)
+                {
+                    getSettings()->enableFirstMessageSessionHighlight.setValue(
                         value.toBool());
                 }
                 else if (rowIndex == HighlightRowIndexes::ElevatedMessageRow)
@@ -387,6 +463,11 @@ void HighlightModel::customRowSetData(const std::vector<QStandardItem *> &row,
                     // getSettings()->enableFirstMessageHighlightTaskbar.setValue(
                     //     value.toBool());
                 }
+                else if (rowIndex ==
+                         HighlightRowIndexes::FirstMessageSessionRow)
+                {
+                    // Session first-message highlights don't support taskbar flashing.
+                }
                 else if (rowIndex == HighlightRowIndexes::ElevatedMessageRow)
                 {
                     // getSettings()
@@ -433,6 +514,11 @@ void HighlightModel::customRowSetData(const std::vector<QStandardItem *> &row,
                 {
                     // getSettings()->enableFirstMessageHighlightSound.setValue(
                     //     value.toBool());
+                }
+                else if (rowIndex ==
+                         HighlightRowIndexes::FirstMessageSessionRow)
+                {
+                    // Session first-message highlights don't support sound.
                 }
                 else if (rowIndex == HighlightRowIndexes::ElevatedMessageRow)
                 {
@@ -527,6 +613,12 @@ void HighlightModel::customRowSetData(const std::vector<QStandardItem *> &row,
                              ColorType::RedeemedHighlight);
                 }
                 else if (rowIndex == HighlightRowIndexes::FirstMessageRow)
+                {
+                    setColor(getSettings()->firstMessageHighlightColor,
+                             ColorType::FirstMessageHighlight);
+                }
+                else if (rowIndex ==
+                         HighlightRowIndexes::FirstMessageSessionRow)
                 {
                     setColor(getSettings()->firstMessageHighlightColor,
                              ColorType::FirstMessageHighlight);

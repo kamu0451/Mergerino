@@ -366,6 +366,11 @@ bool KickChannel::isLive() const
     return this->streamData_.isLive;
 }
 
+QString KickChannel::getCurrentStreamID() const
+{
+    return this->currentStreamID_;
+}
+
 void KickChannel::applyStreamData(bool isLive, const QString &streamTitle,
                                   const QString &categoryName,
                                   const QString &thumbnailUrl,
@@ -379,6 +384,7 @@ void KickChannel::applyStreamData(bool isLive, const QString &streamTitle,
         changed = true;
         liveStatusChanged = true;
         this->streamData_.isLive = isLive;
+        this->currentStreamID_.clear();
 
         if (this->streamData_.isLive)
         {
@@ -412,6 +418,12 @@ void KickChannel::applyStreamData(bool isLive, const QString &streamTitle,
     if (this->streamData_.isLive)
     {
         changed = true;
+        this->currentStreamID_ =
+            QString("kick:%1:%2")
+                .arg(this->channelID())
+                .arg(startTime.isValid()
+                         ? startTime.toUTC().toString(Qt::ISODateWithMs)
+                         : QString("live"));
         this->streamData_.thumbnailUrl = thumbnailUrl;
         this->streamData_.viewerCount = viewerCount;
         auto uptimeMinutes = startTime.secsTo(QDateTime::currentDateTime()) / 60;
@@ -420,6 +432,7 @@ void KickChannel::applyStreamData(bool isLive, const QString &streamTitle,
     }
     else
     {
+        this->currentStreamID_.clear();
         this->streamData_.thumbnailUrl.clear();
         this->streamData_.viewerCount = 0;
         this->streamData_.uptime.clear();

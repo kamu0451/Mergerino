@@ -13,6 +13,7 @@
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "widgets/AccountSwitchWidget.hpp"
+#include "widgets/dialogs/KickLoginPage.hpp"
 #include "widgets/dialogs/LoginDialog.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/helper/KickAccountSwitchWidget.hpp"
@@ -86,9 +87,20 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
 
     QObject::connect(this->ui_.loginButton, &QPushButton::clicked, this,
                      [this]() {
+                         const auto provider =
+                             getApp()->getWindows()->activeAccountProvider();
+                         if (provider == ProviderId::Kick)
+                         {
+                             KickLoginPage::startLoginFlow(
+                                 this->parentWidget(),
+                                 [this]() { this->refresh(); });
+                             this->hide();
+                             return;
+                         }
+
                          LoginDialog dialog(
                              this,
-                             getApp()->getWindows()->activeAccountProvider());
+                             provider);
                          dialog.exec();
                          this->refresh();
                      });

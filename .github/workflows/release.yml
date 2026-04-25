@@ -127,12 +127,31 @@ jobs:
           git tag -f latest "$HEAD_SHA"
           git push origin latest --force
 
+      # Compute the version string the build embedded (MAJOR.MINOR baked from
+      # CMakeLists.txt project(...) plus PATCH = `git rev-list --count HEAD`).
+      # Used below as the release name so mergerino's update check can show
+      # "1.5.137 -> 1.5.138" instead of opaque commit hashes.
+      - name: Compute release version
+        id: version
+        env:
+          HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
+        run: |
+          MAJOR_MINOR=$(awk '/^project\(/,/\)/{ if (match($0, /VERSION[[:space:]]+([0-9]+)\.([0-9]+)/, m)) { print m[1]"."m[2]; exit } }' CMakeLists.txt)
+          if [ -z "$MAJOR_MINOR" ]; then
+            echo "Failed to parse MAJOR.MINOR from CMakeLists.txt project(VERSION ...)"
+            exit 1
+          fi
+          PATCH=$(git rev-list --count "$HEAD_SHA")
+          VERSION="$MAJOR_MINOR.$PATCH"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION"
+
       - name: Create or update rolling release
         uses: actions/github-script@v8
         env:
           ASSET_NAME: Mergerino.zip
           ASSET_PATH: release-artifact/Mergerino.zip
-          RELEASE_NAME: Latest
+          RELEASE_NAME: Mergerino ${{ steps.version.outputs.version }}
           RELEASE_TAG: latest
           HEAD_SHA: ${{ steps.resolve.outputs.head_sha }}
         with:

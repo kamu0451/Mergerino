@@ -1590,7 +1590,7 @@ void ChannelView::refreshSlowerChatSettings()
         this->clearMessageLayoutShiftAnimations();
     }
 
-    if (!this->shouldAnimateSlowChatMessages())
+    if (!this->shouldAnimateMessageAnimations())
     {
         this->clearMessageArrivalAnimations();
     }
@@ -1668,7 +1668,7 @@ bool ChannelView::shouldQueueSlowChatMessages() const
            this->split_->slowerChatEnabled();
 }
 
-bool ChannelView::shouldAnimateSlowChatMessages() const
+bool ChannelView::shouldAnimateMessageAnimations() const
 {
     return this->shouldQueueSlowChatMessages() &&
            this->split_->slowerChatMessageAnimations();
@@ -2030,7 +2030,7 @@ void ChannelView::messageAppended(MessagePtr &message,
     this->lastMessageHasAlternateBackground_ =
         !this->lastMessageHasAlternateBackground_;
 
-    if (this->shouldAnimateSlowChatMessages() && this->isVisible() &&
+    if (this->shouldAnimateMessageAnimations() && this->isVisible() &&
         (this->showingLatestMessages_ || !this->showScrollBar_))
     {
         this->addMessageArrivalAnimation(messageRef);

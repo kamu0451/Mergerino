@@ -1441,9 +1441,7 @@ void Split::updateInputPlaceholder()
         QString placeholderText = [&] {
             if (user->isAnonymous())
             {
-                // FIXME: once we have a proper OAuth for Kick (device auth or similar),
-                // we can update this label to "Log in to send messages...".
-                return QString{};
+                return QStringLiteral("Log in to Kick to send messages...");
             }
             return QString(u"Send message as " % user->username() % u"...");
         }();

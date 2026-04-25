@@ -1,17 +1,15 @@
 # Mergerino
 
-Unofficial Chatterino fork focused on merged streamer chat across Twitch, Kick, and YouTube.
+Mergerino is a desktop chat client that combines a Chatterino-style multi-channel workflow with support for Twitch, Kick, YouTube, and TikTok LIVE in one app. The goal is to keep chat fast and practical while making multi-platform viewing easier from a single desktop client.
 
-Mergerino is a desktop chat client that combines a Chatterino-style multi-channel workflow with support for Twitch, Kick, and YouTube in one app. The goal is to keep chat fast and practical while making multi-platform viewing easier from a single desktop client.
-
-This repository is separate from the upstream Chatterino project. It keeps the source here and ships installable Windows builds through GitHub Releases.
+This repository keeps the source here and ships installable Windows builds through GitHub Releases.
 
 [![Download Windows Build](https://img.shields.io/badge/Download-Windows%20Build-2ea44f?style=for-the-badge)](../../releases/latest/download/Mergerino.zip)
 [![All Releases](https://img.shields.io/badge/GitHub-Releases-1f6feb?style=for-the-badge)](../../releases)
 
 ## What Is Mergerino?
 
-- Merged desktop chat for Twitch, Kick, and YouTube
+- Merged desktop chat for Twitch, Kick, YouTube, and TikTok LIVE
 - Chatterino-style multi-channel chat workflow in a standalone app
 - 7TV, BTTV, and FFZ integration
 - Windows-only builds packaged around `mergerino.exe`

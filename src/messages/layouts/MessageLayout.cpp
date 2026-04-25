@@ -655,6 +655,12 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
 
     // draw background
     QColor backgroundColor = [&] {
+        if (this->message_->flags.has(MessageFlag::WatchStreak) &&
+            ctx.preferences.enableWatchStreakHighlight)
+        {
+            return ctx.messageColors.regularBg;
+        }
+
         if (ctx.preferences.alternateMessages &&
             this->flags.has(MessageLayoutFlag::AlternateBackground))
         {
@@ -667,13 +673,18 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     QColor gradientOverlayColor;
     QColor gradientLeadInColor;
 
+    const bool isWatchStreakEvent =
+        this->message_->flags.has(MessageFlag::WatchStreak) &&
+        ctx.preferences.enableWatchStreakHighlight;
+
     bool suppressMergedPlatformTint =
         usesAutomaticEventOverlay(*this->message_, ctx.preferences,
                                   ctx.forceFlatEventHighlights) &&
         ((ctx.forceFlatEventHighlights &&
           mergedPlatformIndicatorShowsLineColor(ctx.platformIndicatorMode)) ||
          (automaticEventHighlightUsesGradient(ctx) &&
-          !automaticEventIncludesUserMessage(*this->message_)));
+          (isWatchStreakEvent ||
+           !automaticEventIncludesUserMessage(*this->message_))));
 
     if (this->message_->platformAccentColor &&
         mergedPlatformIndicatorShowsLineColor(

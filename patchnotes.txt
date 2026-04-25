@@ -1,5 +1,12 @@
 Patch Notes
 
+25/04/2026
+- Simplified Kick login
+- Added First Message (Session) highlight
+- Improved YouTube chat stability
+- Fixed bug duplicating mod alerts
+- Added a simple OBS dock
+
 20/04/2026
 - Added TikTok live chat
 - Added informational tooltips

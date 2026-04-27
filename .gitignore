@@ -90,8 +90,8 @@ dependencies
 
 # AI assistant artifacts (CLAUDE.md at repo root is kept as project docs)
 .claude/
-HANDOFF.md
-IMPROVEMENT_PLAN.md
+docs/notes/HANDOFF.md
+docs/notes/IMPROVEMENT_PLAN.md
 .aider*
 .cursor/
 .cursorrules

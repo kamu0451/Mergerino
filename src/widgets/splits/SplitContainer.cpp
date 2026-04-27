@@ -168,6 +168,8 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
         source->slowerChatMessagesPerSecond());
     clone->setSlowerChatMessageAnimations(
         source->slowerChatMessageAnimations());
+    clone->setTwitchActivityMinimumBits(source->twitchActivityMinimumBits());
+    clone->setKickActivityMinimumKicks(source->kickActivityMinimumKicks());
     clone->setTikTokActivityMinimumDiamonds(
         source->tiktokActivityMinimumDiamonds());
     clone->setCheckSpellingOverride(source->checkSpellingOverride());
@@ -975,6 +977,10 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
             currentNode->split_->slowerChatMessagesPerSecond();
         result.slowerChatMessageAnimations_ =
             currentNode->split_->slowerChatMessageAnimations();
+        result.twitchActivityMinimumBits_ =
+            currentNode->split_->twitchActivityMinimumBits();
+        result.kickActivityMinimumKicks_ =
+            currentNode->split_->kickActivityMinimumKicks();
         result.tiktokActivityMinimumDiamonds_ =
             currentNode->split_->tiktokActivityMinimumDiamonds();
         result.platformIndicatorMode_ =
@@ -1032,6 +1038,9 @@ void SplitContainer::applyFromDescriptorRecursively(
             splitNode.slowerChatMessagesPerSecond_);
         split->setSlowerChatMessageAnimations(
             splitNode.slowerChatMessageAnimations_);
+        split->setTwitchActivityMinimumBits(
+            splitNode.twitchActivityMinimumBits_);
+        split->setKickActivityMinimumKicks(splitNode.kickActivityMinimumKicks_);
         split->setTikTokActivityMinimumDiamonds(
             splitNode.tiktokActivityMinimumDiamonds_);
         if (splitNode.platformIndicatorMode_)
@@ -1098,6 +1107,10 @@ void SplitContainer::applyFromDescriptorRecursively(
                     splitNode.slowerChatMessagesPerSecond_);
                 split->setSlowerChatMessageAnimations(
                     splitNode.slowerChatMessageAnimations_);
+                split->setTwitchActivityMinimumBits(
+                    splitNode.twitchActivityMinimumBits_);
+                split->setKickActivityMinimumKicks(
+                    splitNode.kickActivityMinimumKicks_);
                 split->setTikTokActivityMinimumDiamonds(
                     splitNode.tiktokActivityMinimumDiamonds_);
                 if (splitNode.platformIndicatorMode_)

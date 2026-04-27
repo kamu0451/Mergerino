@@ -26,6 +26,8 @@ class SplitSettingsDialog final : public BaseWindow
 {
 public:
     explicit SplitSettingsDialog(bool isActivityPane,
+                                 bool showTwitchBitsMinimum,
+                                 bool showKickKicksMinimum,
                                  bool showTikTokGiftMinimum,
                                  QWidget *parent = nullptr);
 
@@ -43,6 +45,10 @@ public:
     qreal slowerChatMessagesPerSecond() const;
     void setSlowerChatMessageAnimations(bool enabled);
     bool slowerChatMessageAnimations() const;
+    void setTwitchActivityMinimumBits(uint32_t value);
+    uint32_t twitchActivityMinimumBits() const;
+    void setKickActivityMinimumKicks(uint32_t value);
+    uint32_t kickActivityMinimumKicks() const;
     void setTikTokActivityMinimumDiamonds(uint32_t value);
     uint32_t tiktokActivityMinimumDiamonds() const;
 
@@ -63,6 +69,8 @@ private:
         QCheckBox *slowerChat{};
         QDoubleSpinBox *slowerChatRate{};
         QCheckBox *messageAnimations{};
+        QSpinBox *twitchBitsMinimum{};
+        QSpinBox *kickKicksMinimum{};
         QSpinBox *tiktokGiftMinimum{};
         QWidget *slowerChatRateLabel{};
         QWidget *slowerChatRateField{};
@@ -72,6 +80,8 @@ private:
     } ui_{};
 
     const bool isActivityPane_;
+    const bool showTwitchBitsMinimum_;
+    const bool showKickKicksMinimum_;
     const bool showTikTokGiftMinimum_;
     bool hasAcceptedChanges_{false};
 

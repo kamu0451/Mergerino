@@ -34,8 +34,8 @@ namespace chatterino {
  *  - 2.4.0-alpha.2
  *  - 2.4.0-alpha
  **/
-inline const QString CHATTERINO_VERSION = QStringLiteral("1.2.3");
-inline const QString CHATTERINO_DISPLAY_VERSION = QStringLiteral("1.2.3");
+inline const QString CHATTERINO_VERSION = QStringLiteral("1.2.4");
+inline const QString CHATTERINO_DISPLAY_VERSION = QStringLiteral("1.2.4");
 
 class Version
 {
@@ -44,6 +44,7 @@ public:
 
     const QString &version() const;
     const QString &commitHash() const;
+    const QString &commitFullHash() const;
     // Whether or not the vcs tree had any changes at the time of build
     const bool &isModified() const;
     // Date of build file generation (≈ date of build)
@@ -81,6 +82,7 @@ private:
 
     QString version_;
     QString commitHash_;
+    QString commitFullHash_;
     bool isModified_{false};
     QString dateOfBuild_;
     QString fullVersion_;

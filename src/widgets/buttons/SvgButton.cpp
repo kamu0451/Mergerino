@@ -45,6 +45,28 @@ void SvgButton::setPadding(QSize padding)
     this->invalidateContent();
 }
 
+void SvgButton::setContentOffset(QPoint offset)
+{
+    if (this->contentOffset_ == offset)
+    {
+        return;
+    }
+
+    this->contentOffset_ = offset;
+    this->invalidateContent();
+}
+
+void SvgButton::setContentSize(std::optional<QSize> size)
+{
+    if (this->contentSize_ == size)
+    {
+        return;
+    }
+
+    this->contentSize_ = size;
+    this->invalidateContent();
+}
+
 void SvgButton::themeChangedEvent()
 {
     Button::themeChangedEvent();
@@ -73,10 +95,23 @@ void SvgButton::resizeEvent(QResizeEvent *e)
 
 void SvgButton::paintContent(QPainter &painter)
 {
-    QSize actualPadding = this->scale() * this->padding_;
-    QPoint topLeft{actualPadding.width(), actualPadding.height()};
-    QSize contentSize = this->size() - 2 * actualPadding;
-    auto bounds = QRectF{topLeft, contentSize};
+    QRectF bounds;
+    if (this->contentSize_)
+    {
+        const QSize contentSize = this->scale() * *this->contentSize_;
+        const QPointF topLeft{
+            (this->width() - contentSize.width()) / 2.0,
+            (this->height() - contentSize.height()) / 2.0};
+        bounds = QRectF{topLeft, contentSize};
+    }
+    else
+    {
+        QSize actualPadding = this->scale() * this->padding_;
+        QPoint topLeft{actualPadding.width(), actualPadding.height()};
+        QSize contentSize = this->size() - 2 * actualPadding;
+        bounds = QRectF{topLeft, contentSize};
+    }
+    bounds.translate(this->scale() * this->contentOffset_);
     this->svg_->render(&painter, bounds);
 
     if (this->color_.has_value())

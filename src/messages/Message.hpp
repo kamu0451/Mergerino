@@ -135,6 +135,7 @@ struct Message {
     std::shared_ptr<ChannelPointReward> reward = nullptr;
 
     uint32_t bits{0};
+    uint64_t kickGiftKicks{0};
     uint32_t tiktokGiftDiamondCount{0};
 
     /**

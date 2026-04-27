@@ -263,7 +263,8 @@ std::vector<EmotePtr> filterEmoteVec(const QString &text,
 namespace chatterino {
 
 EmotePopup::EmotePopup(QWidget *parent)
-    : BasePopup({BaseWindow::EnableCustomFrame, BaseWindow::DisableLayoutSave},
+    : BasePopup({BaseWindow::EnableCustomFrame, BaseWindow::TopMost,
+                 BaseWindow::DisableLayoutSave},
                 parent)
     , search_(new QLineEdit())
     , notebook_(new Notebook(this))

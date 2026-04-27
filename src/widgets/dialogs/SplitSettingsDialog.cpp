@@ -320,6 +320,8 @@ void applyAnimatedRowProgress(QWidget *widget, qreal progress)
 }  // namespace
 
 SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
+                                         bool showTwitchBitsMinimum,
+                                         bool showKickKicksMinimum,
                                          bool showTikTokGiftMinimum,
                                          QWidget *parent)
     : BaseWindow(
@@ -331,6 +333,8 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
           },
           parent)
     , isActivityPane_(isActivityPane)
+    , showTwitchBitsMinimum_(showTwitchBitsMinimum)
+    , showKickKicksMinimum_(showKickKicksMinimum)
     , showTikTokGiftMinimum_(showTikTokGiftMinimum)
 {
     this->setWindowTitle(isActivityPane ? "Activity settings"
@@ -409,6 +413,32 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
         appearanceLayout->addRow(
             createLabelWithInfo("Chat line size", activityScaleTooltip, this),
             this->ui_.activityScale);
+
+        if (this->showTwitchBitsMinimum_)
+        {
+            this->ui_.twitchBitsMinimum = new QSpinBox();
+            this->ui_.twitchBitsMinimum->setRange(0, 1000000);
+            this->ui_.twitchBitsMinimum->setSingleStep(1);
+            const auto twitchBitsMinimumTooltip = QStringLiteral(
+                "Only show Twitch bit alerts at or above this bit count.");
+            appearanceLayout->addRow(createLabelWithInfo(
+                                         "Twitch min bits",
+                                         twitchBitsMinimumTooltip, this),
+                                     this->ui_.twitchBitsMinimum);
+        }
+
+        if (this->showKickKicksMinimum_)
+        {
+            this->ui_.kickKicksMinimum = new QSpinBox();
+            this->ui_.kickKicksMinimum->setRange(0, 1000000);
+            this->ui_.kickKicksMinimum->setSingleStep(1);
+            const auto kickKicksMinimumTooltip = QStringLiteral(
+                "Only show Kick Kicks gifts at or above this Kicks amount.");
+            appearanceLayout->addRow(createLabelWithInfo(
+                                         "Kick min Kicks",
+                                         kickKicksMinimumTooltip, this),
+                                     this->ui_.kickKicksMinimum);
+        }
 
         if (this->showTikTokGiftMinimum_)
         {
@@ -549,6 +579,42 @@ bool SplitSettingsDialog::slowerChatMessageAnimations() const
            this->ui_.messageAnimations->isChecked();
 }
 
+void SplitSettingsDialog::setTwitchActivityMinimumBits(uint32_t value)
+{
+    if (this->ui_.twitchBitsMinimum)
+    {
+        this->ui_.twitchBitsMinimum->setValue(static_cast<int>(value));
+    }
+}
+
+uint32_t SplitSettingsDialog::twitchActivityMinimumBits() const
+{
+    if (this->ui_.twitchBitsMinimum == nullptr)
+    {
+        return 100;
+    }
+
+    return static_cast<uint32_t>(this->ui_.twitchBitsMinimum->value());
+}
+
+void SplitSettingsDialog::setKickActivityMinimumKicks(uint32_t value)
+{
+    if (this->ui_.kickKicksMinimum)
+    {
+        this->ui_.kickKicksMinimum->setValue(static_cast<int>(value));
+    }
+}
+
+uint32_t SplitSettingsDialog::kickActivityMinimumKicks() const
+{
+    if (this->ui_.kickKicksMinimum == nullptr)
+    {
+        return 100;
+    }
+
+    return static_cast<uint32_t>(this->ui_.kickKicksMinimum->value());
+}
+
 void SplitSettingsDialog::setTikTokActivityMinimumDiamonds(uint32_t value)
 {
     if (this->ui_.tiktokGiftMinimum)
@@ -614,6 +680,14 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     if (this->ui_.messageAnimations)
     {
         this->ui_.messageAnimations->setFont(uiFont);
+    }
+    if (this->ui_.twitchBitsMinimum)
+    {
+        this->ui_.twitchBitsMinimum->setFont(uiFont);
+    }
+    if (this->ui_.kickKicksMinimum)
+    {
+        this->ui_.kickKicksMinimum->setFont(uiFont);
     }
     if (this->ui_.tiktokGiftMinimum)
     {

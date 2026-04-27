@@ -120,10 +120,27 @@ int cappedYouTubePollDelay(int timeoutMs)
 }
 
 int adjustedYouTubePollDelay(int timeoutMs, qint64 /* requestElapsedMs */,
-                             int /* deliveredMessageCount */,
-                             int /* activePollStreak */)
+                             int deliveredMessageCount,
+                             int activePollStreak)
 {
-    return cappedYouTubePollDelay(timeoutMs);
+    const auto serverDelay = cappedYouTubePollDelay(timeoutMs);
+    if (deliveredMessageCount <= 0)
+    {
+        constexpr int idleDelayCapMs = 3000;
+        return std::min(serverDelay, idleDelayCapMs);
+    }
+
+    int busyDelayCapMs = 650;
+    if (deliveredMessageCount >= 25)
+    {
+        busyDelayCapMs = 450;
+    }
+    else if (deliveredMessageCount >= 10 || activePollStreak >= 2)
+    {
+        busyDelayCapMs = 500;
+    }
+
+    return std::min(serverDelay, busyDelayCapMs);
 }
 
 }  // namespace
@@ -161,6 +178,7 @@ void YouTubeLiveChat::start()
     this->continuation_.clear();
     this->statusText_.clear();
     this->liveTitle_.clear();
+    this->liveViewerCount_ = 0;
     this->seenMessageIds_.clear();
     this->joinedLiveVideoId_.clear();
     this->failureReported_ = false;
@@ -195,6 +213,22 @@ const QString &YouTubeLiveChat::statusText() const
 const QString &YouTubeLiveChat::liveTitle() const
 {
     return this->liveTitle_;
+}
+
+uint64_t YouTubeLiveChat::liveViewerCount() const
+{
+    return this->liveViewerCount_;
+}
+
+QString YouTubeLiveChat::previewThumbnailUrl() const
+{
+    if (this->videoId_.isEmpty())
+    {
+        return {};
+    }
+
+    return QString("https://i.ytimg.com/vi/%1/hqdefault_live.jpg")
+        .arg(this->videoId_);
 }
 
 void YouTubeLiveChat::resolveVideoId()
@@ -584,6 +618,7 @@ void YouTubeLiveChat::fetchLiveChatPage()
             }
 
             this->liveTitle_ = extractLiveStreamTitle(json);
+            this->liveViewerCount_ = 0;
             this->failureReported_ = false;
             this->activePollStreak_ = 0;
             if (this->joinedLiveVideoId_ != this->videoId_)
@@ -676,6 +711,13 @@ void YouTubeLiveChat::poll()
             }
 
             auto actions = continuation["actions"].toArray();
+            const auto viewerCount = parseViewerCount(
+                continuation["viewerCount"]);
+            if (viewerCount > 0)
+            {
+                this->liveViewerCount_ = viewerCount;
+            }
+
             int deliveredMessageCount = 0;
             for (const auto &actionValue : actions)
             {
@@ -828,6 +870,7 @@ void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
     this->videoId_.clear();
     this->continuation_.clear();
     this->liveTitle_.clear();
+    this->liveViewerCount_ = 0;
     this->seenMessageIds_.clear();
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
@@ -1153,6 +1196,47 @@ QString YouTubeLiveChat::parseText(const QJsonValue &value)
     return text.trimmed();
 }
 
+uint64_t YouTubeLiveChat::parseViewerCount(const QJsonValue &value)
+{
+    const auto text = parseText(value);
+    if (text.isEmpty())
+    {
+        return 0;
+    }
+
+    static const QRegularExpression countRegex(R"(([\d,.]+))");
+    const auto match = countRegex.match(text);
+    if (!match.hasMatch())
+    {
+        return 0;
+    }
+
+    auto digits = match.captured(1);
+    digits.remove(',');
+    digits.remove('.');
+
+    bool ok = false;
+    const auto count = digits.toULongLong(&ok);
+    return ok ? count : 0;
+}
+
+QString compactMembershipGiftText(const QString &text, const QString &author)
+{
+    static const QRegularExpression countRegex(R"((\d+))");
+    const auto match = countRegex.match(text);
+    if (!match.hasMatch() ||
+        !text.contains(QStringLiteral("membership"), Qt::CaseInsensitive))
+    {
+        return text;
+    }
+
+    const auto count = match.captured(1).toInt();
+    const auto unit = count == 1 ? QStringLiteral("membership")
+                                : QStringLiteral("memberships");
+    return QStringLiteral("%1 gifted %2 %3")
+        .arg(author, QString::number(count), unit);
+}
+
 MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
                                                  const QString &rendererName,
                                                  const QString &channelName)
@@ -1166,6 +1250,7 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     QJsonValue authorNameValue = renderer["authorName"];
     QString authorId = renderer["authorExternalChannelId"].toString();
     MessageFlags flags;
+    bool compactMembershipGift = false;
 
     if (rendererName == "liveChatTextMessageRenderer")
     {
@@ -1205,6 +1290,7 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
                 .toObject();
         authorNameValue = header["authorName"];
         text = parseText(header["primaryText"]);
+        compactMembershipGift = true;
         if (authorId.isEmpty())
         {
             authorId = header["authorExternalChannelId"].toString();
@@ -1213,8 +1299,7 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     else if (rendererName ==
              "liveChatSponsorshipsGiftRedemptionAnnouncementRenderer")
     {
-        flags.set(MessageFlag::Subscription);
-        text = parseText(renderer["message"]);
+        return nullptr;
     }
     else
     {
@@ -1225,6 +1310,10 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     if (author.isEmpty())
     {
         return nullptr;
+    }
+    if (compactMembershipGift)
+    {
+        text = compactMembershipGiftText(text, author);
     }
 
     MessageBuilder builder;

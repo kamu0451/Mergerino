@@ -65,17 +65,21 @@ private:
         while (true)
         {
             qint64 available = this->socket->bytesAvailable();
-            if (available <= 0)
+            if (available <= 0 && this->message.isEmpty())
             {
                 return;
             }
-            auto prevSize = this->message.size();
-            this->message.resize(prevSize + available);
-            auto nRead =
-                this->socket->read(this->message.data() + prevSize, available);
-            if (nRead < available)
+
+            if (available > 0)
             {
-                this->message.resize(prevSize + nRead);
+                auto prevSize = this->message.size();
+                this->message.resize(prevSize + available);
+                auto nRead = this->socket->read(this->message.data() + prevSize,
+                                                available);
+                if (nRead < available)
+                {
+                    this->message.resize(prevSize + nRead);
+                }
             }
 
             boost::beast::error_code ec;
@@ -102,6 +106,10 @@ private:
             {
                 if (ec == boost::beast::http::error::need_more)
                 {
+                    if (consumed == 0 || this->message.isEmpty())
+                    {
+                        return;
+                    }
                     continue;
                 }
                 qCWarning(chatterinoHTTP) << ec.what();
@@ -115,7 +123,6 @@ private:
                 auto target = msg.base().target();
                 auto requestTarget = QString::fromUtf8(
                     target.data(), static_cast<qsizetype>(target.size()));
-                bool keepAlive = msg.keep_alive();
                 auto response = this->server->handler()(HttpServer::Request{
                     .method = QString::fromLatin1(
                         msg.method_string().data(),
@@ -133,10 +140,20 @@ private:
                     };
                 res.set(boost::beast::http::field::content_type,
                         response.contentType.constData());
+                for (const auto &[name, value] : response.headers)
+                {
+                    res.set(boost::beast::string_view{
+                                name.constData(),
+                                static_cast<size_t>(name.size())},
+                            boost::beast::string_view{
+                                value.constData(),
+                                static_cast<size_t>(value.size())});
+                }
                 res.body() = boost::beast::span<char>{
                     response.body.data(),
                     static_cast<size_t>(response.body.size())};
-                res.keep_alive(keepAlive);
+                res.content_length(static_cast<uint64_t>(response.body.size()));
+                res.keep_alive(false);
                 res.prepare_payload();
                 boost::beast::http::message_generator gen(std::move(res));
 
@@ -151,11 +168,8 @@ private:
                     qCWarning(chatterinoHTTP) << ec.what();
                 }
 
-                if (ec || !keepAlive)
-                {
-                    this->socket->close();
-                    return;
-                }
+                this->socket->close();
+                return;
             }
         }
     }
@@ -185,7 +199,13 @@ HttpServer::HttpServer(uint16_t port, QObject *parent)
     , handler_(defaultHandler)
 {
     auto *tcpServer = new QTcpServer(this);
-    tcpServer->listen(QHostAddress::LocalHost, port);
+    this->tcpServer_ = tcpServer;
+    if (!tcpServer->listen(QHostAddress::LocalHost, port))
+    {
+        qCWarning(chatterinoHTTP)
+            << "Could not start local HTTP server on port" << port
+            << tcpServer->errorString();
+    }
 
     QObject::connect(tcpServer, &QTcpServer::newConnection, this,
                      [this, tcpServer] {
@@ -208,6 +228,16 @@ void HttpServer::setHandler(HandlerCb handler)
 const HttpServer::HandlerCb &HttpServer::handler() const
 {
     return this->handler_;
+}
+
+bool HttpServer::isListening() const
+{
+    return this->tcpServer_ && this->tcpServer_->isListening();
+}
+
+QString HttpServer::errorString() const
+{
+    return this->tcpServer_ ? this->tcpServer_->errorString() : QString{};
 }
 
 }  // namespace chatterino

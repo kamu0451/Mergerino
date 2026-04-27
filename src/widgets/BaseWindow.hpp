@@ -70,6 +70,18 @@ public:
         return button;
     }
 
+    template <typename T>
+    T *addTitleBarTitleButton(std::function<void()> onClicked, auto &&...args)
+    {
+        auto *button = new T(std::forward<decltype(args)>(args)...);
+        button->setScaleIndependentSize(30, 30);
+        this->appendTitlebarTitleButton(button);
+
+        QObject::connect(button, &T::leftClicked, this, std::move(onClicked));
+
+        return button;
+    }
+
     LabelButton *addTitleBarLabel(std::function<void()> onClicked);
 
     void moveTo(QPoint point, widgets::BoundsChecking mode);
@@ -176,6 +188,7 @@ private:
     bool handleNCHITTEST(MSG *msg, qintptr *result);
 
     void appendTitlebarButton(Button *button);
+    void appendTitlebarTitleButton(Button *button);
 
     bool enableCustomFrame_;
     bool frameless_;

@@ -10,14 +10,12 @@
 #include <pajlada/settings/setting.hpp>
 #include <pajlada/signals/signal.hpp>
 #include <pajlada/signals/signalholder.hpp>
-#include <QElapsedTimer>
-#include <QMenu>
-
 namespace chatterino {
 
 class PixmapButton;
 class LabelButton;
 class SvgButton;
+class AccountTitlebarButton;
 class Theme;
 class UpdateDialog;
 class SplitNotebook;
@@ -55,17 +53,17 @@ private:
     WindowType type_;
 
     SplitNotebook *notebook_;
-    SvgButton *userPlatformButton_ = nullptr;
-    LabelButton *userLabel_ = nullptr;
-    QMenu *platformMenu_ = nullptr;
+    AccountTitlebarButton *accountTitlebarButton_ = nullptr;
     std::shared_ptr<UpdateDialog> updateDialogHandle_;
+    SvgButton *updateTitlebarButton_ = nullptr;
 
     pajlada::Signals::SignalHolder signalHolder_;
     std::vector<boost::signals2::scoped_connection> bSignals_;
 
     // this is only used on Windows and only on the main window, for the one used otherwise, see SplitNotebook in Notebook.hpp
     PixmapButton *streamerModeTitlebarIcon_ = nullptr;
-    QElapsedTimer platformMenuHideTimer_;
+    void showUpdateDialog();
+    void updateTitlebarUpdateButton();
     void updateStreamerModeIcon();
 
     friend class Notebook;

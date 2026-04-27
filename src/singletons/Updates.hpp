@@ -67,14 +67,14 @@ public:
 private:
     QString currentVersion_;
     QString onlineVersion_;
+    QString onlineCommit_;
+    QString updateDownloadUrl_;
     Status status_ = None;
     bool isDowngrade_{};
 
-    QString updateExe_;
-    QString updatePortable_;
-    QString updateGuideLink_;
-
     void setStatus_(Status status);
+    void checkReleaseCommit_(QString releaseCommit);
+    void downloadAndRunInstaller_();
 
     std::vector<std::unique_ptr<pajlada::Signals::ScopedConnection>>
         managedConnections;

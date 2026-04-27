@@ -1284,6 +1284,8 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
 
     if (!shouldShowMessageInActivityPane(
             *message,
+            this->split_ ? this->split_->twitchActivityMinimumBits() : 100,
+            this->split_ ? this->split_->kickActivityMinimumKicks() : 100,
             this->split_ ? this->split_->tiktokActivityMinimumDiamonds() : 0))
     {
         return std::nullopt;
@@ -1963,6 +1965,22 @@ bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
         {
             if (shouldShowTikTokGiftInActivityPane(
                     *m, this->split_->tiktokActivityMinimumDiamonds()))
+            {
+                return false;
+            }
+        }
+        else if (isActivityTwitchBitsMessage(*m))
+        {
+            if (shouldShowTwitchBitsInActivityPane(
+                    *m, this->split_->twitchActivityMinimumBits()))
+            {
+                return false;
+            }
+        }
+        else if (isActivityKickKicksGiftMessage(*m))
+        {
+            if (shouldShowKickKicksGiftInActivityPane(
+                    *m, this->split_->kickActivityMinimumKicks()))
             {
                 return false;
             }
@@ -4530,6 +4548,12 @@ void ChannelView::updateID()
     boost::hash_combine(seed, this->split_ != nullptr
                                   ? this->split_->tiktokActivityMinimumDiamonds()
                                   : 0U);
+    boost::hash_combine(seed, this->split_ != nullptr
+                                  ? this->split_->twitchActivityMinimumBits()
+                                  : 100U);
+    boost::hash_combine(seed, this->split_ != nullptr
+                                  ? this->split_->kickActivityMinimumKicks()
+                                  : 100U);
 
     this->id_ = seed;
 }

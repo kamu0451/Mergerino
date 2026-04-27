@@ -46,7 +46,6 @@ UpdateDialog::UpdateDialog()
 
     QObject::connect(install, &QPushButton::clicked, this, [this] {
         getApp()->getUpdates().installUpdates();
-        this->close();
     });
     QObject::connect(dismiss, &QPushButton::clicked, this, [this] {
         this->dismissed.invoke();
@@ -66,6 +65,7 @@ UpdateDialog::UpdateDialog()
 void UpdateDialog::updateStatusChanged(Updates::Status status)
 {
     this->ui_.installButton->setVisible(status == Updates::UpdateAvailable);
+    this->ui_.installButton->setEnabled(status == Updates::UpdateAvailable);
 
     switch (status)
     {

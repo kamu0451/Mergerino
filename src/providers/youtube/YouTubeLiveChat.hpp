@@ -33,6 +33,8 @@ public:
     const QString &videoId() const;
     const QString &statusText() const;
     const QString &liveTitle() const;
+    uint64_t liveViewerCount() const;
+    QString previewThumbnailUrl() const;
 
     pajlada::Signals::Signal<QString> sourceResolved;
     pajlada::Signals::Signal<MessagePtr> messageReceived;
@@ -73,6 +75,7 @@ private:
     static QString extractLiveVideoId(const QString &html);
     static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
     static QString parseText(const QJsonValue &value);
+    static uint64_t parseViewerCount(const QJsonValue &value);
     static MessagePtr parseRendererMessage(const QJsonObject &renderer,
                                           const QString &rendererName,
                                           const QString &channelName);
@@ -91,6 +94,7 @@ private:
     bool failureReported_{false};
     bool skipInitialBacklog_{false};
     int activePollStreak_{0};
+    uint64_t liveViewerCount_{0};
 
     std::shared_ptr<bool> lifetimeGuard_;
     std::unordered_set<QString> seenMessageIds_;

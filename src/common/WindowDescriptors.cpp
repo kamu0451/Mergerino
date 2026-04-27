@@ -126,6 +126,10 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
         root.value("slowerChatMessagesPerSecond").toDouble(5.0);
     descriptor.slowerChatMessageAnimations_ =
         root.value("slowerChatMessageAnimations").toBool(true);
+    descriptor.twitchActivityMinimumBits_ = static_cast<uint32_t>(
+        root.value("twitchActivityMinimumBits").toInt(100));
+    descriptor.kickActivityMinimumKicks_ = static_cast<uint32_t>(
+        root.value("kickActivityMinimumKicks").toInt(100));
     descriptor.tiktokActivityMinimumDiamonds_ = static_cast<uint32_t>(
         root.value("tiktokActivityMinimumDiamonds").toInt(0));
     if (auto platformIndicatorMode = root["platformIndicatorMode"];

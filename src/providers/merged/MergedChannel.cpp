@@ -189,7 +189,6 @@ void MergedChannel::sendMessage(const QString &message)
         return;
     }
 
-    bool sent = false;
     QStringList unavailablePlatforms;
 
     if (this->config_.twitchEnabled && this->twitchChannel_)
@@ -197,12 +196,9 @@ void MergedChannel::sendMessage(const QString &message)
         if (getApp()->getAccounts()->twitch.isLoggedIn())
         {
             this->twitchChannel_->sendMessage(message);
-            sent = true;
+            return;
         }
-        else
-        {
-            unavailablePlatforms.append("Twitch");
-        }
+        unavailablePlatforms.append("Twitch");
     }
 
     if (this->config_.kickEnabled && this->kickChannel_)
@@ -210,15 +206,12 @@ void MergedChannel::sendMessage(const QString &message)
         if (getApp()->getAccounts()->kick.isLoggedIn())
         {
             this->kickChannel_->sendMessage(message);
-            sent = true;
+            return;
         }
-        else
-        {
-            unavailablePlatforms.append("Kick");
-        }
+        unavailablePlatforms.append("Kick");
     }
 
-    if (!sent && !unavailablePlatforms.isEmpty())
+    if (!unavailablePlatforms.isEmpty())
     {
         this->addSystemStatusMessage(
             QString("Log in to %1 to send merged chat.")
@@ -373,6 +366,11 @@ ChannelPtr MergedChannel::twitchChannel() const
 ChannelPtr MergedChannel::kickChannel() const
 {
     return this->kickChannel_;
+}
+
+YouTubeLiveChat *MergedChannel::youtubeLiveChat() const
+{
+    return this->youtubeLiveChat_.get();
 }
 
 void MergedChannel::initializeSources()

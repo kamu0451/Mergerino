@@ -23,8 +23,10 @@ namespace chatterino {
 class SvgButton;
 class DrawnButton;
 class LabelButton;
+class PixmapButton;
 class Label;
 class Split;
+class MergedChannel;
 
 class SplitHeader final : public BaseWidget
 {
@@ -61,6 +63,8 @@ private:
     std::unique_ptr<QMenu> createChatModeMenu();
     void showHoverTooltip(QWidget *target, const QString &text, bool wordWrap);
     void hideHoverTooltip();
+    QString mergedStreamPreviewTooltip(MergedChannel *mergedChannel);
+    void updateThumbnail(const QString &url, bool followRedirects);
 
     /**
      * @brief   Reset the thumbnail data and timer so a new
@@ -75,6 +79,7 @@ private:
     TooltipWidget *const tooltipWidget_{};
     bool isLive_{false};
     QString thumbnail_;
+    QString thumbnailUrl_;
     QElapsedTimer lastThumbnail_;
     std::chrono::steady_clock::time_point lastReloadedChannelEmotes_;
     std::chrono::steady_clock::time_point lastReloadedSubEmotes_;
@@ -94,6 +99,7 @@ private:
     SvgButton *alertsButton_{};
     SvgButton *moderationButton_{};
     SvgButton *chattersButton_{};
+    PixmapButton *clearActivityButton_{};
     DrawnButton *addButton_{};
 
     // states

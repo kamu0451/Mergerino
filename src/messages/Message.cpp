@@ -327,6 +327,7 @@ std::shared_ptr<Message> Message::clone() const
     cloned->reward = this->reward;
     cloned->platform = this->platform;
     cloned->bits = this->bits;
+    cloned->kickGiftKicks = this->kickGiftKicks;
     cloned->tiktokGiftDiamondCount = this->tiktokGiftDiamondCount;
     std::ranges::transform(this->elements, std::back_inserter(cloned->elements),
                            [](const auto &element) {
@@ -399,6 +400,11 @@ QJsonObject Message::toJson() const
     if (this->bits > 0)
     {
         msg["bits"_L1] = static_cast<qint64>(this->bits);
+    }
+    if (this->kickGiftKicks > 0)
+    {
+        msg["kickGiftKicks"_L1] =
+            static_cast<qint64>(this->kickGiftKicks);
     }
     if (this->tiktokGiftDiamondCount > 0)
     {

@@ -85,7 +85,8 @@ bool isActivityDateSeparatorMessage(const Message &message)
 bool isActivityKickRewardRedemptionMessage(const Message &message)
 {
     return message.platform == MessagePlatform::Kick &&
-           message.flags.has(MessageFlag::RedeemedChannelPointReward);
+           message.flags.has(MessageFlag::RedeemedChannelPointReward) &&
+           message.kickGiftKicks == 0;
 }
 
 bool isActivityTwitchAnnouncementHeaderMessage(const Message &message)
@@ -110,6 +111,31 @@ bool isActivityTwitchBitsBadgeMessage(const Message &message)
            message.flags.has(MessageFlag::System) &&
            ACTIVITY_TWITCH_BITS_BADGE_REGEX.match(message.messageText)
                .hasMatch();
+}
+
+bool isActivityTwitchBitsMessage(const Message &message)
+{
+    return message.platform == MessagePlatform::AnyOrTwitch &&
+           message.flags.has(MessageFlag::CheerMessage) && message.bits > 0;
+}
+
+bool shouldShowTwitchBitsInActivityPane(const Message &message,
+                                        uint32_t minimumBits)
+{
+    return isActivityTwitchBitsMessage(message) && message.bits >= minimumBits;
+}
+
+bool isActivityKickKicksGiftMessage(const Message &message)
+{
+    return message.platform == MessagePlatform::Kick &&
+           message.kickGiftKicks > 0;
+}
+
+bool shouldShowKickKicksGiftInActivityPane(const Message &message,
+                                           uint32_t minimumKicks)
+{
+    return isActivityKickKicksGiftMessage(message) &&
+           message.kickGiftKicks >= minimumKicks;
 }
 
 bool isActivityTikTokGiftMessage(const Message &message)
@@ -177,6 +203,8 @@ QString compactActivityGiftBombText(const Message &message)
 }
 
 bool shouldShowMessageInActivityPane(const Message &message,
+                                     uint32_t twitchMinimumBits,
+                                     uint32_t kickMinimumKicks,
                                      uint32_t tiktokGiftMinimumDiamonds)
 {
     if (isActivityBotMessage(message))
@@ -190,6 +218,17 @@ bool shouldShowMessageInActivityPane(const Message &message,
         isActivityTwitchBitsBadgeMessage(message))
     {
         return false;
+    }
+
+    if (isActivityTwitchBitsMessage(message))
+    {
+        return shouldShowTwitchBitsInActivityPane(message, twitchMinimumBits);
+    }
+
+    if (isActivityKickKicksGiftMessage(message))
+    {
+        return shouldShowKickKicksGiftInActivityPane(message,
+                                                    kickMinimumKicks);
     }
 
     if (isActivityTikTokGiftMessage(message))

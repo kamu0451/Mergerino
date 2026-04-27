@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "common/Channel.hpp"
 #include "messages/Message.hpp"
 #include "widgets/BaseWidget.hpp"
 
@@ -18,6 +19,8 @@
 #include <QWidget>
 
 #include <memory>
+#include <optional>
+#include <vector>
 
 namespace chatterino {
 
@@ -29,6 +32,7 @@ class MessageView;
 class LabelButton;
 class ResizingTextEdit;
 class ChannelView;
+class PlatformSwitchButton;
 class SvgButton;
 class SpellCheckHighlighter;
 enum class CompletionKind;
@@ -51,6 +55,10 @@ public:
 
     void setReply(MessagePtr target);
     void setPlaceholderText(const QString &text);
+    void updatePlatformSelector(bool animate = false);
+    std::optional<MessagePlatform> selectedSendPlatform() const;
+    QString selectedSendPlatformDisplayName() const;
+    QString selectedSendAccountName() const;
 
     /**
      * @brief Hide the widget
@@ -123,6 +131,7 @@ protected:
     void onTextChanged();
     void updateEmoteButton();
     void updateCompletionPopup();
+    void updatePlatformButtonLayout();
     void showCompletionPopup(const QString &text, CompletionKind kind);
     void hideCompletionPopup();
     void insertCompletionText(const QString &input_) const;
@@ -144,6 +153,12 @@ protected:
     void applyOuterMargin();
 
     int replyMessageWidth() const;
+
+    std::vector<MessagePlatform> availableSendPlatforms() const;
+    ChannelPtr channelForSendPlatform(MessagePlatform platform) const;
+    bool canSendToPlatform(MessagePlatform platform) const;
+    void selectSendPlatform(MessagePlatform platform);
+    void cycleSendPlatform();
 
     Split *const split_;
     ChannelView *const channelView_;
@@ -169,6 +184,9 @@ protected:
         QLabel *textEditLength;
         LabelButton *sendButton;
         QLabel *sendWaitStatus;
+        QVBoxLayout *rightVbox;
+        QHBoxLayout *buttonHbox;
+        PlatformSwitchButton *platformButton;
         SvgButton *emoteButton;
     } ui_;
 
@@ -179,6 +197,7 @@ protected:
     QStringList prevMsg_;
     QString currMsg_;
     int prevIndex_ = 0;
+    MessagePlatform selectedSendPlatform_ = MessagePlatform::AnyOrTwitch;
 
     // Hidden denotes whether this split input should be hidden or not
     // This is used instead of the regular QWidget::hide/show because
@@ -209,6 +228,8 @@ protected:
     InputHighlighter *inputHighlighter = nullptr;
 
     void updateFonts();
+
+    pajlada::Signals::NoArgSignal sendPlatformChanged;
 
 private Q_SLOTS:
     void editTextChanged();

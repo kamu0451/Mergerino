@@ -40,6 +40,8 @@ private:
 
     struct {
         QStackedWidget *accountStack = nullptr;
+        QPushButton *twitchProviderButton = nullptr;
+        QPushButton *kickProviderButton = nullptr;
         AccountSwitchWidget *accountSwitchWidget = nullptr;
         KickAccountSwitchWidget *kickAccountSwitcher = nullptr;
         QLabel *statusLabel = nullptr;

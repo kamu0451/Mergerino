@@ -18,11 +18,13 @@
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/helper/KickAccountSwitchWidget.hpp"
 
+#include <QIcon>
 #include <QLabel>
 #include <QLayout>
 #include <QPainter>
 #include <QPushButton>
 #include <QStackedWidget>
+#include <QStyle>
 
 namespace chatterino {
 
@@ -39,6 +41,18 @@ QString providerName(ProviderId provider)
         case ProviderId::Twitch:
         default:
             return "Twitch";
+    }
+}
+
+QString providerIconPath(ProviderId provider)
+{
+    switch (provider)
+    {
+        case ProviderId::Kick:
+            return u":/platforms/kick.svg"_s;
+        case ProviderId::Twitch:
+        default:
+            return u":/platforms/twitch.svg"_s;
     }
 }
 
@@ -59,6 +73,34 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
     this->setContentsMargins(0, 0, 0, 0);
 
     auto *vbox = new QVBoxLayout(this);
+    vbox->setContentsMargins(10, 8, 10, 10);
+    vbox->setSpacing(6);
+
+    auto *providerHbox = new QHBoxLayout();
+    providerHbox->setContentsMargins(0, 0, 0, 0);
+    providerHbox->setSpacing(4);
+
+    this->ui_.twitchProviderButton = new QPushButton(this);
+    this->ui_.twitchProviderButton->setObjectName("providerButton");
+    this->ui_.twitchProviderButton->setIcon(
+        QIcon(providerIconPath(ProviderId::Twitch)));
+    this->ui_.twitchProviderButton->setIconSize(QSize{16, 16});
+    this->ui_.twitchProviderButton->setCheckable(true);
+    this->ui_.twitchProviderButton->setFocusPolicy(Qt::NoFocus);
+    this->ui_.twitchProviderButton->setFixedSize(32, 24);
+    providerHbox->addWidget(this->ui_.twitchProviderButton);
+
+    this->ui_.kickProviderButton = new QPushButton(this);
+    this->ui_.kickProviderButton->setObjectName("providerButton");
+    this->ui_.kickProviderButton->setIcon(
+        QIcon(providerIconPath(ProviderId::Kick)));
+    this->ui_.kickProviderButton->setIconSize(QSize{16, 16});
+    this->ui_.kickProviderButton->setCheckable(true);
+    this->ui_.kickProviderButton->setFocusPolicy(Qt::NoFocus);
+    this->ui_.kickProviderButton->setFixedSize(32, 24);
+    providerHbox->addWidget(this->ui_.kickProviderButton);
+    providerHbox->addStretch(1);
+    vbox->addLayout(providerHbox);
 
     this->ui_.accountStack = new QStackedWidget(this);
     vbox->addWidget(this->ui_.accountStack, 1);
@@ -91,6 +133,15 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
                              getApp()->getWindows()->activeAccountProvider();
                          if (provider == ProviderId::Kick)
                          {
+                             auto current = getApp()->getAccounts()->kick.current();
+                             if (!current->isAnonymous())
+                             {
+                                 getApp()->getAccounts()->kick.currentUsername =
+                                     "";
+                                 this->refresh();
+                                 return;
+                             }
+
                              KickLoginPage::startLoginFlow(
                                  this->parentWidget(),
                                  [this]() { this->refresh(); });
@@ -98,10 +149,31 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
                              return;
                          }
 
+                         auto current = getApp()->getAccounts()->twitch.getCurrent();
+                         if (!current->isAnon())
+                         {
+                             getApp()->getAccounts()->twitch.currentUsername =
+                                 "";
+                             this->refresh();
+                             return;
+                         }
+
                          LoginDialog dialog(
                              this,
                              provider);
                          dialog.exec();
+                         this->refresh();
+                     });
+    QObject::connect(this->ui_.twitchProviderButton, &QPushButton::clicked,
+                     this, [this]() {
+                         getApp()->getWindows()->setActiveAccountProvider(
+                             ProviderId::Twitch);
+                         this->refresh();
+                     });
+    QObject::connect(this->ui_.kickProviderButton, &QPushButton::clicked,
+                     this, [this]() {
+                         getApp()->getWindows()->setActiveAccountProvider(
+                             ProviderId::Kick);
                          this->refresh();
                      });
     QObject::connect(this->ui_.manageAccountsButton, &QPushButton::clicked,
@@ -173,11 +245,35 @@ void AccountSwitchPopup::themeChangedEvent()
             background: %5;
             color: %1;
         }
+        QPushButton:checked {
+            background: %4;
+        }
         QPushButton:hover {
             background: %3;
         }
         QPushButton:pressed {
             background: %6;
+        }
+        QPushButton#providerButton {
+            background: transparent;
+            border: 1px solid #12555555;
+            padding: 0;
+        }
+        QPushButton#providerButton[selectedProvider="true"] {
+            background: transparent;
+            border: 1px solid #6a6a6a;
+        }
+        QPushButton#providerButton:hover {
+            background: transparent;
+            border: 1px solid #24555555;
+        }
+        QPushButton#providerButton[selectedProvider="true"]:hover {
+            background: transparent;
+            border: 1px solid #777777;
+        }
+        QPushButton#providerButton[selectedProvider="true"]:pressed {
+            background: transparent;
+            border: 1px solid #858585;
         }
 
         chatterino--AccountSwitchPopup {
@@ -213,8 +309,26 @@ void AccountSwitchPopup::updateCurrentPage()
         provider == ProviderId::Kick
             ? static_cast<QWidget *>(this->ui_.kickAccountSwitcher)
             : static_cast<QWidget *>(this->ui_.accountSwitchWidget));
+    auto setProviderButtonSelected = [](QPushButton *button, bool selected) {
+        button->setChecked(selected);
+        button->setProperty("selectedProvider", selected);
+        button->style()->unpolish(button);
+        button->style()->polish(button);
+        button->update();
+    };
+    setProviderButtonSelected(this->ui_.twitchProviderButton,
+                              provider == ProviderId::Twitch);
+    setProviderButtonSelected(this->ui_.kickProviderButton,
+                              provider == ProviderId::Kick);
+
+    const bool loggedIn =
+        provider == ProviderId::Kick
+            ? !getApp()->getAccounts()->kick.current()->isAnonymous()
+            : !getApp()->getAccounts()->twitch.getCurrent()->isAnon();
     this->ui_.loginButton->setText(
-        QString("Log In to %1").arg(providerName(provider)));
+        QString("%1 %2")
+            .arg(loggedIn ? "Log out of" : "Log in to")
+            .arg(providerName(provider)));
 }
 
 void AccountSwitchPopup::updateStatusText()

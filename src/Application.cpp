@@ -352,6 +352,9 @@ int Application::run()
             maybePromptForStartup(&mainWindow);
         });
 #endif
+        QTimer::singleShot(3000, &mainWindow, [] {
+            getApp()->getUpdates().checkForUpdates();
+        });
     }
 
     getSettings()->enableBTTVChannelEmotes.connect(

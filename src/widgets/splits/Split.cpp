@@ -103,6 +103,40 @@ bool mergedSplitHasTikTokEnabled(const Split *split)
     return merged != nullptr && merged->config().tiktokEnabled;
 }
 
+bool splitHasTwitchActivity(const Split *split)
+{
+    if (!split)
+    {
+        return false;
+    }
+
+    auto *merged = dynamic_cast<MergedChannel *>(split->getChannel().get());
+    if (merged != nullptr)
+    {
+        return merged->config().twitchEnabled;
+    }
+
+    const auto channel = split->getChannel();
+    return channel != nullptr && channel->getType() == Channel::Type::Twitch;
+}
+
+bool splitHasKickActivity(const Split *split)
+{
+    if (!split)
+    {
+        return false;
+    }
+
+    auto *merged = dynamic_cast<MergedChannel *>(split->getChannel().get());
+    if (merged != nullptr)
+    {
+        return merged->config().kickEnabled;
+    }
+
+    const auto channel = split->getChannel();
+    return channel != nullptr && channel->getType() == Channel::Type::Kick;
+}
+
 QStringList normalizedFilterIds(const QList<QUuid> &ids)
 {
     QStringList out;
@@ -316,15 +350,24 @@ void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
         const auto activityMessageScale = activitySplit->activityMessageScale();
         const auto tiktokActivityMinimumDiamonds =
             activitySplit->tiktokActivityMinimumDiamonds();
+        const auto twitchActivityMinimumBits =
+            activitySplit->twitchActivityMinimumBits();
+        const auto kickActivityMinimumKicks =
+            activitySplit->kickActivityMinimumKicks();
 
         activitySplit->setFilterActivity(false);
         activitySplit->setChannel(ownerSplit->getIndirectChannel());
         activitySplit->setFilters(ownerSplit->getFilters());
         activitySplit->setInputEnabled(false);
         activitySplit->setActivityMessageScale(activityMessageScale);
+        activitySplit->setTwitchActivityMinimumBits(
+            twitchActivityMinimumBits);
+        activitySplit->setKickActivityMinimumKicks(kickActivityMinimumKicks);
         activitySplit->setTikTokActivityMinimumDiamonds(
             tiktokActivityMinimumDiamonds);
         activitySplit->setPlatformIndicatorMode(activityPlatformIndicatorMode);
+        ownerSplit->setTwitchActivityMinimumBits(twitchActivityMinimumBits);
+        ownerSplit->setKickActivityMinimumKicks(kickActivityMinimumKicks);
         ownerSplit->setTikTokActivityMinimumDiamonds(
             tiktokActivityMinimumDiamonds);
         ownerSplit->setFilterActivity(true);
@@ -400,6 +443,10 @@ Split::Split(QWidget *parent)
         getApp()->getAccounts()->kick.currentUserChanged, [this] {
             this->updateInputPlaceholder();
         });
+    this->signalHolder_.managedConnect(this->input_->sendPlatformChanged,
+                                       [this] {
+                                           this->updateInputPlaceholder();
+                                       });
     this->updateInputPlaceholder();
 
     // clear SplitInput selection when selecting in ChannelView
@@ -1107,6 +1154,16 @@ PlatformIndicatorMode Split::platformIndicatorMode() const
     return this->platformIndicatorMode_;
 }
 
+uint32_t Split::twitchActivityMinimumBits() const
+{
+    return this->twitchActivityMinimumBits_;
+}
+
+uint32_t Split::kickActivityMinimumKicks() const
+{
+    return this->kickActivityMinimumKicks_;
+}
+
 uint32_t Split::tiktokActivityMinimumDiamonds() const
 {
     return this->tiktokActivityMinimumDiamonds_;
@@ -1221,6 +1278,30 @@ void Split::setPlatformIndicatorMode(PlatformIndicatorMode value)
     getApp()->getWindows()->queueSave();
 }
 
+void Split::setTwitchActivityMinimumBits(uint32_t value)
+{
+    if (this->twitchActivityMinimumBits_ == value)
+    {
+        return;
+    }
+
+    this->twitchActivityMinimumBits_ = value;
+    this->view_->refreshMessages();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setKickActivityMinimumKicks(uint32_t value)
+{
+    if (this->kickActivityMinimumKicks_ == value)
+    {
+        return;
+    }
+
+    this->kickActivityMinimumKicks_ = value;
+    this->view_->refreshMessages();
+    getApp()->getWindows()->queueSave();
+}
+
 void Split::setTikTokActivityMinimumDiamonds(uint32_t value)
 {
     if (this->tiktokActivityMinimumDiamonds_ == value)
@@ -1283,33 +1364,37 @@ void Split::updateInputVisibility()
 
 void Split::updateInputPlaceholder()
 {
+    this->input_->updatePlatformSelector();
+
     if (auto *merged = dynamic_cast<MergedChannel *>(this->getChannel().get()))
     {
-        QStringList sendTargets;
         QStringList loginTargets;
 
         if (merged->config().twitchEnabled)
         {
             loginTargets.append("Twitch");
-            if (getApp()->getAccounts()->twitch.isLoggedIn())
-            {
-                sendTargets.append("Twitch");
-            }
         }
         if (merged->config().kickEnabled)
         {
             loginTargets.append("Kick");
-            if (getApp()->getAccounts()->kick.isLoggedIn())
-            {
-                sendTargets.append("Kick");
-            }
         }
 
-        if (!sendTargets.isEmpty())
+        const auto platformName =
+            this->input_->selectedSendPlatformDisplayName();
+        if (!platformName.isEmpty())
         {
-            this->input_->ui_.textEdit->setPlaceholderText(
-                QString("Send merged chat to %1...")
-                    .arg(sendTargets.join(" + ")));
+            const auto accountName = this->input_->selectedSendAccountName();
+            if (!accountName.isEmpty())
+            {
+                this->input_->ui_.textEdit->setPlaceholderText(
+                    QString("Send to %1 as %2...")
+                        .arg(platformName, accountName));
+            }
+            else
+            {
+                this->input_->ui_.textEdit->setPlaceholderText(
+                    QString("Send to %1...").arg(platformName));
+            }
             return;
         }
 
@@ -1333,7 +1418,7 @@ void Split::updateInputPlaceholder()
             {
                 return QStringLiteral("Log in to Kick to send messages...");
             }
-            return QString(u"Send message as " % user->username() % u"...");
+            return QString(u"Send to Kick as " % user->username() % u"...");
         }();
         this->input_->ui_.textEdit->setPlaceholderText(placeholderText);
         return;
@@ -1349,11 +1434,11 @@ void Split::updateInputPlaceholder()
 
     if (user->isAnon())
     {
-        placeholderText = "Log in to send messages...";
+        placeholderText = "Log in to Twitch to send messages...";
     }
     else
     {
-        placeholderText = QString("Send message as %1...")
+        placeholderText = QString("Send to Twitch as %1...")
                               .arg(getApp()
                                        ->getAccounts()
                                        ->twitch.getCurrent()
@@ -1632,6 +1717,8 @@ void Split::showSettingsDialog()
         this->isActivityPane() ? findActivityOwnerSplit(this) : this;
     auto *dialog = new SplitSettingsDialog(
         this->isActivityPane(),
+        this->isActivityPane() && splitHasTwitchActivity(settingsOwnerSplit),
+        this->isActivityPane() && splitHasKickActivity(settingsOwnerSplit),
         this->isActivityPane() && mergedSplitHasTikTokEnabled(settingsOwnerSplit),
         this);
     dialog->setPlatformIndicatorMode(this->platformIndicatorMode());
@@ -1642,6 +1729,8 @@ void Split::showSettingsDialog()
         this->slowerChatMessagesPerSecond());
     dialog->setSlowerChatMessageAnimations(
         this->slowerChatMessageAnimations());
+    dialog->setTwitchActivityMinimumBits(this->twitchActivityMinimumBits());
+    dialog->setKickActivityMinimumKicks(this->kickActivityMinimumKicks());
     dialog->setTikTokActivityMinimumDiamonds(
         this->tiktokActivityMinimumDiamonds());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -1656,10 +1745,18 @@ void Split::showSettingsDialog()
             if (this->isActivityPane())
             {
                 this->setActivityMessageScale(dialog->activityMessageScale());
+                this->setTwitchActivityMinimumBits(
+                    dialog->twitchActivityMinimumBits());
+                this->setKickActivityMinimumKicks(
+                    dialog->kickActivityMinimumKicks());
                 this->setTikTokActivityMinimumDiamonds(
                     dialog->tiktokActivityMinimumDiamonds());
                 if (auto *ownerSplit = findActivityOwnerSplit(this))
                 {
+                    ownerSplit->setTwitchActivityMinimumBits(
+                        dialog->twitchActivityMinimumBits());
+                    ownerSplit->setKickActivityMinimumKicks(
+                        dialog->kickActivityMinimumKicks());
                     ownerSplit->setTikTokActivityMinimumDiamonds(
                         dialog->tiktokActivityMinimumDiamonds());
                 }
@@ -1920,6 +2017,8 @@ void Split::popup()
         this->slowerChatMessagesPerSecond());
     split->setSlowerChatMessageAnimations(
         this->slowerChatMessageAnimations());
+    split->setTwitchActivityMinimumBits(this->twitchActivityMinimumBits());
+    split->setKickActivityMinimumKicks(this->kickActivityMinimumKicks());
     split->setTikTokActivityMinimumDiamonds(
         this->tiktokActivityMinimumDiamonds());
     split->setPlatformIndicatorMode(this->platformIndicatorMode());

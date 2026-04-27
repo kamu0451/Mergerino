@@ -103,6 +103,26 @@ void TitleBarButton::paintContent(QPainter &painter)
             painter.restore();
             break;
         }
+        case TitleBarButtonStyle::Download: {
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setPen(QPen(color, 1.4));
+
+            const auto center = QPointF(centerX, this->height() * 0.5);
+            const auto shaftTop = QPointF(center.x(), this->height() * 0.28);
+            const auto shaftBottom =
+                QPointF(center.x(), this->height() * 0.58);
+            const auto arrowLeft =
+                QPointF(center.x() - xD * 0.45, this->height() * 0.48);
+            const auto arrowRight =
+                QPointF(center.x() + xD * 0.45, this->height() * 0.48);
+            const auto arrowTip =
+                QPointF(center.x(), this->height() * 0.68);
+
+            painter.drawLine(shaftTop, shaftBottom);
+            painter.drawLine(arrowLeft, arrowTip);
+            painter.drawLine(arrowRight, arrowTip);
+            break;
+        }
         default:;
     }
 

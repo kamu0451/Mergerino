@@ -796,9 +796,33 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
     }
 
     .header-side {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       color: var(--muted);
       font-size: 11px;
       white-space: nowrap;
+    }
+
+    .clear-activity {
+      display: none;
+      border: 1px solid var(--divider);
+      background: transparent;
+      color: var(--muted);
+      height: 20px;
+      padding: 0 7px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    .clear-activity.visible {
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .clear-activity:hover {
+      color: var(--header-focused-text);
+      border-color: var(--muted);
     }
 
     .feed {
@@ -971,7 +995,10 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
         <div class="header-platforms" id="header-platforms"></div>
         <div class="pane-title" id="pane-title">Connecting...</div>
       </div>
-      <div class="header-side" id="message-count">0 messages</div>
+      <div class="header-side">
+        <button class="clear-activity" id="clear-activity" type="button">Clear</button>
+        <span id="message-count">0 messages</span>
+      </div>
     </div>
 
     <section class="feed" id="feed"></section>
@@ -992,10 +1019,13 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
     const headerPlatforms = document.getElementById('header-platforms');
     const paneTitle = document.getElementById('pane-title');
     const messageCount = document.getElementById('message-count');
+    const clearActivity = document.getElementById('clear-activity');
     const refreshState = document.getElementById('refresh-state');
     const chatTab = document.getElementById('chat-tab');
     const activityTab = document.getElementById('activity-tab');
     let tabsCollapsed = localStorage.getItem(tabsCollapsedStorageKey) === '1';
+    const clearedActivityIdsByTab = new Map();
+    let latestState = null;
 
     function escapePlatform(platform) {
       return (platform || 'twitch').toLowerCase();
@@ -1086,13 +1116,32 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
       feed.innerHTML = `<div class="empty">${text}</div>`;
     }
 
+    function activityClearKey(state) {
+      return String(Number.isInteger(state.selectedTab) ? state.selectedTab : -1);
+    }
+
+    function visibleMessages(state) {
+      const messages = state.messages || [];
+      if (state.view !== 'activity') {
+        return messages;
+      }
+
+      const cleared = clearedActivityIdsByTab.get(activityClearKey(state));
+      if (!cleared || cleared.size === 0) {
+        return messages;
+      }
+
+      return messages.filter((message) => !cleared.has(message.id || ''));
+    }
+
     function renderMessages(state) {
       if (!state.ready) {
         renderEmpty(state.emptyMessage || 'Select a split in Mergerino.');
         return;
       }
 
-      if (!state.messages || state.messages.length === 0) {
+      const messages = visibleMessages(state);
+      if (messages.length === 0) {
         renderEmpty('This pane is live, but there are no visible messages yet.');
         return;
       }
@@ -1102,7 +1151,7 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
 
       feed.innerHTML = '';
 
-      for (const message of state.messages) {
+      for (const message of messages) {
         const item = document.createElement('article');
         const platform = escapePlatform(message.platform);
         item.className =
@@ -1171,7 +1220,9 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
         }
 
         const state = await response.json();
+        latestState = state;
         setMode(state.view || 'chat');
+        clearActivity.classList.toggle('visible', state.view === 'activity');
         renderPageTabs(state);
         renderHeaderPlatforms(state);
         chatTab.href = dockUrl('chat', state.selectedTab);
@@ -1185,13 +1236,14 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
           navigateTo('activity', state.selectedTab);
         };
         paneTitle.textContent = state.paneTitle || 'Mergerino OBS Dock';
-        messageCount.textContent = `${state.messageCount || 0} messages`;
+        messageCount.textContent = `${visibleMessages(state).length} messages`;
         refreshState.textContent = state.ready ? 'localhost' : 'waiting';
         refreshState.className = `windowbar-meta ${state.ready ? 'ready' : 'waiting'}`;
 
         renderMessages(state);
       } catch (error) {
         setMode(new URLSearchParams(window.location.search).get('view') || 'chat');
+        clearActivity.classList.remove('visible');
         pageTabs.innerHTML = '';
         headerPlatforms.innerHTML = '';
         paneTitle.textContent = 'Mergerino OBS Dock';
@@ -1206,6 +1258,23 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
       tabsCollapsed = !tabsCollapsed;
       localStorage.setItem(tabsCollapsedStorageKey, tabsCollapsed ? '1' : '0');
       applyTabsCollapsedState();
+    });
+
+    clearActivity.addEventListener('click', () => {
+      if (!latestState || latestState.view !== 'activity') {
+        return;
+      }
+
+      const key = activityClearKey(latestState);
+      const cleared = clearedActivityIdsByTab.get(key) || new Set();
+      for (const message of latestState.messages || []) {
+        if (message.id) {
+          cleared.add(message.id);
+        }
+      }
+      clearedActivityIdsByTab.set(key, cleared);
+      renderMessages(latestState);
+      messageCount.textContent = `${visibleMessages(latestState).length} messages`;
     });
 
     applyTabsCollapsedState();

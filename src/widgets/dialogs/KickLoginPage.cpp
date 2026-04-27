@@ -13,6 +13,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
@@ -40,6 +41,10 @@ const QUrl KICK_DEVELOPER_URL{u"https://kick.com/settings/developer"_s};
 constexpr uint16_t SERVER_PORT = 38275;
 constexpr auto HTML_CONTENT_TYPE = "text/html; charset=utf-8";
 constexpr auto JSON_CONTENT_TYPE = "application/json; charset=utf-8";
+constexpr qsizetype PKCE_VERIFIER_BYTES = 32;
+constexpr qsizetype STATE_BYTES = 32;
+constexpr int AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1000;
+constexpr int NETWORK_STEP_TIMEOUT_MS = 30 * 1000;
 
 QByteArray generateRandomBytes(qsizetype size)
 {
@@ -77,7 +82,8 @@ AuthParams startAuthSession()
 {
     auto base64Opts =
         QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals;
-    auto codeVerifier = generateRandomBytes(1024).toBase64(base64Opts);
+    auto codeVerifier =
+        generateRandomBytes(PKCE_VERIFIER_BYTES).toBase64(base64Opts);
 
     QCryptographicHash h(QCryptographicHash::Sha256);
     h.addData(codeVerifier);
@@ -86,7 +92,7 @@ AuthParams startAuthSession()
     return {
         .codeVerifier = codeVerifier,
         .codeChallenge = codeChallenge,
-        .state = generateRandomBytes(512).toBase64(base64Opts),
+        .state = generateRandomBytes(STATE_BYTES).toBase64(base64Opts),
     };
 }
 
@@ -121,16 +127,17 @@ QByteArray renderPage(const QString &title, const QString &body,
 <style>
   :root {
     color-scheme: dark;
-    --bg: #0b1110;
-    --bg-soft: #0f1716;
-    --card: rgba(18, 26, 25, 0.94);
-    --card-strong: #111918;
-    --ink: #edf6f2;
-    --muted: #9eb3ab;
-    --line: rgba(148, 174, 164, 0.2);
-    --accent: #00a650;
-    --accent-dark: #008844;
-    --accent-soft: rgba(0, 166, 80, 0.14);
+    --bg: #161918;
+    --card: #0f1413;
+    --card-strong: #151b19;
+    --ink: #f1f6f2;
+    --muted: #9aa7a0;
+    --soft: #c5d1ca;
+    --line: rgba(214, 226, 218, 0.13);
+    --line-strong: rgba(214, 226, 218, 0.22);
+    --accent: #15c96f;
+    --accent-dark: #0ca95a;
+    --accent-soft: rgba(21, 201, 111, 0.12);
     --danger-bg: rgba(161, 56, 24, 0.16);
     --danger-border: rgba(239, 135, 100, 0.38);
     --danger-ink: #ffb49d;
@@ -144,56 +151,102 @@ QByteArray renderPage(const QString &title, const QString &body,
   body {
     margin: 0;
     min-height: 100vh;
-    padding: 24px;
+    padding: 34px;
     background:
-      radial-gradient(circle at top left, rgba(0, 166, 80, 0.18), transparent 32%),
-      radial-gradient(circle at bottom right, rgba(10, 120, 68, 0.2), transparent 28%),
-      linear-gradient(180deg, #08100f 0%, var(--bg) 100%);
+      radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.055), transparent 34%),
+      linear-gradient(180deg, #202523 0%, var(--bg) 100%);
     color: var(--ink);
     font: 16px/1.5 "Segoe UI", "Helvetica Neue", sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
   }
 
   .card {
-    max-width: 860px;
+    width: min(100%, 900px);
+    max-width: 900px;
     margin: 0 auto;
-    min-height: calc(100vh - 48px);
+    min-height: min(620px, calc(100vh - 68px));
     background: var(--card);
     border: 1px solid var(--line);
-    border-radius: 18px;
-    padding: 28px 32px;
-    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.34);
-    backdrop-filter: blur(10px);
+    border-radius: 10px;
+    padding: 0;
+    box-shadow: 0 26px 70px rgba(0, 0, 0, 0.42);
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    animation: card-in 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  .login-shell-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 22px 26px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #151b19 0%, #101514 100%);
   }
 
   .eyebrow {
-    margin: 0 0 8px;
-    color: var(--accent-dark);
+    margin: 0 0 4px;
+    color: var(--accent);
     font-size: 12px;
     font-weight: 700;
     letter-spacing: 0.12em;
-    text-align: center;
     text-transform: uppercase;
   }
 
+  .progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 160px;
+  }
+
+  .progress-dot {
+    width: 100%;
+    height: 4px;
+    border-radius: 999px;
+    background: rgba(214, 226, 218, 0.12);
+    overflow: hidden;
+  }
+
+  .progress-dot::before {
+    content: "";
+    display: block;
+    width: 100%;
+    height: 100%;
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: left center;
+    transition: transform 260ms ease;
+  }
+
+  .progress-dot.active::before,
+  .progress-dot.done::before {
+    transform: scaleX(1);
+  }
+
   h1 {
-    margin: 0 0 12px;
-    font-size: clamp(28px, 4vw, 40px);
-    line-height: 1.05;
+    margin: 0;
+    max-width: 620px;
+    font-size: clamp(34px, 6vw, 58px);
+    font-weight: 650;
+    line-height: 0.98;
+    letter-spacing: 0;
   }
 
   h2 {
     margin: 0;
-    font-size: clamp(22px, 3vw, 30px);
-    line-height: 1.1;
+    font-size: 24px;
+    line-height: 1.2;
   }
 
   .intro-copy {
-    margin: 0 0 12px;
-    color: #d4e4dd;
-    font-size: 17px;
-    text-align: center;
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
   }
 
   .wizard-form {
@@ -209,7 +262,7 @@ QByteArray renderPage(const QString &title, const QString &body,
   .wizard-track {
     display: flex;
     height: 100%;
-    transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: transform 460ms cubic-bezier(0.16, 1, 0.3, 1);
     will-change: transform;
   }
 
@@ -222,35 +275,45 @@ QByteArray renderPage(const QString &title, const QString &body,
     min-height: 100%;
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: flex-start;
     justify-content: center;
     gap: 18px;
-    padding: 28px 16px;
-    text-align: center;
+    width: min(100%, 690px);
+    margin: 0 auto;
+    padding: 54px 34px 48px;
+    text-align: left;
+    opacity: 0.36;
+    transform: translateY(10px);
+    transition: opacity 300ms ease, transform 300ms ease;
+  }
+
+  .wizard-step.is-active .step-screen {
+    opacity: 1;
+    transform: translateY(0);
   }
 
   .step-index {
     margin: 0;
-    color: #7fe3ad;
+    color: var(--accent);
     font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 0.14em;
+    font-weight: 700;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
   }
 
   .step-copy {
     margin: 0;
-    color: #d8e7e0;
-    font-size: 18px;
-    max-width: 560px;
+    color: var(--soft);
+    font-size: 16px;
+    max-width: 520px;
   }
 
   .setting-intent {
     margin: 0;
-    color: #7fe3ad;
+    color: var(--accent);
     font-size: 12px;
-    font-weight: 800;
-    letter-spacing: 0.14em;
+    font-weight: 700;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
   }
 
@@ -258,7 +321,8 @@ QByteArray renderPage(const QString &title, const QString &body,
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
-    justify-content: center;
+    justify-content: flex-start;
+    margin-top: 4px;
   }
 
   code {
@@ -268,12 +332,15 @@ QByteArray renderPage(const QString &title, const QString &body,
 
   .hero-code {
     display: block;
-    max-width: 680px;
+    width: min(100%, 560px);
     overflow-wrap: anywhere;
-    color: #d8f7e7;
-    font-size: clamp(24px, 3.2vw, 36px);
-    font-weight: 800;
-    letter-spacing: -0.02em;
+    padding: 16px 18px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: #0b0f0e;
+    color: #e4eee9;
+    font-size: 18px;
+    font-weight: 700;
     line-height: 1.2;
   }
 
@@ -283,61 +350,76 @@ QByteArray renderPage(const QString &title, const QString &body,
 
   .scope-intro {
     margin: 0;
-    color: #d8e7e0;
-    font-size: 18px;
-    max-width: 620px;
+    color: var(--soft);
+    font-size: 15px;
+    max-width: 580px;
   }
 
   .scope-warning {
     margin: -4px 0 0;
-    color: #92f2bc;
-    font-size: 14px;
+    color: var(--accent);
+    font-size: 12px;
     font-weight: 700;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.12em;
     text-transform: uppercase;
   }
 
   .scope-list {
     display: grid;
-    gap: 12px;
-    width: min(100%, 760px);
-    margin: 6px 0 0;
+    gap: 10px;
+    width: 100%;
+    margin: 2px 0 0;
     text-align: left;
   }
 
   .scope-item {
     display: grid;
-    grid-template-columns: 28px minmax(0, 1fr);
-    align-items: start;
-    gap: 14px;
+    grid-template-columns: 20px minmax(0, 1fr);
+    align-items: center;
+    gap: 10px;
+    padding: 11px 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--card-strong);
+    transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+  }
+
+  .scope-item:hover {
+    border-color: rgba(21, 201, 111, 0.32);
+    background: #18211e;
+    transform: translateX(2px);
   }
 
   .scope-icon {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
-    border-radius: 999px;
-    background: rgba(32, 196, 102, 0.16);
-    color: #7fe3ad;
-    font-size: 16px;
-    font-weight: 900;
-    line-height: 1;
+    width: 8px;
+    height: 8px;
+    margin-left: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-soft);
   }
 
   .scope-label {
     color: #edf6f2;
-    font-size: 20px;
-    font-weight: 700;
-    line-height: 1.25;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.35;
   }
 
   .single-field {
     display: grid;
-    gap: 6px;
-    width: min(100%, 460px);
+    gap: 9px;
+    width: min(100%, 560px);
     text-align: left;
+  }
+
+  .credential-stack {
+    display: grid;
+    gap: 14px;
+    width: min(100%, 560px);
   }
 
   .single-field span {
@@ -347,17 +429,24 @@ QByteArray renderPage(const QString &title, const QString &body,
 
   input {
     width: 100%;
-    padding: 12px 14px;
-    border: 1px solid rgba(148, 174, 164, 0.28);
-    border-radius: 12px;
-    background: rgba(7, 11, 11, 0.72);
+    padding: 13px 14px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    background: #0b0f0e;
     color: var(--ink);
     font: inherit;
+    transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
   }
 
   input:focus {
     outline: 2px solid rgba(0, 166, 80, 0.24);
     border-color: var(--accent);
+    background: #0d1211;
+    box-shadow: 0 0 0 4px rgba(21, 201, 111, 0.08);
+  }
+
+  .secret-input {
+    -webkit-text-security: disc;
   }
 
   button, .link-button {
@@ -365,15 +454,15 @@ QByteArray renderPage(const QString &title, const QString &body,
     align-items: center;
     justify-content: center;
     gap: 8px;
-    min-height: 46px;
+    min-height: 40px;
     padding: 0 16px;
     border: 0;
-    border-radius: 999px;
+    border-radius: 8px;
     cursor: pointer;
     text-decoration: none;
     font: inherit;
     font-weight: 700;
-    transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+    transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
   }
 
   button.primary, .link-button.primary {
@@ -383,16 +472,18 @@ QByteArray renderPage(const QString &title, const QString &body,
 
   button.primary:hover, .link-button.primary:hover {
     background: var(--accent-dark);
+    transform: translateY(-1px);
+    box-shadow: 0 10px 24px rgba(21, 201, 111, 0.18);
   }
 
   button.secondary, .link-button.secondary {
-    background: #1b2422;
+    background: #171d1b;
     color: var(--ink);
-    border: 1px solid rgba(148, 174, 164, 0.22);
+    border: 1px solid var(--line-strong);
   }
 
   button.secondary:hover, .link-button.secondary:hover {
-    background: #22302d;
+    background: #1d2523;
   }
 
   button.secondary.copied {
@@ -407,11 +498,19 @@ QByteArray renderPage(const QString &title, const QString &body,
     gap: 10px;
   }
 
+  .standalone-page {
+    display: grid;
+    align-content: center;
+    gap: 16px;
+    flex: 1;
+    padding: 54px 34px;
+  }
+
   .notice {
-    margin: 0 0 18px;
-    padding: 14px 16px;
-    border-radius: 14px;
-    text-align: center;
+    margin: 18px 26px 0;
+    padding: 12px 14px;
+    border-radius: 8px;
+    text-align: left;
   }
 
   .notice.error {
@@ -421,24 +520,49 @@ QByteArray renderPage(const QString &title, const QString &body,
   }
 
   .status {
-    margin: 12px 0 18px;
+    margin: 0;
     color: var(--muted);
   }
 
   .footnote {
-    margin-top: 16px;
+    margin: 0;
     color: var(--muted);
     font-size: 14px;
+  }
+
+  @keyframes card-in {
+    from {
+      opacity: 0;
+      transform: translateY(10px) scale(0.992);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
   }
 
   @media (max-width: 640px) {
     body {
       padding: 14px;
+      align-items: stretch;
     }
 
     .card {
       min-height: calc(100vh - 28px);
-      padding: 22px 18px;
+    }
+
+    .login-shell-header {
+      align-items: flex-start;
+      flex-direction: column;
+      padding: 18px;
+    }
+
+    .progress {
+      width: 100%;
+    }
+
+    h1 {
+      font-size: 34px;
     }
 
     .step-actions {
@@ -450,7 +574,8 @@ QByteArray renderPage(const QString &title, const QString &body,
     }
 
     .step-screen {
-      padding: 18px 8px;
+      justify-content: flex-start;
+      padding: 34px 18px 28px;
     }
   }
 </style>
@@ -475,15 +600,25 @@ QByteArray renderWizardPage(const QString &clientID, const QString &clientSecret
 
     auto body = QStringLiteral(R"KICK(
 <main class="card">
-  <p class="eyebrow">Kick Login</p>
-  <p class="intro-copy">One thing at a time.</p>
+  <header class="login-shell-header">
+    <div>
+      <p class="eyebrow">Kick Login</p>
+      <p class="intro-copy">Create the Kick app, paste the two values, then connect.</p>
+    </div>
+    <div class="progress" aria-label="Kick login progress">
+      <span class="progress-dot active"></span>
+      <span class="progress-dot"></span>
+      <span class="progress-dot"></span>
+      <span class="progress-dot"></span>
+    </div>
+  </header>
   %1
   <form id="kick-login-form" class="wizard-form" method="post" action="/start" autocomplete="off">
     <div class="wizard-viewport">
       <div id="wizard-track" class="wizard-track">
         <section class="wizard-step">
           <div class="step-screen">
-            <p class="step-index">1 / 5</p>
+            <p class="step-index">1 / 4</p>
             <h1>Create a Kick app</h1>
             <p class="step-copy">Open Kick's developer page and make a new app.</p>
             <div class="step-actions">
@@ -494,7 +629,7 @@ QByteArray renderWizardPage(const QString &clientID, const QString &clientSecret
         </section>
         <section class="wizard-step">
           <div class="step-screen">
-            <p class="step-index">2 / 5</p>
+            <p class="step-index">2 / 4</p>
             <h1>Add this redirect URL</h1>
             <code id="redirect-uri" class="hero-code">%2</code>
             <div class="step-actions">
@@ -506,63 +641,39 @@ QByteArray renderWizardPage(const QString &clientID, const QString &clientSecret
         </section>
         <section class="wizard-step">
           <div class="step-screen">
-            <p class="step-index">3 / 5</p>
+            <p class="step-index">3 / 4</p>
             <p class="setting-intent">Turn these on in Kick</p>
-            <div class="setting-check">✓</div>
+            <div class="setting-check"></div>
             <h1>Enable these 6 boxes only</h1>
             <p class="scope-intro">Turn on every box in this list. Leave every other Kick box off.</p>
             <p class="scope-warning">Only these 6</p>
             <div class="scope-list" role="list" aria-label="Required Kick scopes">
               <div class="scope-item" role="listitem">
-                <span class="scope-icon">✓</span>
+                <span class="scope-icon"></span>
                 <span class="scope-label">Read user information (including email address)</span>
               </div>
               <div class="scope-item" role="listitem">
-                <span class="scope-icon">✓</span>
+                <span class="scope-icon"></span>
                 <span class="scope-label">Read channel information</span>
               </div>
               <div class="scope-item" role="listitem">
-                <span class="scope-icon">✓</span>
+                <span class="scope-icon"></span>
                 <span class="scope-label">Update channel information</span>
               </div>
               <div class="scope-item" role="listitem">
-                <span class="scope-icon">✓</span>
+                <span class="scope-icon"></span>
                 <span class="scope-label">Write to Chat feed</span>
               </div>
               <div class="scope-item" role="listitem">
-                <span class="scope-icon">✓</span>
+                <span class="scope-icon"></span>
                 <span class="scope-label">Execute moderation actions for moderators</span>
               </div>
               <div class="scope-item" role="listitem">
-                <span class="scope-icon">✓</span>
+                <span class="scope-icon"></span>
                 <span class="scope-label">Execute moderation actions on chat messages</span>
               </div>
             </div>
             <div class="step-actions">
-              <button type="button" class="secondary" data-step-target="2">Back</button>
-              <button type="button" class="primary" data-step-target="8">Next</button>
-            </div>
-          </div>
-        </section>
-        <section class="wizard-step">
-          <div class="step-screen">
-            <p class="step-index">4 / 10</p>
-            <p class="setting-intent">Turn this on in Kick</p>
-            <div class="setting-check">✓</div>
-            <h1>Read channel information</h1>
-            <div class="step-actions">
-              <button type="button" class="secondary" data-step-target="2">Back</button>
-              <button type="button" class="primary" data-next-step>Next</button>
-            </div>
-          </div>
-        </section>
-        <section class="wizard-step">
-          <div class="step-screen">
-            <p class="step-index">5 / 10</p>
-            <p class="setting-intent">Turn this on in Kick</p>
-            <div class="setting-check">✓</div>
-            <h1>Update channel information</h1>
-            <div class="step-actions">
               <button type="button" class="secondary" data-prev-step>Back</button>
               <button type="button" class="primary" data-next-step>Next</button>
             </div>
@@ -570,64 +681,19 @@ QByteArray renderWizardPage(const QString &clientID, const QString &clientSecret
         </section>
         <section class="wizard-step">
           <div class="step-screen">
-            <p class="step-index">6 / 10</p>
-            <p class="setting-intent">Turn this on in Kick</p>
-            <div class="setting-check">✓</div>
-            <h1>Write to Chat feed</h1>
-            <div class="step-actions">
-              <button type="button" class="secondary" data-prev-step>Back</button>
-              <button type="button" class="primary" data-next-step>Next</button>
-            </div>
-          </div>
-        </section>
-        <section class="wizard-step">
-          <div class="step-screen">
-            <p class="step-index">7 / 10</p>
-            <p class="setting-intent">Turn this on in Kick</p>
-            <div class="setting-check">✓</div>
-            <h1>Execute moderation actions for moderators</h1>
-            <div class="step-actions">
-              <button type="button" class="secondary" data-prev-step>Back</button>
-              <button type="button" class="primary" data-next-step>Next</button>
-            </div>
-          </div>
-        </section>
-        <section class="wizard-step">
-          <div class="step-screen">
-            <p class="step-index">8 / 10</p>
-            <p class="setting-intent">Turn this on in Kick</p>
-            <div class="setting-check">✓</div>
-            <h1>Execute moderation actions on chat messages</h1>
-            <div class="step-actions">
-              <button type="button" class="secondary" data-prev-step>Back</button>
-              <button type="button" class="primary" data-next-step>Next</button>
-            </div>
-          </div>
-        </section>
-        <section class="wizard-step">
-          <div class="step-screen">
-            <p class="step-index">4 / 5</p>
+            <p class="step-index">4 / 4</p>
             <p class="setting-intent">Paste this from Kick</p>
-            <h1>Client ID</h1>
-            <label class="single-field">
-              <span>Client ID</span>
-              <input id="client-id-input" name="client_id" value="%4" placeholder="Paste Client ID here" spellcheck="false" required>
-            </label>
-            <div class="step-actions">
-              <button type="button" class="secondary" data-step-target="2">Back</button>
-              <button type="button" class="primary" data-next-step data-require="client-id-input">Next</button>
+            <h1>Client ID and secret</h1>
+            <div class="credential-stack">
+              <label class="single-field">
+                <span>Client ID</span>
+                <input id="client-id-input" name="client_id" value="%4" placeholder="Paste Client ID here" spellcheck="false" autocomplete="off" autocapitalize="off" data-lpignore="true" data-1p-ignore="true" required>
+              </label>
+              <label class="single-field">
+                <span>Client Secret</span>
+                <input id="client-secret-input" class="secret-input" type="text" name="client_secret" value="%5" placeholder="Paste Client Secret here" spellcheck="false" autocomplete="off" autocapitalize="off" data-lpignore="true" data-1p-ignore="true" required>
+              </label>
             </div>
-          </div>
-        </section>
-        <section class="wizard-step">
-          <div class="step-screen">
-            <p class="step-index">5 / 5</p>
-            <p class="setting-intent">Paste this from Kick</p>
-            <h1>Client Secret</h1>
-            <label class="single-field">
-              <span>Client Secret</span>
-              <input id="client-secret-input" type="password" name="client_secret" value="%5" placeholder="Paste Client Secret here" spellcheck="false" required>
-            </label>
             <div class="step-actions">
               <button type="button" class="secondary" data-prev-step>Back</button>
               <button type="submit" class="primary">Continue to Kick</button>
@@ -649,10 +715,19 @@ const totalSteps = document.querySelectorAll('.wizard-step').length;
 let currentStep = 0;
 let copyResetTimer = null;
 const wizardTrack = document.getElementById('wizard-track');
+const wizardSteps = Array.from(document.querySelectorAll('.wizard-step'));
+const progressDots = Array.from(document.querySelectorAll('.progress-dot'));
 
 function setStep(nextStep) {
   currentStep = Math.max(0, Math.min(totalSteps - 1, nextStep));
   wizardTrack.style.transform = 'translateX(-' + (currentStep * 100) + '%)';
+  wizardSteps.forEach((step, index) => {
+    step.classList.toggle('is-active', index === currentStep);
+  });
+  progressDots.forEach((dot, index) => {
+    dot.classList.toggle('active', index === currentStep);
+    dot.classList.toggle('done', index < currentStep);
+  });
 }
 
 document.querySelectorAll('[data-step-target]').forEach((button) => {
@@ -689,9 +764,9 @@ if (clientIdInput) {
   clientIdInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') {
       event.preventDefault();
-      const nextButton = document.querySelector('[data-require="client-id-input"]');
-      if (nextButton) {
-        nextButton.click();
+      const secretInput = document.getElementById('client-secret-input');
+      if (secretInput) {
+        secretInput.focus();
       }
     }
   });
@@ -743,13 +818,20 @@ QByteArray renderRedirectPage(const QUrl &authURL)
     auto encodedAuthUrl = authURL.toString(QUrl::FullyEncoded).toHtmlEscaped();
     auto body = QStringLiteral(R"(
 <main class="card">
-  <p class="eyebrow">Kick Login</p>
-  <h1>Redirecting to Kick</h1>
-  <p class="status">Mergerino has your local app credentials and is sending you to Kick now.</p>
-  <div class="actions">
-    <a id="continue-link" class="link-button primary" href="%1">Continue to Kick</a>
-    <a class="link-button secondary" href="/">Back</a>
-  </div>
+  <header class="login-shell-header">
+    <div>
+      <p class="eyebrow">Kick Login</p>
+      <p class="intro-copy">Sending the authorization request to Kick.</p>
+    </div>
+  </header>
+  <section class="standalone-page">
+    <h1>Redirecting to Kick</h1>
+    <p class="status">Mergerino has your local app credentials and is sending you to Kick now.</p>
+    <div class="actions">
+      <a id="continue-link" class="link-button primary" href="%1">Open Kick authorization</a>
+      <a class="link-button secondary" href="/">Back</a>
+    </div>
+  </section>
 </main>)")
                     .arg(encodedAuthUrl);
 
@@ -766,13 +848,21 @@ QByteArray renderFinishingPage()
 {
     auto body = QStringLiteral(R"(
 <main class="card">
-  <p class="eyebrow">Kick Login</p>
-  <h1>Finishing sign-in</h1>
-  <p id="status" class="status">Mergerino is exchanging your Kick authorization code.</p>
-  <div class="actions">
-    <a id="retry-link" class="link-button secondary" href="/" hidden>Start over</a>
-  </div>
-  <p id="detail" class="footnote">You can leave this tab open while Mergerino finishes the login.</p>
+  <header class="login-shell-header">
+    <div>
+      <p class="eyebrow">Kick Login</p>
+      <p class="intro-copy">Completing the connection locally.</p>
+    </div>
+  </header>
+  <section class="standalone-page">
+    <h1>Finishing sign-in</h1>
+    <p id="status" class="status">Mergerino is exchanging your Kick authorization code.</p>
+    <div class="actions">
+      <button id="return-button" class="primary" type="button" hidden>Close</button>
+      <a id="retry-link" class="link-button secondary" href="/" hidden>Start over</a>
+    </div>
+    <p id="detail" class="footnote">You can leave this tab open while Mergerino finishes the login.</p>
+  </section>
 </main>)");
 
     auto scripts = QStringLiteral(R"(
@@ -780,6 +870,9 @@ QByteArray renderFinishingPage()
 const statusNode = document.getElementById('status');
 const detailNode = document.getElementById('detail');
 const retryLink = document.getElementById('retry-link');
+const returnButton = document.getElementById('return-button');
+
+returnButton.addEventListener('click', () => window.close());
 
 async function pollStatus() {
   try {
@@ -789,15 +882,16 @@ async function pollStatus() {
     statusNode.textContent = data.message;
 
     if (data.state === 'success') {
-      detailNode.textContent = 'Kick login completed. You can close this tab.';
+      detailNode.textContent = 'Kick account connected.';
       retryLink.hidden = true;
-      setTimeout(() => window.close(), 800);
+      returnButton.hidden = false;
       return;
     }
 
     if (data.state === 'error') {
       detailNode.textContent = 'Kick login did not finish successfully.';
       retryLink.hidden = false;
+      returnButton.hidden = true;
       return;
     }
   } catch (error) {
@@ -817,12 +911,19 @@ QByteArray renderNotFoundPage()
 {
     auto body = QStringLiteral(R"(
 <main class="card">
-  <p class="eyebrow">Kick Login</p>
-  <h1>Page not found</h1>
-  <p class="status">That local login page does not exist.</p>
-  <div class="actions">
-    <a class="link-button secondary" href="/">Back to the Kick login flow</a>
-  </div>
+  <header class="login-shell-header">
+    <div>
+      <p class="eyebrow">Kick Login</p>
+      <p class="intro-copy">This local login page is not available.</p>
+    </div>
+  </header>
+  <section class="standalone-page">
+    <h1>Page not found</h1>
+    <p class="status">That local login page does not exist.</p>
+    <div class="actions">
+      <a class="link-button secondary" href="/">Back to the Kick login flow</a>
+    </div>
+  </section>
 </main>)");
     return renderPage(u"Kick Login"_s, body);
 }
@@ -831,11 +932,12 @@ class AuthSession : public QObject
 {
 public:
     AuthSession(QString clientID, QString clientSecret,
-                std::function<void()> onAuthenticated,
+                QWidget *ownerWindow, std::function<void()> onAuthenticated,
                 QObject *parent = nullptr)
         : QObject(parent)
         , clientID_(std::move(clientID))
         , clientSecret_(std::move(clientSecret))
+        , ownerWindow_(ownerWindow)
         , authParams_(startAuthSession())
         , onAuthenticated_(std::move(onAuthenticated))
     {
@@ -843,10 +945,31 @@ public:
         this->server_->setHandler([this](const HttpServer::Request &request) {
             return this->handleRequest(request);
         });
+        this->pendingTimer_.setSingleShot(true);
+        QObject::connect(&this->pendingTimer_, &QTimer::timeout, this,
+                         [this] {
+                             if (!this->pendingTimeoutMessage_.isEmpty())
+                             {
+                                 this->setBrowserState(
+                                     u"error"_s,
+                                     this->pendingTimeoutMessage_);
+                             }
+                         });
     }
 
     void begin()
     {
+        if (!this->server_->isListening())
+        {
+            const auto error =
+                u"Mergerino could not start the local Kick login server: "_s %
+                this->server_->errorString();
+            qCWarning(chatterinoKick) << error;
+            this->setBrowserState(u"error"_s, error);
+            this->deleteLater();
+            return;
+        }
+
         this->openBrowser();
     }
 
@@ -962,16 +1085,26 @@ private:
         this->setBrowserState(
             u"pending"_s,
             u"Waiting for Kick authorization..."_s);
+        this->startPendingTimeout(
+            u"Kick did not return from authorization. Start the login flow "
+            u"again."_s,
+            AUTHORIZATION_TIMEOUT_MS);
+
+        const auto authUrl = this->buildAuthUrl();
 
         return {
-            .status = 200,
-            .body = renderRedirectPage(this->buildAuthUrl()),
+            .status = 303,
+            .body = renderRedirectPage(authUrl),
             .contentType = HTML_CONTENT_TYPE,
+            .headers = {{"Location",
+                         authUrl.toString(QUrl::FullyEncoded).toUtf8()}},
         };
     }
 
     HttpServer::Response handleKickCallback(const QUrlQuery &query)
     {
+        this->clearPendingTimeout();
+
         if (query.hasQueryItem(u"error"_s))
         {
             const auto error = query.queryItemValue(u"error"_s).trimmed();
@@ -1032,6 +1165,9 @@ private:
         this->setBrowserState(
             u"pending"_s,
             u"Exchanging the Kick authorization code..."_s);
+        this->startPendingTimeout(
+            u"Kick token exchange timed out. Start the login flow again."_s,
+            NETWORK_STEP_TIMEOUT_MS);
         this->requestToken(query.queryItemValue(u"code"_s));
 
         return {
@@ -1070,9 +1206,12 @@ private:
         NetworkRequest("https://id.kick.com/oauth/token",
                        NetworkRequestType::Post)
             .header("Content-Type", "application/x-www-form-urlencoded")
+            .hideRequestBody()
             .payload(payload.toString(QUrl::FullyEncoded).toUtf8())
+            .timeout(20'000)
             .caller(this)
             .onError([this](const NetworkResult &result) {
+                this->clearPendingTimeout();
                 auto error = formatAPIError(result);
                 qCWarning(chatterinoKick) << "Getting token failed" << error;
                 this->setBrowserState(u"error"_s, error);
@@ -1081,6 +1220,10 @@ private:
                 this->setBrowserState(
                     u"pending"_s,
                     u"Loading the authenticated Kick account..."_s);
+                this->startPendingTimeout(
+                    u"Kick user lookup timed out. Start the login flow "
+                    u"again."_s,
+                    NETWORK_STEP_TIMEOUT_MS);
                 this->getAuthenticatedUser(result.parseJson());
             })
             .execute();
@@ -1088,6 +1231,18 @@ private:
 
     void getAuthenticatedUser(const QJsonObject &tokenData)
     {
+        const auto accessToken = tokenData["access_token"_L1].toString();
+        const auto refreshToken = tokenData["refresh_token"_L1].toString();
+        if (accessToken.isEmpty() || refreshToken.isEmpty())
+        {
+            this->clearPendingTimeout();
+            const auto error =
+                u"Kick did not return usable login tokens."_s;
+            qCWarning(chatterinoKick) << error << tokenData;
+            this->setBrowserState(u"error"_s, error);
+            return;
+        }
+
         qint64 expiresIn = 0;
         auto expiresInVal = tokenData["expires_in"_L1];
         if (expiresInVal.isString())
@@ -1098,40 +1253,75 @@ private:
         {
             expiresIn = expiresInVal.toInteger();
         }
+        if (expiresIn <= 0)
+        {
+            expiresIn = 3600;
+        }
 
         auto expiresAt = QDateTime::currentDateTimeUtc().addSecs(expiresIn);
         NetworkRequest("https://api.kick.com/public/v1/users")
-            .header("Authorization",
-                    u"Bearer " % tokenData["access_token"_L1].toString())
+            .header("Authorization", u"Bearer " % accessToken)
+            .timeout(20'000)
             .caller(this)
             .onError([this](const NetworkResult &result) {
+                this->clearPendingTimeout();
                 auto error = formatAPIError(result);
                 qCWarning(chatterinoKick) << "Getting user failed" << error;
                 this->setBrowserState(u"error"_s, error);
             })
-            .onSuccess([this, tokenData,
+            .onSuccess([this, accessToken, refreshToken,
                         expiresAt](const NetworkResult &result) {
-                const auto obj = result.parseJson()
-                                     .value("data"_L1)
-                                     .toArray()
-                                     .at(0)
-                                     .toObject();
+                const auto dataArray =
+                    result.parseJson().value("data"_L1).toArray();
+                if (dataArray.isEmpty() || !dataArray.at(0).isObject())
+                {
+                    this->clearPendingTimeout();
+                    const auto error =
+                        u"Kick did not return the authenticated user."_s;
+                    qCWarning(chatterinoKick) << error << result.getData();
+                    this->setBrowserState(u"error"_s, error);
+                    return;
+                }
+
+                const auto obj = dataArray.at(0).toObject();
+                bool userIDOk = false;
+                const auto userIDVal = obj["user_id"_L1];
+                const auto userID =
+                    userIDVal.isString()
+                        ? userIDVal.toString().toULongLong(&userIDOk)
+                        : static_cast<uint64_t>(userIDVal.toInteger());
+                if (!userIDVal.isString())
+                {
+                    userIDOk = userID > 0;
+                }
+                const auto username =
+                    obj["name"_L1].toString(obj["username"_L1].toString());
+                if (username.isEmpty() || !userIDOk || userID == 0)
+                {
+                    this->clearPendingTimeout();
+                    const auto error =
+                        u"Kick returned incomplete user information."_s;
+                    qCWarning(chatterinoKick) << error << obj;
+                    this->setBrowserState(u"error"_s, error);
+                    return;
+                }
+
                 KickAccountData data{
-                    .username = obj["name"].toString(),
-                    .userID =
-                        static_cast<uint64_t>(obj["user_id"_L1].toInteger()),
+                    .username = username,
+                    .userID = userID,
                     .clientID = this->clientID_,
                     .clientSecret = this->clientSecret_,
-                    .authToken = tokenData["access_token"_L1].toString(),
-                    .refreshToken = tokenData["refresh_token"_L1].toString(),
+                    .authToken = accessToken,
+                    .refreshToken = refreshToken,
                     .expiresAt = expiresAt,
                 };
                 data.save();
                 getApp()->getAccounts()->kick.reloadUsers();
                 getApp()->getAccounts()->kick.currentUsername = data.username;
+                this->clearPendingTimeout();
                 this->setBrowserState(
                     u"success"_s,
-                    u"Kick account connected. You can close this tab."_s);
+                    u"Kick account connected."_s);
                 if (this->onAuthenticated_)
                 {
                     this->onAuthenticated_();
@@ -1148,11 +1338,26 @@ private:
         this->browserMessage_ = message;
     }
 
+    void startPendingTimeout(const QString &message, int timeoutMs)
+    {
+        this->pendingTimeoutMessage_ = message;
+        this->pendingTimer_.start(timeoutMs);
+    }
+
+    void clearPendingTimeout()
+    {
+        this->pendingTimer_.stop();
+        this->pendingTimeoutMessage_.clear();
+    }
+
     HttpServer *server_{};
     QString clientID_;
     QString clientSecret_;
+    QPointer<QWidget> ownerWindow_;
     AuthParams authParams_;
     std::function<void()> onAuthenticated_;
+    QTimer pendingTimer_;
+    QString pendingTimeoutMessage_;
     QString browserState_ = u"pending"_s;
     QString browserMessage_ =
         u"Open the local Kick login page in your browser."_s;
@@ -1169,9 +1374,23 @@ void startKickLoginFlow(QWidget *parent, std::function<void()> onAuthenticated)
         clientSecret = currentAccount->clientSecret();
     }
 
-    auto *session =
-        new AuthSession(clientID, clientSecret, std::move(onAuthenticated),
-                        parent ? static_cast<QObject *>(parent) : qApp);
+    static QPointer<AuthSession> activeSession;
+    if (activeSession)
+    {
+        delete activeSession.data();
+        activeSession.clear();
+    }
+
+    auto *session = new AuthSession(
+        clientID, clientSecret, parent ? parent->window() : nullptr,
+        std::move(onAuthenticated), qApp);
+    activeSession = session;
+    QObject::connect(session, &QObject::destroyed, qApp, [session] {
+        if (activeSession == session)
+        {
+            activeSession.clear();
+        }
+    });
     session->begin();
 }
 

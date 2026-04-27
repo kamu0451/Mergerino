@@ -28,6 +28,10 @@ public:
     static QString dockUrl(const QString &view = QStringLiteral("chat"),
                            int tabIndex = -1);
 
+    /// Build an OBS Browser Source URL for a transparent stream-overlay
+    /// rendering of the chat. Uses tab index -1 to track the active tab.
+    static QString overlayUrl(int tabIndex = -1);
+
 private:
     std::unique_ptr<HttpServer> server_;
 
@@ -36,6 +40,7 @@ private:
     Split *resolveSplit(SplitContainer *page, const QString &view) const;
 
     QByteArray dockPageHtml() const;
+    QByteArray overlayPageHtml() const;
     QByteArray dockStateJson(const QString &view, int requestedTabIndex) const;
 };
 

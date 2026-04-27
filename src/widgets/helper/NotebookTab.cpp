@@ -14,7 +14,9 @@
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
+#include "util/Clipboard.hpp"
 #include "util/Helpers.hpp"
+#include "util/ObsBrowserDockServer.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/Notebook.hpp"
 #include "widgets/splits/DraggedSplit.hpp"
@@ -151,6 +153,11 @@ NotebookTab::NotebookTab(Notebook *notebook)
 
     this->menu_.addAction("Duplicate Tab", [this]() {
         this->notebook_->duplicatePage(this->page);
+    });
+
+    this->menu_.addAction("Copy Stream Overlay URL", [this]() {
+        const int tabIndex = this->notebook_->indexOf(this->page);
+        crossPlatformCopy(ObsBrowserDockServer::overlayUrl(tabIndex));
     });
 
     this->highlightNewMessagesAction_ =

@@ -373,6 +373,15 @@ ObsBrowserDockServer::ObsBrowserDockServer(QObject *parent)
             };
         }
 
+        if (path == QStringLiteral("/obs-overlay") ||
+            path == QStringLiteral("/obs-overlay/"))
+        {
+            return HttpServer::Response{
+                .body = this->overlayPageHtml(),
+                .contentType = QByteArrayLiteral("text/html; charset=utf-8"),
+            };
+        }
+
         if (path == QStringLiteral("/obs-dock/state"))
         {
             return HttpServer::Response{
@@ -399,6 +408,19 @@ QString ObsBrowserDockServer::dockUrl(const QString &view, int tabIndex)
     if (tabIndex >= 0)
     {
         url += QStringLiteral("&tab=%1").arg(tabIndex);
+    }
+
+    return url;
+}
+
+QString ObsBrowserDockServer::overlayUrl(int tabIndex)
+{
+    auto url = QStringLiteral("http://127.0.0.1:%1/obs-overlay")
+                   .arg(ObsBrowserDockServer::PORT);
+
+    if (tabIndex >= 0)
+    {
+        url += QStringLiteral("?tab=%1").arg(tabIndex);
     }
 
     return url;
@@ -1239,6 +1261,295 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
         .arg(cssColor(theme->scrollbars.thumb))
         .arg(cssColor(theme->scrollbars.thumbSelected))
         .arg(twitchIcon)
+        .arg(kickIcon)
+        .arg(youtubeIcon)
+        .arg(tiktokIcon)
+        .toUtf8();
+}
+
+QByteArray ObsBrowserDockServer::overlayPageHtml() const
+{
+    const auto twitchIcon = platformIconDataUrl(MessagePlatform::AnyOrTwitch);
+    const auto kickIcon = platformIconDataUrl(MessagePlatform::Kick);
+    const auto youtubeIcon = platformIconDataUrl(MessagePlatform::YouTube);
+    const auto tiktokIcon = platformIconDataUrl(MessagePlatform::TikTok);
+
+    const QString html = QStringLiteral(R"HTML(
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mergerino Stream Overlay</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --font-size: 18px;
+      --shadow:
+        -1px -1px 0 #000,
+        1px -1px 0 #000,
+        -1px 1px 0 #000,
+        1px 1px 0 #000,
+        0 0 4px rgba(0, 0, 0, 0.85);
+      font-family: "Segoe UI", "Helvetica Neue", "Arial", sans-serif;
+      font-size: var(--font-size);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background: transparent;
+      color: #ffffff;
+      overflow: hidden;
+    }
+
+    .feed {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: flex-end;
+      padding: 8px 12px;
+      gap: 4px;
+      overflow: hidden;
+    }
+
+    .msg {
+      display: block;
+      line-height: 1.35;
+      word-wrap: break-word;
+      overflow-wrap: anywhere;
+      text-shadow: var(--shadow);
+      animation: fade-in 220ms ease-out both;
+      transition: opacity 600ms ease-in;
+    }
+
+    .msg.fading {
+      opacity: 0;
+    }
+
+    .platform {
+      display: inline-block;
+      width: 1em;
+      height: 1em;
+      vertical-align: -0.15em;
+      margin-right: 0.35em;
+      filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9));
+    }
+
+    .time {
+      opacity: 0.75;
+      margin-right: 0.35em;
+      font-size: 0.85em;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .author {
+      font-weight: 700;
+      margin-right: 0.25em;
+    }
+
+    .author::after {
+      content: ":";
+      color: #ffffff;
+      margin-left: 1px;
+    }
+
+    .body {
+      color: #ffffff;
+    }
+
+    .msg.action .body {
+      font-style: italic;
+    }
+
+    .msg.system .body,
+    .msg.moderation .body {
+      color: #cccccc;
+      font-style: italic;
+    }
+
+    .msg.system .author,
+    .msg.moderation .author {
+      display: none;
+    }
+
+    @keyframes fade-in {
+      from {
+        opacity: 0;
+        transform: translateY(6px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+  </style>
+</head>
+<body>
+  <section class="feed" id="feed"></section>
+  <script>
+    const platformIcons = {
+      twitch: '%1',
+      kick: '%2',
+      youtube: '%3',
+      tiktok: '%4',
+    };
+
+    const params = new URLSearchParams(window.location.search);
+    const tabParam = parseInt(params.get('tab') ?? '', 10);
+    const maxMessages = Math.max(1, parseInt(params.get('maxMessages') ?? '30', 10) || 30);
+    const fadeAfter = Math.max(0, parseFloat(params.get('fadeAfter') ?? '0') || 0);
+    const fontSize = parseInt(params.get('fontSize') ?? '18', 10);
+    const showPlatform = (params.get('showPlatform') ?? '1') !== '0';
+    const showTime = (params.get('showTime') ?? '0') === '1';
+    const pollInterval = Math.max(250, parseInt(params.get('poll') ?? '800', 10) || 800);
+
+    if (Number.isFinite(fontSize) && fontSize > 0) {
+      document.documentElement.style.setProperty('--font-size', fontSize + 'px');
+    }
+
+    const feed = document.getElementById('feed');
+    const seen = new Set();
+    const order = [];
+    const fadeTimers = new Map();
+
+    function escapePlatform(platform) {
+      return (platform || 'twitch').toLowerCase();
+    }
+
+    function platformIcon(platform) {
+      return platformIcons[escapePlatform(platform)] || platformIcons.twitch;
+    }
+
+    function trim() {
+      while (order.length > maxMessages) {
+        const id = order.shift();
+        seen.delete(id);
+        const node = feed.querySelector(`[data-id="${CSS.escape(id)}"]`);
+        if (node) {
+          node.remove();
+        }
+        const timer = fadeTimers.get(id);
+        if (timer) {
+          clearTimeout(timer);
+          fadeTimers.delete(id);
+        }
+      }
+    }
+
+    function scheduleFade(id, node) {
+      if (fadeAfter <= 0) {
+        return;
+      }
+      const timer = setTimeout(() => {
+        node.classList.add('fading');
+        setTimeout(() => {
+          if (node.parentElement) {
+            node.remove();
+          }
+          seen.delete(id);
+          const idx = order.indexOf(id);
+          if (idx >= 0) {
+            order.splice(idx, 1);
+          }
+          fadeTimers.delete(id);
+        }, 650);
+      }, fadeAfter * 1000);
+      fadeTimers.set(id, timer);
+    }
+
+    function appendMessage(message) {
+      const id = message.id || `${Date.now()}-${Math.random()}`;
+      if (seen.has(id)) {
+        return;
+      }
+      seen.add(id);
+      order.push(id);
+
+      const platform = escapePlatform(message.platform);
+      const item = document.createElement('div');
+      item.className = 'msg' +
+        (message.system ? ' system' : '') +
+        (message.action ? ' action' : '') +
+        (message.moderation ? ' moderation' : '');
+      item.dataset.id = id;
+
+      if (showPlatform) {
+        const icon = document.createElement('img');
+        icon.className = 'platform';
+        icon.src = platformIcon(platform);
+        icon.alt = platform;
+        item.appendChild(icon);
+      }
+
+      if (showTime && message.timestamp) {
+        const time = document.createElement('span');
+        time.className = 'time';
+        time.textContent = message.timestamp;
+        item.appendChild(time);
+      }
+
+      if (message.author) {
+        const author = document.createElement('span');
+        author.className = 'author';
+        author.textContent = message.author;
+        if (message.authorColor) {
+          author.style.color = message.authorColor;
+        }
+        item.appendChild(author);
+      }
+
+      const body = document.createElement('span');
+      body.className = 'body';
+      body.textContent = message.text || '';
+      item.appendChild(body);
+
+      feed.appendChild(item);
+      scheduleFade(id, item);
+      trim();
+    }
+
+    function stateUrl() {
+      const qs = new URLSearchParams();
+      qs.set('view', 'chat');
+      if (Number.isInteger(tabParam) && tabParam >= 0) {
+        qs.set('tab', String(tabParam));
+      }
+      return `/obs-dock/state?${qs.toString()}`;
+    }
+
+    async function refresh() {
+      try {
+        const response = await fetch(stateUrl(), { cache: 'no-store' });
+        if (!response.ok) {
+          return;
+        }
+        const state = await response.json();
+        if (!state.ready || !Array.isArray(state.messages)) {
+          return;
+        }
+        for (const message of state.messages) {
+          appendMessage(message);
+        }
+      } catch (err) {
+        // ignore - keep retrying
+      }
+    }
+
+    refresh();
+    setInterval(refresh, pollInterval);
+  </script>
+</body>
+</html>
+)HTML");
+
+    return html.arg(twitchIcon)
         .arg(kickIcon)
         .arg(youtubeIcon)
         .arg(tiktokIcon)

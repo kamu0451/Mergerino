@@ -1076,6 +1076,14 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         crossPlatformCopy(ObsBrowserDockServer::dockUrl());
     });
 
+    layout.addDescription(
+        "For a transparent on-stream chat overlay (no chrome, fades old "
+        "messages), right-click any tab and choose "
+        "\"Copy Stream Overlay URL\" to lock the overlay onto that tab. "
+        "Append URL params to customize, e.g. "
+        "<code>?maxMessages=20&amp;fadeAfter=15&amp;fontSize=22"
+        "&amp;showTime=1</code>.");
+
     layout.addSubtitle("Temporary files (Cache)");
     layout.addDescription(
         "Files that are used often (such as emotes) are saved to disk to "

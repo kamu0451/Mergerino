@@ -917,6 +917,13 @@ void YouTubeLiveChat::scheduleResolve(int delayMs)
 
 void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs)
 {
+    // Empty continuation, stalled progress, or a poll error all mean the
+    // chat session we were tracking is gone. Drop live_ here so the rest
+    // of the app stops believing the stream is live while we rebootstrap.
+    // If the next fetchLiveChatPage finds a fresh chat session, setLive(true)
+    // restores it.
+    this->setLive(false);
+    this->liveViewerCount_ = 0;
     this->continuation_.clear();
     this->activePollStreak_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();

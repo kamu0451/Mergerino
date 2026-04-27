@@ -1293,7 +1293,9 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
 
     if (const auto recipientCount = getActivityGiftBombRecipientCount(*message))
     {
-        pendingGiftRecipients = std::max(0, *recipientCount);
+        // Add a small grace buffer so off-by-one count tags from the
+        // upstream provider don't leak a final recipient row.
+        pendingGiftRecipients = std::max(0, *recipientCount) + 2;
         return makeActivityCompactMessage(message,
                                           compactActivityGiftBombText(*message));
     }

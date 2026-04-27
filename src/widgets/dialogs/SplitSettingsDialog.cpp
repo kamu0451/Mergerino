@@ -16,7 +16,10 @@
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QGraphicsOpacityEffect>
 #include <QGroupBox>
+#include <QSpinBox>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -74,9 +77,53 @@ constexpr std::array<ActivityScaleOption, 8> ACTIVITY_SCALE_OPTIONS{{
     {"110%", 1.10},
 }};
 
+void applyAnimatedRowProgress(QWidget *widget, qreal progress)
+{
+    if (widget == nullptr)
+    {
+        return;
+    }
+
+    progress = std::clamp(progress, 0.0, 1.0);
+    auto *effect =
+        qobject_cast<QGraphicsOpacityEffect *>(widget->graphicsEffect());
+
+    if (progress >= 1.0)
+    {
+        if (effect != nullptr)
+        {
+            widget->setGraphicsEffect(nullptr);
+        }
+        widget->setMaximumHeight(QWIDGETSIZE_MAX);
+        widget->show();
+        return;
+    }
+
+    if (effect == nullptr)
+    {
+        effect = new QGraphicsOpacityEffect(widget);
+        widget->setGraphicsEffect(effect);
+    }
+
+    effect->setOpacity(progress);
+    widget->setMaximumHeight(QWIDGETSIZE_MAX);
+
+    if (progress <= 0.0)
+    {
+        widget->hide();
+        return;
+    }
+
+    widget->show();
+}
+
 }  // namespace
 
-SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane, QWidget *parent)
+SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
+                                         bool showTwitchBitsMinimum,
+                                         bool showKickKicksMinimum,
+                                         bool showTikTokGiftMinimum,
+                                         QWidget *parent)
     : BaseWindow(
           {
               BaseWindow::Flags::EnableCustomFrame,
@@ -86,6 +133,9 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane, QWidget *parent)
           },
           parent)
     , isActivityPane_(isActivityPane)
+    , showTwitchBitsMinimum_(showTwitchBitsMinimum)
+    , showKickKicksMinimum_(showKickKicksMinimum)
+    , showTikTokGiftMinimum_(showTikTokGiftMinimum)
 {
     this->setWindowTitle(isActivityPane ? "Activity settings"
                                         : "Split settings");
@@ -126,6 +176,39 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane, QWidget *parent)
             this->ui_.activityScale->addItem(option.label, option.scale);
         }
         appearanceLayout->addRow("Chat line size", this->ui_.activityScale);
+
+        if (this->showTwitchBitsMinimum_)
+        {
+            this->ui_.twitchBitsMinimum = new QSpinBox();
+            this->ui_.twitchBitsMinimum->setRange(0, 1000000);
+            this->ui_.twitchBitsMinimum->setSingleStep(1);
+            this->ui_.twitchBitsMinimum->setToolTip(
+                "Only show Twitch bit alerts at or above this bit count.");
+            appearanceLayout->addRow("Twitch min bits",
+                                     this->ui_.twitchBitsMinimum);
+        }
+
+        if (this->showKickKicksMinimum_)
+        {
+            this->ui_.kickKicksMinimum = new QSpinBox();
+            this->ui_.kickKicksMinimum->setRange(0, 1000000);
+            this->ui_.kickKicksMinimum->setSingleStep(1);
+            this->ui_.kickKicksMinimum->setToolTip(
+                "Only show Kick Kicks gifts at or above this Kicks amount.");
+            appearanceLayout->addRow("Kick min Kicks",
+                                     this->ui_.kickKicksMinimum);
+        }
+
+        if (this->showTikTokGiftMinimum_)
+        {
+            this->ui_.tiktokGiftMinimum = new QSpinBox();
+            this->ui_.tiktokGiftMinimum->setRange(0, 1000000);
+            this->ui_.tiktokGiftMinimum->setSingleStep(1);
+            this->ui_.tiktokGiftMinimum->setToolTip(
+                "Only show TikTok gifts at or above this diamond count.");
+            appearanceLayout->addRow("TikTok min diamonds",
+                                     this->ui_.tiktokGiftMinimum);
+        }
     }
 
     rootLayout->addWidget(appearanceGroup);
@@ -304,6 +387,60 @@ bool SplitSettingsDialog::slowerChatMessageAnimations() const
            this->ui_.messageAnimations->isChecked();
 }
 
+void SplitSettingsDialog::setTwitchActivityMinimumBits(uint32_t value)
+{
+    if (this->ui_.twitchBitsMinimum)
+    {
+        this->ui_.twitchBitsMinimum->setValue(static_cast<int>(value));
+    }
+}
+
+uint32_t SplitSettingsDialog::twitchActivityMinimumBits() const
+{
+    if (this->ui_.twitchBitsMinimum == nullptr)
+    {
+        return 100;
+    }
+
+    return static_cast<uint32_t>(this->ui_.twitchBitsMinimum->value());
+}
+
+void SplitSettingsDialog::setKickActivityMinimumKicks(uint32_t value)
+{
+    if (this->ui_.kickKicksMinimum)
+    {
+        this->ui_.kickKicksMinimum->setValue(static_cast<int>(value));
+    }
+}
+
+uint32_t SplitSettingsDialog::kickActivityMinimumKicks() const
+{
+    if (this->ui_.kickKicksMinimum == nullptr)
+    {
+        return 100;
+    }
+
+    return static_cast<uint32_t>(this->ui_.kickKicksMinimum->value());
+}
+
+void SplitSettingsDialog::setTikTokActivityMinimumDiamonds(uint32_t value)
+{
+    if (this->ui_.tiktokGiftMinimum)
+    {
+        this->ui_.tiktokGiftMinimum->setValue(static_cast<int>(value));
+    }
+}
+
+uint32_t SplitSettingsDialog::tiktokActivityMinimumDiamonds() const
+{
+    if (this->ui_.tiktokGiftMinimum == nullptr)
+    {
+        return 0;
+    }
+
+    return static_cast<uint32_t>(this->ui_.tiktokGiftMinimum->value());
+}
+
 bool SplitSettingsDialog::hasAcceptedChanges() const
 {
     return this->hasAcceptedChanges_;
@@ -351,6 +488,81 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     {
         this->ui_.messageAnimations->setFont(uiFont);
     }
+    if (this->ui_.twitchBitsMinimum)
+    {
+        this->ui_.twitchBitsMinimum->setFont(uiFont);
+    }
+    if (this->ui_.kickKicksMinimum)
+    {
+        this->ui_.kickKicksMinimum->setFont(uiFont);
+    }
+    if (this->ui_.tiktokGiftMinimum)
+    {
+        this->ui_.tiktokGiftMinimum->setFont(uiFont);
+    }
+}
+
+void SplitSettingsDialog::applySlowerChatRateVisibilityProgress(qreal progress)
+{
+    this->ui_.slowerChatRateVisibilityProgress = progress;
+    applyAnimatedRowProgress(this->ui_.slowerChatRateLabel, progress);
+    applyAnimatedRowProgress(this->ui_.slowerChatRateField, progress);
+
+    if (auto *layout = this->getLayoutContainer()->layout())
+    {
+        layout->activate();
+    }
+
+    if (this->isVisible())
+    {
+        this->adjustSize();
+    }
+}
+
+void SplitSettingsDialog::updateSlowerChatVisibility(bool animate)
+{
+    const bool visible =
+        this->ui_.slowerChat && this->ui_.slowerChat->isChecked();
+
+    if (this->ui_.slowerChatRateLabel == nullptr ||
+        this->ui_.slowerChatRateField == nullptr)
+    {
+        return;
+    }
+
+    const qreal targetProgress = visible ? 1.0 : 0.0;
+    if (this->ui_.slowerChatRateAnimation == nullptr)
+    {
+        this->ui_.slowerChatRateAnimation = new QVariantAnimation(this);
+        this->ui_.slowerChatRateAnimation->setDuration(160);
+        this->ui_.slowerChatRateAnimation->setEasingCurve(
+            QEasingCurve::InOutCubic);
+        QObject::connect(this->ui_.slowerChatRateAnimation,
+                         &QVariantAnimation::valueChanged, this,
+                         [this](const QVariant &value) {
+                             this->applySlowerChatRateVisibilityProgress(
+                                 value.toReal());
+                         });
+    }
+
+    if (!animate || !this->isVisible())
+    {
+        this->ui_.slowerChatRateAnimation->stop();
+        this->applySlowerChatRateVisibilityProgress(targetProgress);
+        return;
+    }
+
+    if (qFuzzyCompare(this->ui_.slowerChatRateVisibilityProgress, targetProgress))
+    {
+        this->applySlowerChatRateVisibilityProgress(targetProgress);
+        return;
+    }
+
+    this->ui_.slowerChatRateAnimation->stop();
+    this->ui_.slowerChatRateAnimation->setStartValue(
+        this->ui_.slowerChatRateVisibilityProgress);
+    this->ui_.slowerChatRateAnimation->setEndValue(targetProgress);
+    this->ui_.slowerChatRateAnimation->start();
 }
 
 void SplitSettingsDialog::ok()

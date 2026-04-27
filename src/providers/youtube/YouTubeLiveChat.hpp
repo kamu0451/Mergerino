@@ -8,6 +8,7 @@
 #include "util/QStringHash.hpp"
 
 #include <pajlada/signals/signal.hpp>
+#include <QElapsedTimer>
 #include <QString>
 #include <QStringList>
 
@@ -33,7 +34,9 @@ public:
     const QString &videoId() const;
     const QString &statusText() const;
     const QString &liveTitle() const;
+    uint64_t liveViewerCount() const;
     unsigned viewerCount() const;
+    QString previewThumbnailUrl() const;
 
     pajlada::Signals::Signal<QString> sourceResolved;
     pajlada::Signals::Signal<MessagePtr> messageReceived;
@@ -41,26 +44,12 @@ public:
     pajlada::Signals::NoArgSignal liveStatusChanged;
     pajlada::Signals::NoArgSignal viewerCountChanged;
 
-    // Exposed for unit tests. Pure helpers with no instance state.
     static QString maybeExtractVideoId(const QString &url);
     static QString normalizeSource(const QString &source);
     static bool isLikelyChannelId(const QString &value);
     static QString extractLiveChatContinuation(
         const QJsonObject &liveChatRenderer);
     static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
-    static int computeBackoffDelay(int failureStreak);
-
-    /// Clamps the server-provided timeoutMs to a [1s, 30s] range, treating
-    /// non-positive inputs as "use the minimum". Exposed for testing.
-    static int cappedPollDelay(int timeoutMs);
-
-    /// Biases the next-poll delay earlier when the previous poll delivered
-    /// messages (the stream is active) and compensates for the elapsed
-    /// request time so the effective cadence matches TikTok timeoutMs.
-    /// Exposed for testing.
-    static int adjustedPollDelay(int timeoutMs, qint64 requestElapsedMs,
-                                 int deliveredMessageCount,
-                                 int activePollStreak);
 
 private:
     void resolveVideoId();
@@ -71,14 +60,14 @@ private:
     void bootstrapInnertubeContext(std::function<void()> onReady,
                                    QString failureText);
     void resolveSourceToVideoId(const QString &source);
-    void fetchLiveChatPage();
+    void fetchLiveChatPage(bool skipInitialBacklog = true);
     void poll();
     void schedulePoll(int delayMs);
+    void scheduleHealthCheck(int delayMs);
     void scheduleResolve(int delayMs);
-    void pollViewerCount();
-    void scheduleViewerCountPoll(int delayMs);
-    void setViewerCount(unsigned count);
+    void recoverLiveChat(QString text, int retryDelayMs);
     void waitForNextLive(QString text, int retryDelayMs);
+    void resetInnertubeContext();
     void setLive(bool live);
     void setStatusText(QString text, bool notifyAsSystemMessage = false);
     bool shouldResolveLiveStreamFromSource() const;
@@ -91,6 +80,7 @@ private:
     static QString extractVideoChannelId(const QString &html);
     static QString extractLiveVideoId(const QString &html);
     static QString parseText(const QJsonValue &value);
+    static uint64_t parseViewerCount(const QJsonValue &value);
     static MessagePtr parseRendererMessage(const QJsonObject &renderer,
                                           const QString &rendererName,
                                           const QString &channelName);
@@ -101,27 +91,21 @@ private:
     QString clientVersion_;
     QString visitorData_;
     QString continuation_;
-    QString metadataContinuation_;
     QString statusText_;
     QString liveTitle_;
-
-    unsigned viewerCount_{0};
-
-    // Consecutive HTTP failures on the live-chat poll / fetch path. Used to
-    // back off exponentially so a YouTube-side outage doesn't drive a 3s
-    // retry loop indefinitely. Reset on any successful response.
-    int pollFailureStreak_{0};
 
     bool running_{false};
     bool live_{false};
     bool failureReported_{false};
     bool skipInitialBacklog_{false};
-    bool immediateSourceProbePending_{false};
-    bool viewerCountPollScheduled_{false};
     int activePollStreak_{0};
+    uint64_t liveViewerCount_{0};
+    QElapsedTimer liveChatSessionRefreshTimer_;
+    QElapsedTimer liveChatProgressTimer_;
 
     std::shared_ptr<bool> lifetimeGuard_;
     std::unordered_set<QString> seenMessageIds_;
+    QString joinedLiveVideoId_;
 };
 
 }  // namespace chatterino

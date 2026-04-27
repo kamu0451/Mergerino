@@ -67,6 +67,12 @@ bool ResizingTextEdit::isFirstWord() const
     return !portionBeforeCursor.contains(' ');
 };
 
+void ResizingTextEdit::setVerticalPadding(int top, int bottom)
+{
+    this->setViewportMargins(0, qMax(top, 0), 0, qMax(bottom, 0));
+    this->viewport()->update();
+}
+
 int ResizingTextEdit::heightForWidth(int) const
 {
     auto margins = this->contentsMargins();

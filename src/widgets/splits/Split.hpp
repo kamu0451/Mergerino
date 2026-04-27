@@ -68,6 +68,9 @@ public:
     qreal slowerChatMessagesPerSecond() const;
     bool slowerChatMessageAnimations() const;
     PlatformIndicatorMode platformIndicatorMode() const;
+    uint32_t twitchActivityMinimumBits() const;
+    uint32_t kickActivityMinimumKicks() const;
+    uint32_t tiktokActivityMinimumDiamonds() const;
     bool filterActivity() const;
     bool filterActivityExplicit() const;
 
@@ -86,6 +89,9 @@ public:
     void setSlowerChatMessagesPerSecond(qreal value);
     void setSlowerChatMessageAnimations(bool value);
     void setPlatformIndicatorMode(PlatformIndicatorMode value);
+    void setTwitchActivityMinimumBits(uint32_t value);
+    void setKickActivityMinimumKicks(uint32_t value);
+    void setTikTokActivityMinimumDiamonds(uint32_t value);
     void setFilterActivity(bool value, bool explicitPreference = false);
 
     std::optional<bool> checkSpellingOverride() const;
@@ -191,6 +197,9 @@ private:
     bool slowerChatEnabled_{false};
     qreal slowerChatMessagesPerSecond_{5.0};
     bool slowerChatMessageAnimations_{true};
+    uint32_t twitchActivityMinimumBits_{100};
+    uint32_t kickActivityMinimumKicks_{100};
+    uint32_t tiktokActivityMinimumDiamonds_{0};
     PlatformIndicatorMode platformIndicatorMode_;
 
     bool isMouseOver_{};

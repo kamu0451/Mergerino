@@ -348,6 +348,10 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
     clone->setSlowerChatMessagesPerSecond(source->slowerChatMessagesPerSecond());
     clone->setSlowerChatMessageAnimations(
         source->slowerChatMessageAnimations());
+    clone->setTwitchActivityMinimumBits(source->twitchActivityMinimumBits());
+    clone->setKickActivityMinimumKicks(source->kickActivityMinimumKicks());
+    clone->setTikTokActivityMinimumDiamonds(
+        source->tiktokActivityMinimumDiamonds());
     clone->setCheckSpellingOverride(source->checkSpellingOverride());
     clone->setChannel(source->getIndirectChannel());
     clone->setPlatformIndicatorMode(source->platformIndicatorMode());
@@ -1155,6 +1159,12 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
             currentNode->split_->slowerChatMessagesPerSecond();
         result.slowerChatMessageAnimations_ =
             currentNode->split_->slowerChatMessageAnimations();
+        result.twitchActivityMinimumBits_ =
+            currentNode->split_->twitchActivityMinimumBits();
+        result.kickActivityMinimumKicks_ =
+            currentNode->split_->kickActivityMinimumKicks();
+        result.tiktokActivityMinimumDiamonds_ =
+            currentNode->split_->tiktokActivityMinimumDiamonds();
         result.platformIndicatorMode_ =
             currentNode->split_->platformIndicatorMode();
         return result;
@@ -1210,6 +1220,11 @@ void SplitContainer::applyFromDescriptorRecursively(
             splitNode.slowerChatMessagesPerSecond_);
         split->setSlowerChatMessageAnimations(
             splitNode.slowerChatMessageAnimations_);
+        split->setTwitchActivityMinimumBits(
+            splitNode.twitchActivityMinimumBits_);
+        split->setKickActivityMinimumKicks(splitNode.kickActivityMinimumKicks_);
+        split->setTikTokActivityMinimumDiamonds(
+            splitNode.tiktokActivityMinimumDiamonds_);
         if (splitNode.platformIndicatorMode_)
         {
             split->setPlatformIndicatorMode(*splitNode.platformIndicatorMode_);
@@ -1269,6 +1284,17 @@ void SplitContainer::applyFromDescriptorRecursively(
                         split);
                 }
                 split->setActivityMessageScale(splitNode.activityMessageScale_);
+                split->setSlowerChatEnabled(splitNode.slowerChatEnabled_);
+                split->setSlowerChatMessagesPerSecond(
+                    splitNode.slowerChatMessagesPerSecond_);
+                split->setSlowerChatMessageAnimations(
+                    splitNode.slowerChatMessageAnimations_);
+                split->setTwitchActivityMinimumBits(
+                    splitNode.twitchActivityMinimumBits_);
+                split->setKickActivityMinimumKicks(
+                    splitNode.kickActivityMinimumKicks_);
+                split->setTikTokActivityMinimumDiamonds(
+                    splitNode.tiktokActivityMinimumDiamonds_);
                 if (splitNode.platformIndicatorMode_)
                 {
                     split->setPlatformIndicatorMode(

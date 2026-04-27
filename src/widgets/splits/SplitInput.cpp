@@ -7,12 +7,16 @@
 #include "Application.hpp"
 #include "common/enums/MessageOverflow.hpp"
 #include "common/QLogging.hpp"
+#include "controllers/accounts/AccountController.hpp"
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "controllers/spellcheck/SpellChecker.hpp"
 #include "messages/Link.hpp"
 #include "messages/Message.hpp"
+#include "providers/kick/KickAccount.hpp"
 #include "providers/kick/KickChannel.hpp"
+#include "providers/merged/MergedChannel.hpp"
+#include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchCommon.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
@@ -21,6 +25,7 @@
 #include "singletons/Theme.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutCreator.hpp"
+#include "widgets/buttons/Button.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
 #include "widgets/dialogs/EmotePopup.hpp"
@@ -36,9 +41,14 @@
 #include "widgets/splits/SplitContainer.hpp"
 
 #include <QCompleter>
+#include <QImage>
 #include <QPainter>
 #include <QSignalBlocker>
+#include <QSvgRenderer>
+#include <QVariantAnimation>
 
+#include <algorithm>
+#include <cmath>
 #include <functional>
 #include <ranges>
 
@@ -58,7 +68,152 @@ qreal highlightEasingFunction(qreal progress)
     return 1.0 + pow((20.0 / 9.0) * (0.5 * progress - 0.5), 3.0);
 }
 
+QString platformDisplayName(MessagePlatform platform)
+{
+    switch (platform)
+    {
+        case MessagePlatform::Kick:
+            return u"Kick"_s;
+        case MessagePlatform::AnyOrTwitch:
+        default:
+            return u"Twitch"_s;
+    }
+}
+
 }  // namespace
+
+class PlatformSwitchButton : public Button
+{
+public:
+    explicit PlatformSwitchButton(BaseWidget *parent = nullptr)
+        : Button(parent)
+        , twitchRenderer_(u":/platforms/twitch.svg"_s, this)
+        , kickRenderer_(u":/platforms/kick.svg"_s, this)
+        , animation_(this)
+    {
+        this->setContentCacheEnabled(false);
+
+        this->animation_.setDuration(170);
+        this->animation_.setEasingCurve(QEasingCurve::OutCubic);
+        QObject::connect(&this->animation_, &QVariantAnimation::valueChanged,
+                         this, [this](const QVariant &value) {
+                             this->animationProgress_ = value.toReal();
+                             this->update();
+                         });
+        QObject::connect(&this->animation_, &QVariantAnimation::finished,
+                         this, [this] {
+                             this->animationProgress_ = 1.0;
+                             this->update();
+                         });
+    }
+
+    void setPlatform(MessagePlatform platform, bool animate)
+    {
+        if (platform == this->currentPlatform_)
+        {
+            return;
+        }
+
+        this->previousPlatform_ = this->currentPlatform_;
+        this->currentPlatform_ = platform;
+
+        this->animation_.stop();
+        if (animate && this->isVisible())
+        {
+            this->animationProgress_ = 0.0;
+            this->animation_.setStartValue(0.0);
+            this->animation_.setEndValue(1.0);
+            this->animation_.start();
+            return;
+        }
+
+        this->animationProgress_ = 1.0;
+        this->update();
+    }
+
+    void setContentOffset(QPoint offset)
+    {
+        if (this->contentOffset_ == offset)
+        {
+            return;
+        }
+
+        this->contentOffset_ = offset;
+        this->update();
+    }
+
+protected:
+    void paintContent(QPainter &painter) override
+    {
+        const auto contentSize = this->scale() * QSize{16, 16};
+        const QPointF topLeft{
+            (this->width() - contentSize.width()) / 2.0,
+            (this->height() - contentSize.height()) / 2.0};
+        auto bounds = QRectF{topLeft, contentSize};
+        bounds.translate(this->scale() * this->contentOffset_);
+
+        painter.save();
+        painter.setClipRect(this->rect());
+
+        if (this->animationProgress_ >= 1.0)
+        {
+            this->renderPlatform(painter, this->currentPlatform_, bounds, 1.0);
+        }
+        else
+        {
+            const auto slide = bounds.width() * this->animationProgress_;
+            this->renderPlatform(
+                painter, this->previousPlatform_, bounds.translated(slide, 0),
+                1.0 - this->animationProgress_);
+            this->renderPlatform(
+                painter, this->currentPlatform_,
+                bounds.translated(slide - bounds.width(), 0),
+                this->animationProgress_);
+        }
+
+        painter.restore();
+    }
+
+private:
+    QSvgRenderer &rendererFor(MessagePlatform platform)
+    {
+        return platform == MessagePlatform::Kick ? this->kickRenderer_
+                                                 : this->twitchRenderer_;
+    }
+
+    void renderPlatform(QPainter &painter, MessagePlatform platform,
+                        const QRectF &bounds, qreal opacity)
+    {
+        const qreal dpr = this->devicePixelRatioF();
+        QSize imageSize{
+            std::max(1, static_cast<int>(std::ceil(bounds.width() * dpr))),
+            std::max(1, static_cast<int>(std::ceil(bounds.height() * dpr)))};
+
+        QImage image(imageSize, QImage::Format_ARGB32_Premultiplied);
+        image.setDevicePixelRatio(dpr);
+        image.fill(Qt::transparent);
+
+        QPainter imagePainter(&image);
+        const QRectF imageBounds{QPointF{0, 0}, bounds.size()};
+        this->rendererFor(platform).render(&imagePainter, imageBounds);
+        imagePainter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        imagePainter.fillRect(imageBounds, QColor(232, 232, 232));
+        imagePainter.end();
+
+        painter.save();
+        painter.setOpacity(opacity);
+        painter.drawImage(bounds.topLeft(), image);
+        painter.restore();
+    }
+
+    MessagePlatform currentPlatform_ = MessagePlatform::AnyOrTwitch;
+    MessagePlatform previousPlatform_ = MessagePlatform::AnyOrTwitch;
+    QSvgRenderer twitchRenderer_;
+    QSvgRenderer kickRenderer_;
+    QVariantAnimation animation_;
+    QPoint contentOffset_;
+    qreal animationProgress_ = 1.0;
+};
 
 SplitInput::SplitInput(Split *_chatWidget, bool enableInlineReplying)
     : SplitInput(_chatWidget, _chatWidget, _chatWidget->view_,
@@ -91,6 +246,7 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
         auto *completer = new QCompleter(channel->completionModel);
         this->ui_.textEdit->setCompleter(completer);
         this->inputHighlighter->setChannel(this->split_->getChannel());
+        this->updatePlatformSelector();
     });
 
     getSettings()->enableSpellChecking.connect(
@@ -108,6 +264,7 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
         this->hideCompletionPopup();
     });
     this->scaleChangedEvent(this->scale());
+    this->updatePlatformSelector();
     this->signalHolder_.managedConnect(getApp()->getHotkeys()->onItemsUpdated,
                                        [this]() {
                                            this->clearShortcuts();
@@ -210,13 +367,17 @@ void SplitInput::initLayout()
         this->managedConnections_);
 
     // right box
-    auto box = hboxLayout.emplace<QVBoxLayout>().withoutMargin();
+    auto box =
+        hboxLayout.emplace<QVBoxLayout>().withoutMargin().assign(
+            &this->ui_.rightVbox);
     box->setSpacing(0);
+    box->setAlignment(Qt::AlignVCenter);
     {
         auto hbox = box.emplace<QHBoxLayout>().withoutMargin();
         this->ui_.textEditLength = new QLabel();
         // Right-align the labels contents
         this->ui_.textEditLength->setAlignment(Qt::AlignRight);
+        this->ui_.textEditLength->setHidden(true);
         hbox->addWidget(this->ui_.textEditLength);
 
         this->ui_.sendWaitStatus = new QLabel();
@@ -224,13 +385,23 @@ void SplitInput::initLayout()
         this->ui_.sendWaitStatus->setHidden(true);
         hbox->addWidget(this->ui_.sendWaitStatus);
 
+        auto buttonHbox =
+            box.emplace<QHBoxLayout>().withoutMargin().assign(
+                &this->ui_.buttonHbox);
+        buttonHbox->setSpacing(0);
+
+        this->ui_.platformButton = new PlatformSwitchButton();
+        buttonHbox->addWidget(this->ui_.platformButton);
+
         this->ui_.emoteButton = new SvgButton(
             {
                 .dark = ":/buttons/emote.svg",
                 .light = ":/buttons/emoteDark.svg",
             },
-            nullptr, QSize{6, 3});
-        box->addWidget(this->ui_.emoteButton, 0, Qt::AlignRight);
+            nullptr, QSize{4, 1});
+        this->ui_.emoteButton->setContentSize(QSize{16, 16});
+        buttonHbox->addWidget(this->ui_.emoteButton);
+        buttonHbox->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     }
 
     // ---- misc
@@ -251,6 +422,10 @@ void SplitInput::initLayout()
     // open emote popup
     QObject::connect(this->ui_.emoteButton, &Button::leftClicked, [this] {
         this->openEmotePopup();
+    });
+
+    QObject::connect(this->ui_.platformButton, &Button::leftClicked, [this] {
+        this->cycleSendPlatform();
     });
 
     // clear input and remove reply thread
@@ -300,6 +475,7 @@ void SplitInput::scaleChangedEvent(float scale)
 {
     // update the icon size of the buttons
     this->updateEmoteButton();
+    this->updatePlatformButtonLayout();
     this->updateCancelReplyButton();
 
     // set maximum height
@@ -331,6 +507,7 @@ void SplitInput::themeChangedEvent()
         this->theme->splits.input.background);
     this->backgroundColorAnimation.stop();
     this->updateTextEditPalette();
+    this->updatePlatformSelector();
 
     if (this->theme->isLightTheme())
     {
@@ -353,9 +530,226 @@ void SplitInput::updateEmoteButton()
 {
     auto scale = this->scale();
 
-    this->ui_.emoteButton->setFixedHeight(int(18 * scale));
+    this->ui_.emoteButton->setFixedHeight(int(26 * scale));
     // Make button slightly wider so it's easier to click
     this->ui_.emoteButton->setFixedWidth(int(24 * scale));
+}
+
+void SplitInput::updatePlatformButtonLayout()
+{
+    auto scale = this->scale();
+
+    const auto height = int(18 * scale);
+    const auto width = int(22 * scale);
+    const auto minimumHeight = height * 2 + int(4 * scale);
+
+    if (this->ui_.inputWrapper)
+    {
+        this->ui_.inputWrapper->setMinimumHeight(minimumHeight);
+    }
+
+    if (this->ui_.textEdit)
+    {
+        this->ui_.textEdit->setVerticalPadding(int(5 * scale), 0);
+    }
+
+    if (this->ui_.platformButton)
+    {
+        this->ui_.platformButton->setFixedHeight(int(26 * scale));
+        this->ui_.platformButton->setFixedWidth(width);
+    }
+
+    if (this->ui_.rightVbox)
+    {
+        this->ui_.rightVbox->setContentsMargins(0, 0, int(3 * scale), 0);
+    }
+}
+
+std::vector<MessagePlatform> SplitInput::availableSendPlatforms() const
+{
+    std::vector<MessagePlatform> platforms;
+
+    auto channel = this->split_->getChannel();
+    auto *merged = dynamic_cast<MergedChannel *>(channel.get());
+    if (merged)
+    {
+        if (this->canSendToPlatform(MessagePlatform::AnyOrTwitch))
+        {
+            platforms.push_back(MessagePlatform::AnyOrTwitch);
+        }
+        if (this->canSendToPlatform(MessagePlatform::Kick))
+        {
+            platforms.push_back(MessagePlatform::Kick);
+        }
+        return platforms;
+    }
+
+    if (channel && channel->isTwitchChannel() &&
+        getApp()->getAccounts()->twitch.isLoggedIn())
+    {
+        platforms.push_back(MessagePlatform::AnyOrTwitch);
+    }
+    else if (channel && channel->isKickChannel() &&
+             getApp()->getAccounts()->kick.isLoggedIn())
+    {
+        platforms.push_back(MessagePlatform::Kick);
+    }
+
+    return platforms;
+}
+
+ChannelPtr SplitInput::channelForSendPlatform(MessagePlatform platform) const
+{
+    auto channel = this->split_->getChannel();
+    auto *merged = dynamic_cast<MergedChannel *>(channel.get());
+    if (!merged)
+    {
+        return channel;
+    }
+
+    switch (platform)
+    {
+        case MessagePlatform::Kick:
+            return merged->kickChannel();
+        case MessagePlatform::AnyOrTwitch:
+        default:
+            return merged->twitchChannel();
+    }
+}
+
+bool SplitInput::canSendToPlatform(MessagePlatform platform) const
+{
+    auto channel = this->channelForSendPlatform(platform);
+    if (!channel)
+    {
+        return false;
+    }
+
+    switch (platform)
+    {
+        case MessagePlatform::Kick:
+            return getApp()->getAccounts()->kick.isLoggedIn() &&
+                   channel->isKickChannel();
+        case MessagePlatform::AnyOrTwitch:
+        default:
+            return getApp()->getAccounts()->twitch.isLoggedIn() &&
+                   channel->isTwitchChannel();
+    }
+}
+
+void SplitInput::updatePlatformSelector(bool animate)
+{
+    const auto platforms = this->availableSendPlatforms();
+
+    if (platforms.empty())
+    {
+        this->ui_.platformButton->hide();
+        return;
+    }
+
+    if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
+        platforms.end())
+    {
+        this->selectedSendPlatform_ = platforms.front();
+    }
+
+    this->ui_.platformButton->show();
+    this->ui_.platformButton->setEnabled(platforms.size() > 1);
+    this->ui_.platformButton->setPlatform(this->selectedSendPlatform_,
+                                          animate && platforms.size() > 1);
+
+    auto tooltip =
+        QString(u"Sending to %1"_s).arg(platformDisplayName(
+            this->selectedSendPlatform_));
+    if (platforms.size() > 1)
+    {
+        auto next = platforms.begin();
+        auto it = std::ranges::find(platforms, this->selectedSendPlatform_);
+        if (it != platforms.end() && ++it != platforms.end())
+        {
+            next = it;
+        }
+        tooltip += QString(u". Click to switch to %1"_s)
+                       .arg(platformDisplayName(*next));
+    }
+    this->ui_.platformButton->setToolTip(tooltip);
+}
+
+std::optional<MessagePlatform> SplitInput::selectedSendPlatform() const
+{
+    const auto platforms = this->availableSendPlatforms();
+    if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
+        platforms.end())
+    {
+        if (platforms.empty())
+        {
+            return std::nullopt;
+        }
+        return platforms.front();
+    }
+    return this->selectedSendPlatform_;
+}
+
+QString SplitInput::selectedSendPlatformDisplayName() const
+{
+    auto platform = this->selectedSendPlatform();
+    return platform ? platformDisplayName(*platform) : QString{};
+}
+
+QString SplitInput::selectedSendAccountName() const
+{
+    auto platform = this->selectedSendPlatform();
+    if (!platform)
+    {
+        return {};
+    }
+
+    switch (*platform)
+    {
+        case MessagePlatform::Kick: {
+            auto user = getApp()->getAccounts()->kick.current();
+            return user && !user->isAnonymous() ? user->username() : QString{};
+        }
+        case MessagePlatform::AnyOrTwitch:
+        default: {
+            auto user = getApp()->getAccounts()->twitch.getCurrent();
+            return user && !user->isAnon() ? user->getUserName() : QString{};
+        }
+    }
+}
+
+void SplitInput::selectSendPlatform(MessagePlatform platform)
+{
+    if (!this->canSendToPlatform(platform))
+    {
+        return;
+    }
+
+    if (this->selectedSendPlatform_ == platform)
+    {
+        this->cycleSendPlatform();
+        return;
+    }
+
+    this->selectedSendPlatform_ = platform;
+    this->updatePlatformSelector(true);
+    this->sendPlatformChanged.invoke();
+}
+
+void SplitInput::cycleSendPlatform()
+{
+    const auto platforms = this->availableSendPlatforms();
+    if (platforms.size() < 2)
+    {
+        return;
+    }
+
+    auto it = std::ranges::find(platforms, this->selectedSendPlatform_);
+    if (it == platforms.end() || ++it == platforms.end())
+    {
+        it = platforms.begin();
+    }
+    this->selectSendPlatform(*it);
 }
 
 void SplitInput::updateCancelReplyButton()
@@ -370,10 +764,12 @@ void SplitInput::openEmotePopup()
 {
     if (!this->emotePopup_)
     {
-        this->emotePopup_ = new EmotePopup(this);
+        this->emotePopup_ = new EmotePopup(this->window());
         this->emotePopup_->setAttribute(Qt::WA_DeleteOnClose);
 
-        // The EmotePopup is closed & destroyed when this is destroyed, meaning it's safe to ignore this connection
+        QObject::connect(this, &QObject::destroyed, this->emotePopup_,
+                         &QWidget::close);
+
         std::ignore =
             this->emotePopup_->linkClicked.connect([this](const Link &link) {
                 if (link.type == Link::InsertText)
@@ -408,24 +804,53 @@ QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)
         return "";
     }
 
-    if (!c->isTwitchOrKickChannel() || this->replyTarget_ == nullptr)
+    auto sendChannel = c;
+    auto *merged = dynamic_cast<MergedChannel *>(c.get());
+    std::optional<MessagePlatform> sendPlatform;
+    if (merged)
+    {
+        this->updatePlatformSelector();
+        sendPlatform = this->selectedSendPlatform();
+        if (!sendPlatform)
+        {
+            c->addSystemMessage(
+                u"Log in to Twitch or Kick to send merged chat."_s);
+            return "";
+        }
+
+        sendChannel = this->channelForSendPlatform(*sendPlatform);
+        if (!sendChannel || !this->canSendToPlatform(*sendPlatform))
+        {
+            c->addSystemMessage(
+                QString(u"Log in to %1 to send merged chat."_s)
+                    .arg(platformDisplayName(*sendPlatform)));
+            return "";
+        }
+    }
+
+    const bool replyMatchesSendPlatform =
+        !merged || this->replyTarget_ == nullptr || !sendPlatform ||
+        this->replyTarget_->platform == *sendPlatform;
+
+    if (!sendChannel->isTwitchOrKickChannel() || this->replyTarget_ == nullptr ||
+        !replyMatchesSendPlatform)
     {
         // standard message send behavior
         QString message = this->ui_.textEdit->toPlainText();
 
         message = message.replace('\n', ' ');
         QString sendMessage =
-            getApp()->getCommands()->execCommand(message, c, false);
+            getApp()->getCommands()->execCommand(message, sendChannel, false);
 
-        c->sendMessage(sendMessage);
+        sendChannel->sendMessage(sendMessage);
 
         this->postMessageSend(message, arguments);
         return "";
     }
 
     // Reply to message
-    auto *tc = dynamic_cast<TwitchChannel *>(c.get());
-    auto *kc = dynamic_cast<KickChannel *>(c.get());
+    auto *tc = dynamic_cast<TwitchChannel *>(sendChannel.get());
+    auto *kc = dynamic_cast<KickChannel *>(sendChannel.get());
     if (!tc && !kc)
     {
         // this should not fail
@@ -448,7 +873,7 @@ QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)
 
     message = message.replace('\n', ' ');
     QString sendMessage =
-        getApp()->getCommands()->execCommand(message, c, false);
+        getApp()->getCommands()->execCommand(message, sendChannel, false);
 
     // Reply within TwitchChannel
     if (tc)
@@ -1155,6 +1580,7 @@ void SplitInput::editTextChanged()
     }
 
     this->ui_.textEditLength->setText(labelText);
+    this->ui_.textEditLength->setVisible(!labelText.isEmpty());
 
     bool hasReply = false;
     if (this->enableInlineReplying_)

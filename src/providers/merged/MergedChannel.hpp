@@ -83,6 +83,7 @@ public:
 
     ChannelPtr twitchChannel() const;
     ChannelPtr kickChannel() const;
+    YouTubeLiveChat *youtubeLiveChat() const;
 
     pajlada::Signals::NoArgSignal streamStatusChanged;
 

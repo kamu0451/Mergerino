@@ -1286,7 +1286,11 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         return std::nullopt;
     }
 
-    if (!shouldShowMessageInActivityPane(*message))
+    if (!shouldShowMessageInActivityPane(
+            *message,
+            this->split_ ? this->split_->twitchActivityMinimumBits() : 100,
+            this->split_ ? this->split_->kickActivityMinimumKicks() : 100,
+            this->split_ ? this->split_->tiktokActivityMinimumDiamonds() : 0))
     {
         return std::nullopt;
     }
@@ -1964,7 +1968,34 @@ bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
     if (this->split_ && this->split_->filterActivity() &&
         !this->split_->isActivityPane() && isActivityAlertMessage(*m))
     {
-        return false;
+        if (isActivityTikTokGiftMessage(*m))
+        {
+            if (shouldShowTikTokGiftInActivityPane(
+                    *m, this->split_->tiktokActivityMinimumDiamonds()))
+            {
+                return false;
+            }
+        }
+        else if (isActivityTwitchBitsMessage(*m))
+        {
+            if (shouldShowTwitchBitsInActivityPane(
+                    *m, this->split_->twitchActivityMinimumBits()))
+            {
+                return false;
+            }
+        }
+        else if (isActivityKickKicksGiftMessage(*m))
+        {
+            if (shouldShowKickKicksGiftInActivityPane(
+                    *m, this->split_->kickActivityMinimumKicks()))
+            {
+                return false;
+            }
+        }
+        else if (isActivityAlertMessage(*m))
+        {
+            return false;
+        }
     }
 
     if (this->channelFilters_)
@@ -4520,6 +4551,15 @@ void ChannelView::updateID()
     boost::hash_combine(seed, this->split_ != nullptr &&
                                   this->split_->filterActivity() &&
                                   !this->split_->isActivityPane());
+    boost::hash_combine(seed, this->split_ != nullptr
+                                  ? this->split_->tiktokActivityMinimumDiamonds()
+                                  : 0U);
+    boost::hash_combine(seed, this->split_ != nullptr
+                                  ? this->split_->twitchActivityMinimumBits()
+                                  : 100U);
+    boost::hash_combine(seed, this->split_ != nullptr
+                                  ? this->split_->kickActivityMinimumKicks()
+                                  : 100U);
 
     this->id_ = seed;
 }

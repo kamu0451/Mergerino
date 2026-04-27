@@ -336,11 +336,11 @@ void BaseWindow::init()
                                  title->setText(text);
                              });
 
-            QSizePolicy policy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-            policy.setHorizontalStretch(1);
+            QSizePolicy policy(QSizePolicy::Preferred, QSizePolicy::Preferred);
             title->setSizePolicy(policy);
             buttonLayout->addWidget(title);
             this->ui_.titleLabel = title;
+            buttonLayout->addStretch(1);
 
             // buttons
             auto *minButton = new TitleBarButton;
@@ -684,6 +684,19 @@ void BaseWindow::focusOutEvent(QFocusEvent *event)
 }
 
 void BaseWindow::appendTitlebarButton(Button *button)
+{
+    this->ui_.buttons.push_back(button);
+
+    auto insertIndex = this->ui_.titlebarBox->count();
+    if (this->ui_.titlebarButtons)
+    {
+        insertIndex = std::max(1, insertIndex - 3);
+    }
+
+    this->ui_.titlebarBox->insertWidget(insertIndex, button);
+}
+
+void BaseWindow::appendTitlebarTitleButton(Button *button)
 {
     this->ui_.buttons.push_back(button);
     this->ui_.titlebarBox->insertWidget(1, button);

@@ -20,6 +20,7 @@ public:
 
     bool hasHeightForWidth() const override;
     bool isFirstWord() const;
+    void setVerticalPadding(int top, int bottom);
 
     pajlada::Signals::Signal<QKeyEvent *> keyPressed;
     pajlada::Signals::NoArgSignal focused;

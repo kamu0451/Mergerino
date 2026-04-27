@@ -60,6 +60,7 @@ UpdateDialog::UpdateDialog()
 void UpdateDialog::updateStatusChanged(Updates::Status status)
 {
     this->ui_.installButton->setVisible(status == Updates::UpdateAvailable);
+    this->ui_.installButton->setEnabled(status == Updates::UpdateAvailable);
 
     switch (status)
     {

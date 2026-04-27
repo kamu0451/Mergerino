@@ -872,6 +872,8 @@ MessagePtrMut KickMessageBuilder::makeKicksGiftedMessage(KickChannel *channel,
     KickMessageBuilder builder(channel, QDateTime::currentDateTime());
     builder->flags.set(MessageFlag::RedeemedChannelPointReward);
     builder->flags.set(MessageFlag::ElevatedMessage);
+    builder->flags.set(MessageFlag::CheerMessage);
+    builder->kickGiftKicks = giftAmount;
 
     QString text;
     if (userInput.isEmpty())

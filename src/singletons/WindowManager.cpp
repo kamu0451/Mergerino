@@ -750,6 +750,15 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
                        node->getSplit()->slowerChatMessagesPerSecond());
             obj.insert("slowerChatMessageAnimations",
                        node->getSplit()->slowerChatMessageAnimations());
+            obj.insert("twitchActivityMinimumBits",
+                       static_cast<qint64>(
+                           node->getSplit()->twitchActivityMinimumBits()));
+            obj.insert("kickActivityMinimumKicks",
+                       static_cast<qint64>(
+                           node->getSplit()->kickActivityMinimumKicks()));
+            obj.insert("tiktokActivityMinimumDiamonds",
+                       static_cast<qint64>(
+                           node->getSplit()->tiktokActivityMinimumDiamonds()));
             obj.insert("platformIndicatorMode",
                        qmagicenum::enumNameString(
                            node->getSplit()->platformIndicatorMode())

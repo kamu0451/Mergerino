@@ -25,6 +25,7 @@
 #include "singletons/WindowManager.hpp"
 #include "util/RapidJsonSerializeQSize.hpp"
 #include "widgets/AccountSwitchPopup.hpp"
+#include "widgets/buttons/Button.hpp"
 #include "widgets/buttons/InitUpdateButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/PixmapButton.hpp"
@@ -55,8 +56,10 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QObject>
+#include <QPainter>
 #include <QPalette>
 #include <QStandardItemModel>
+#include <QSvgRenderer>
 #include <QVBoxLayout>
 
 namespace chatterino {
@@ -110,6 +113,85 @@ QString providerAccountLabel(ProviderId provider)
 }
 
 }  // namespace
+
+class AccountTitlebarButton final : public Button
+{
+public:
+    explicit AccountTitlebarButton(ProviderId provider)
+        : provider_(provider)
+    {
+        this->setScaleIndependentHeight(30);
+        this->loadIcon();
+    }
+
+    void setProvider(ProviderId provider)
+    {
+        if (this->provider_ == provider)
+        {
+            return;
+        }
+
+        this->provider_ = provider;
+        this->loadIcon();
+        this->invalidateContent();
+    }
+
+    void setAccountText(const QString &text)
+    {
+        if (this->text_ == text)
+        {
+            return;
+        }
+
+        this->text_ = text;
+        this->refreshWidth();
+        this->invalidateContent();
+    }
+
+protected:
+    void paintContent(QPainter &painter) override
+    {
+        const auto scale = this->scale();
+        const int iconSize = int(16 * scale);
+        const int leftPadding = int(5 * scale);
+        const int gap = int(5 * scale);
+        const int textX = leftPadding + iconSize + gap;
+
+        QRectF iconRect{
+            QPointF(leftPadding, (this->height() - iconSize) / 2.0),
+            QSizeF(iconSize, iconSize)};
+        this->icon_.render(&painter, iconRect);
+
+        painter.setPen(this->theme->window.text);
+        painter.drawText(QRect{textX, 0, this->width() - textX - leftPadding,
+                               this->height()},
+                         Qt::AlignVCenter | Qt::AlignLeft, this->text_);
+    }
+
+    void scaleChangedEvent(float) override
+    {
+        this->refreshWidth();
+        this->invalidateContent();
+    }
+
+private:
+    void loadIcon()
+    {
+        this->icon_.load(providerIconPath(this->provider_));
+    }
+
+    void refreshWidth()
+    {
+        const QFontMetrics metrics(this->font());
+        const int width = int(32 * this->scale()) +
+                          metrics.horizontalAdvance(this->text_);
+        this->setFixedWidth(std::max(width, int(44 * this->scale())));
+    }
+
+    ProviderId provider_;
+    QString text_;
+    QSvgRenderer icon_;
+};
 
 Window::Window(WindowType type, QWidget *parent)
     : BaseWindow(
@@ -384,6 +466,42 @@ void Window::addCustomTitlebarButtons()
 
     // Update initial state
     this->updateStreamerModeIcon();
+}
+
+void Window::showUpdateDialog()
+{
+    if (this->updateTitlebarButton_ == nullptr ||
+        getApp()->getUpdates().getStatus() != Updates::UpdateAvailable)
+    {
+        return;
+    }
+
+    auto *dialog = new UpdateDialog();
+    auto globalPoint = this->updateTitlebarButton_->mapToGlobal(
+        QPoint(int(-100 * this->scale()),
+               this->updateTitlebarButton_->height()));
+
+    if (globalPoint.x() < 0)
+    {
+        globalPoint.setX(0);
+    }
+
+    dialog->moveTo(globalPoint, widgets::BoundsChecking::DesiredPosition);
+    dialog->show();
+    dialog->raise();
+}
+
+void Window::updateTitlebarUpdateButton()
+{
+    if (this->updateTitlebarButton_ == nullptr)
+    {
+        return;
+    }
+
+    const auto shouldShow = getApp()->getUpdates().shouldShowUpdateButton();
+    this->updateTitlebarButton_->setVisible(shouldShow);
+    this->updateTitlebarButton_->setToolTip(
+        shouldShow ? "Install Mergerino update" : QString());
 }
 
 void Window::updateStreamerModeIcon()
@@ -972,6 +1090,14 @@ void Window::onAccountSelected()
             });
         this->userPlatformButton_->setToolTip(
             QString("Switch %1 account").arg(providerName(provider)));
+    }
+
+    if (this->accountTitlebarButton_)
+    {
+        this->accountTitlebarButton_->setProvider(provider);
+        this->accountTitlebarButton_->setAccountText(accountLabel);
+        this->accountTitlebarButton_->setToolTip(
+            QString("%1 account").arg(providerName(provider)));
     }
 }
 

@@ -641,6 +641,11 @@ ChannelPtr MergedChannel::kickChannel() const
     return this->kickChannel_;
 }
 
+YouTubeLiveChat *MergedChannel::youtubeLiveChat() const
+{
+    return this->youtubeLiveChat_.get();
+}
+
 void MergedChannel::initializeSources()
 {
     if (this->config_.twitchEnabled)

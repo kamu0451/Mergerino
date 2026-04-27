@@ -66,6 +66,12 @@ public:
     /// Setter for #padding()
     void setPadding(QSize padding);
 
+    /// Sets an offset for the rendered SVG without moving the button hitbox.
+    void setContentOffset(QPoint offset);
+
+    /// Sets a fixed rendered SVG size without changing the button hitbox.
+    void setContentSize(std::optional<QSize> size);
+
 protected:
     void themeChangedEvent() override;
     void scaleChangedEvent(float scale) override;
@@ -81,6 +87,8 @@ private:
     Src source_;
     QSvgRenderer *svg_;
     QSize padding_;
+    QPoint contentOffset_;
+    std::optional<QSize> contentSize_;
     std::optional<QColor> color_;
 };
 

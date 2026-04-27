@@ -13,6 +13,7 @@ using namespace Qt::Literals;
 Version::Version()
     : version_(CHATTERINO_VERSION)
     , commitHash_(QStringLiteral(CHATTERINO_GIT_HASH))
+    , commitFullHash_(QStringLiteral(CHATTERINO_GIT_COMMIT))
     , isModified_(CHATTERINO_GIT_MODIFIED == 1)
     , dateOfBuild_(QStringLiteral(CHATTERINO_CMAKE_GEN_DATE))
     , isNightly_(CHATTERINO_NIGHTLY_BUILD == 1)
@@ -64,6 +65,11 @@ const QString &Version::fullVersion() const
 const QString &Version::commitHash() const
 {
     return this->commitHash_;
+}
+
+const QString &Version::commitFullHash() const
+{
+    return this->commitFullHash_;
 }
 
 const bool &Version::isModified() const

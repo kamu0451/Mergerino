@@ -19,7 +19,9 @@
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Settings.hpp"
+#include "singletons/Resources.hpp"
 #include "singletons/StreamerMode.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
@@ -28,6 +30,7 @@
 #include "util/LayoutHelper.hpp"
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
+#include "widgets/buttons/PixmapButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/helper/CommonTexts.hpp"
@@ -47,6 +50,7 @@
 #include <QPainter>
 
 #include <cmath>
+#include <limits>
 
 namespace {
 
@@ -221,6 +225,65 @@ auto formatOfflineTooltip(const TwitchChannel::StreamStatus &s)
         .arg(s.title.toHtmlEscaped());
 }
 
+QString formatCompactStreamTooltip(const TwitchChannel::StreamStatus &s,
+                                   const QString &thumbnail)
+{
+    constexpr qsizetype MAX_COMPACT_TITLE_LENGTH = 48;
+    auto tooltip = QStringLiteral("<p style=\"text-align: center;\">");
+
+    auto title = s.title.simplified();
+    if (title.size() > MAX_COMPACT_TITLE_LENGTH)
+    {
+        title = title.left(MAX_COMPACT_TITLE_LENGTH - 3).trimmed() + "...";
+    }
+    if (!title.isEmpty())
+    {
+        tooltip += title.toHtmlEscaped() % u"<br>";
+    }
+
+    if (getSettings()->thumbnailSizeStream.getValue() != 0 &&
+        !thumbnail.isEmpty())
+    {
+        tooltip += u"<img width=\"160\" height=\"90\" "
+                   u"src=\"data:image/jpg;base64, " %
+                   thumbnail % u"\"><br>";
+    }
+
+    if (!s.game.isEmpty())
+    {
+        tooltip += s.game.toHtmlEscaped() % u"<br>";
+    }
+
+    if (getApp()->getStreamerMode()->isEnabled() &&
+        getSettings()->streamerModeHideViewerCountAndDuration)
+    {
+        tooltip += QStringLiteral(
+            "<span style=\"color: #808892;\">&lt;Streamer Mode&gt;</span>");
+    }
+    else
+    {
+        tooltip += QString("%1 with %2 viewers")
+                       .arg(s.rerun ? "Vod-casting" : "Live")
+                       .arg(localizeNumbers(s.viewerCount));
+    }
+
+    tooltip += QStringLiteral("</p>");
+    return tooltip;
+}
+
+TwitchChannel::StreamStatus toTwitchStreamStatus(
+    const QString &title, uint64_t viewerCount)
+{
+    return {
+        .live = true,
+        .viewerCount = static_cast<unsigned>(
+            std::min<uint64_t>(viewerCount,
+                               std::numeric_limits<unsigned>::max())),
+        .title = title,
+        .streamType = QStringLiteral("live"),
+    };
+}
+
 auto formatTitle(const TwitchChannel::StreamStatus &s, Settings &settings)
 {
     auto title = QString();
@@ -279,6 +342,20 @@ auto distance(QPoint a, QPoint b)
     auto y = std::abs(a.y() - b.y());
 
     return std::sqrt(x * x + y * y);
+}
+
+QPixmap tintPixmap(const QPixmap &source, const QColor &color)
+{
+    QPixmap tinted(source.size());
+    tinted.setDevicePixelRatio(source.devicePixelRatio());
+    tinted.fill(Qt::transparent);
+
+    QPainter painter(&tinted);
+    painter.drawPixmap(0, 0, source);
+    painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+    painter.fillRect(tinted.rect(), color);
+
+    return tinted;
 }
 
 }  // namespace
@@ -454,6 +531,12 @@ void SplitHeader::initializeLayout()
     this->dropdownButton_ =
         new DrawnButton(DrawnButton::Symbol::Kebab, {}, this);
 
+    this->clearActivityButton_ = new PixmapButton(this);
+    this->clearActivityButton_->setPixmap(
+        tintPixmap(getResources().buttons.trashCan, Qt::white));
+    this->clearActivityButton_->setScaleIndependentSize(BUTTON_WIDTH, 24);
+    this->clearActivityButton_->hide();
+
     /// XXX: this never gets disconnected
     QObject::connect(this->dropdownButton_, &Button::leftMousePress, this,
                      [this] {
@@ -496,6 +579,8 @@ void SplitHeader::initializeLayout()
         this->moderationButton_,
         // chatter list
         this->chattersButton_,
+        // activity clear
+        this->clearActivityButton_,
         // dropdown
         this->dropdownButton_,
         // add split
@@ -544,6 +629,11 @@ void SplitHeader::initializeLayout()
         this->split_->openAlertsPane();
     });
 
+    QObject::connect(this->clearActivityButton_, &Button::leftClicked, this,
+                     [this]() {
+                         this->split_->clear();
+                     });
+
     QObject::connect(this->addButton_, &Button::leftClicked, this, [this]() {
         this->split_->addSibling();
     });
@@ -567,6 +657,114 @@ void SplitHeader::initializeLayout()
     this->moderationButton_->installEventFilter(this);
 
     this->setAddButtonVisible(false);
+}
+
+void SplitHeader::updateThumbnail(const QString &url, bool followRedirects)
+{
+    if (url.isEmpty())
+    {
+        this->thumbnailUrl_.clear();
+        this->thumbnail_.clear();
+        this->lastThumbnail_.invalidate();
+        return;
+    }
+
+    if (this->thumbnailUrl_ != url)
+    {
+        this->thumbnailUrl_ = url;
+        this->thumbnail_.clear();
+        this->lastThumbnail_.invalidate();
+    }
+
+    if (this->lastThumbnail_.isValid() &&
+        this->lastThumbnail_.elapsed() <= THUMBNAIL_MAX_AGE_MS)
+    {
+        return;
+    }
+
+    auto request = NetworkRequest(url, NetworkRequestType::Get)
+                       .caller(this)
+                       .onSuccess([this, url](const auto &result) {
+                           assert(!isAppAboutToQuit());
+
+                           if (this->thumbnailUrl_ != url)
+                           {
+                               return;
+                           }
+                           if (result.status() == 200)
+                           {
+                               this->thumbnail_ = QString::fromLatin1(
+                                   result.getData().toBase64());
+                           }
+                           else
+                           {
+                               this->thumbnail_.clear();
+                           }
+                           this->updateChannelText();
+                       });
+    if (followRedirects)
+    {
+        request = std::move(request).followRedirects(true);
+    }
+    std::move(request).execute();
+    this->lastThumbnail_.restart();
+}
+
+QString SplitHeader::mergedStreamPreviewTooltip(MergedChannel *mergedChannel)
+{
+    if (!mergedChannel || !mergedChannel->isLive())
+    {
+        return {};
+    }
+
+    if (auto *twitch = dynamic_cast<TwitchChannel *>(
+            mergedChannel->twitchChannel().get());
+        twitch && twitch->isLive())
+    {
+        const auto streamStatus = twitch->accessStreamStatus();
+        QString thumbnailUrl =
+            "https://static-cdn.jtvnw.net/previews-ttv/live_user_" +
+            twitch->getName().toLower();
+        switch (getSettings()->thumbnailSizeStream.getValue())
+        {
+            case 1:
+                thumbnailUrl.append("-80x45.jpg");
+                break;
+            case 2:
+                thumbnailUrl.append("-160x90.jpg");
+                break;
+            case 3:
+                thumbnailUrl.append("-360x203.jpg");
+                break;
+            default:
+                thumbnailUrl.clear();
+                break;
+        }
+        this->updateThumbnail(thumbnailUrl, false);
+        return formatCompactStreamTooltip(*streamStatus, this->thumbnail_);
+    }
+
+    if (auto *kick = dynamic_cast<KickChannel *>(
+            mergedChannel->kickChannel().get());
+        kick && kick->isLive())
+    {
+        const auto &stream = kick->streamData();
+        this->updateThumbnail(stream.thumbnailUrl, true);
+        return formatCompactStreamTooltip(toTwitchStreamStatus(stream),
+                                          this->thumbnail_);
+    }
+
+    if (auto *youtube = mergedChannel->youtubeLiveChat();
+        youtube && youtube->isLive())
+    {
+        this->updateThumbnail(youtube->previewThumbnailUrl(), true);
+        return formatCompactStreamTooltip(
+            toTwitchStreamStatus(youtube->liveTitle(),
+                                 youtube->liveViewerCount()),
+            this->thumbnail_);
+    }
+
+    return {};
 }
 
 std::unique_ptr<QMenu> SplitHeader::createMainMenu()
@@ -1009,6 +1207,7 @@ void SplitHeader::resetThumbnail()
 {
     this->lastThumbnail_.invalidate();
     this->thumbnail_.clear();
+    this->thumbnailUrl_.clear();
 }
 
 void SplitHeader::handleChannelChanged()
@@ -1086,6 +1285,13 @@ void SplitHeader::updateChannelText()
         title = "watching: " + (title.isEmpty() ? "none" : title);
     }
 
+    if (this->split_->isActivityPane())
+    {
+        this->resetThumbnail();
+        this->titleLabel_->setText(this->split_->activityPaneTitle());
+        return;
+    }
+
     if (auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
     {
         const auto streamStatus = twitchChannel->accessStreamStatus();
@@ -1111,30 +1317,7 @@ void SplitHeader::updateChannelText()
                 default:
                     url = "";
             }
-            if (!url.isEmpty() &&
-                (!this->lastThumbnail_.isValid() ||
-                 this->lastThumbnail_.elapsed() > THUMBNAIL_MAX_AGE_MS))
-            {
-                NetworkRequest(url, NetworkRequestType::Get)
-                    .caller(this)
-                    .onSuccess([this](auto result) {
-                        assert(!isAppAboutToQuit());
-
-                        // NOTE: We do not follow the redirects, so we need to make sure we only treat code 200 as a valid image
-                        if (result.status() == 200)
-                        {
-                            this->thumbnail_ = QString::fromLatin1(
-                                result.getData().toBase64());
-                        }
-                        else
-                        {
-                            this->thumbnail_.clear();
-                        }
-                        this->updateChannelText();
-                    })
-                    .execute();
-                this->lastThumbnail_.restart();
-            }
+            this->updateThumbnail(url, false);
             this->tooltipText_ = formatTooltip(*streamStatus, this->thumbnail_);
             title += formatTitle(*streamStatus, *getSettings());
             if (getSettings()->headerViewerCount &&
@@ -1171,23 +1354,7 @@ void SplitHeader::updateChannelText()
         if (stream.isLive)
         {
             this->isLive_ = true;
-            if (!stream.thumbnailUrl.isEmpty() &&
-                (!this->lastThumbnail_.isValid() ||
-                 this->lastThumbnail_.elapsed() > THUMBNAIL_MAX_AGE_MS))
-            {
-                NetworkRequest(stream.thumbnailUrl, NetworkRequestType::Get)
-                    .caller(this)
-                    .followRedirects(true)
-                    .onSuccess([this](const auto &result) {
-                        assert(!isAppAboutToQuit());
-
-                        this->thumbnail_ =
-                            QString::fromLatin1(result.getData().toBase64());
-                        this->updateChannelText();
-                    })
-                    .execute();
-                this->lastThumbnail_.restart();
-            }
+            this->updateThumbnail(stream.thumbnailUrl, true);
             this->tooltipText_ = formatTooltip(twitch, this->thumbnail_, true);
             title += formatTitle(twitch, *getSettings());
             if (getSettings()->headerViewerCount && stream.viewerCount > 0)
@@ -1219,70 +1386,11 @@ void SplitHeader::updateChannelText()
     else if (auto *mergedChannel = dynamic_cast<MergedChannel *>(channel.get()))
     {
         this->isLive_ = mergedChannel->isLive();
-        this->tooltipText_ = mergedChannel->tooltipText();
-
-        // If the merged tab has a live Twitch source, prepend the same
-        // stream thumbnail a plain Twitch tab shows. Fetch is driven by
-        // the same thumbnailSizeStream setting and cache-aged the same
-        // way as the Twitch branch above.
-        if (auto twitchSource = mergedChannel->twitchChannel())
+        this->tooltipText_ = this->mergedStreamPreviewTooltip(mergedChannel);
+        if (this->tooltipText_.isEmpty())
         {
-            if (auto *twitch =
-                    dynamic_cast<TwitchChannel *>(twitchSource.get()))
-            {
-                if (twitch->accessStreamStatus()->live)
-                {
-                    QString url = "https://static-cdn.jtvnw.net/"
-                                  "previews-ttv/live_user_" +
-                                  twitchSource->getName().toLower();
-                    switch (getSettings()->thumbnailSizeStream.getValue())
-                    {
-                        case 1:
-                            url.append("-80x45.jpg");
-                            break;
-                        case 2:
-                            url.append("-160x90.jpg");
-                            break;
-                        case 3:
-                            url.append("-360x203.jpg");
-                            break;
-                        default:
-                            url = "";
-                    }
-                    if (!url.isEmpty() &&
-                        (!this->lastThumbnail_.isValid() ||
-                         this->lastThumbnail_.elapsed() > THUMBNAIL_MAX_AGE_MS))
-                    {
-                        NetworkRequest(url, NetworkRequestType::Get)
-                            .caller(this)
-                            .onSuccess([this](auto result) {
-                                assert(!isAppAboutToQuit());
-                                if (result.status() == 200)
-                                {
-                                    this->thumbnail_ = QString::fromLatin1(
-                                        result.getData().toBase64());
-                                }
-                                else
-                                {
-                                    this->thumbnail_.clear();
-                                }
-                                this->updateChannelText();
-                            })
-                            .execute();
-                        this->lastThumbnail_.restart();
-                    }
-                    if (!this->thumbnail_.isEmpty())
-                    {
-                        this->tooltipText_ =
-                            QString("<p style=\"text-align: center;\">"
-                                    "<img src=\"data:image/jpg;base64, %1\">"
-                                    "</p>%2")
-                                .arg(this->thumbnail_, this->tooltipText_);
-                    }
-                }
-            }
+            this->tooltipText_ = mergedChannel->tooltipText();
         }
-
         if (this->isLive_)
         {
             title += mergedChannel->statusSuffix();
@@ -1372,6 +1480,7 @@ void SplitHeader::updateIcons()
         this->queuedSlowChatCountLabel_->setText(QString());
         this->alertsButton_->hide();
         this->moderationButton_->hide();
+        this->clearActivityButton_->show();
 
         if (channel->hasModRights() && channel->isTwitchChannel())
         {
@@ -1384,6 +1493,7 @@ void SplitHeader::updateIcons()
 
         return;
     }
+    this->clearActivityButton_->hide();
 
     if (this->slowChatQueueIndicatorReady_ && this->split_->slowerChatEnabled())
     {

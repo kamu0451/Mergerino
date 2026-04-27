@@ -6,6 +6,10 @@
 #include <QString>
 
 #include <functional>
+#include <utility>
+#include <vector>
+
+class QTcpServer;
 
 namespace chatterino {
 
@@ -26,6 +30,7 @@ public:
         unsigned status = 200;
         QByteArray body;
         QByteArray contentType = "text/plain; charset=utf-8";
+        std::vector<std::pair<QByteArray, QByteArray>> headers;
     };
 
     HttpServer(uint16_t port, QObject *parent = nullptr);
@@ -34,9 +39,12 @@ public:
 
     void setHandler(HandlerCb handler);
     const HandlerCb &handler() const;
+    bool isListening() const;
+    QString errorString() const;
 
 private:
     HandlerCb handler_;
+    QTcpServer *tcpServer_{};
 };
 
 }  // namespace chatterino

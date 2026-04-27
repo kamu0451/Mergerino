@@ -1,5 +1,15 @@
 Patch Notes
 
+27/04/2026
+- Added auto update
+- Added clear activity tab
+- Added stream info to tab preview
+- Added minimum bits/kicks setting in activity tab
+- Added quick platform toggle to chatbox
+- Improved Kick sign in process
+- Improved account menu
+- Improved YouTube chat performance
+
 25/04/2026
 - Simplified Kick login
 - Added First Message (Session) highlight

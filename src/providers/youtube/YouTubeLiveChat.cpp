@@ -56,6 +56,8 @@ const QColor YOUTUBE_PLATFORM_ACCENT(255, 48, 64, 60);
 constexpr int YOUTUBE_RECONNECT_DELAY_MS = 3000;
 constexpr int YOUTUBE_BLOCKED_RETRY_DELAY_MS = 60000;
 constexpr int YOUTUBE_SESSION_REFRESH_MS = 20 * 60 * 1000;
+constexpr int YOUTUBE_HEALTH_CHECK_INTERVAL_MS = 10000;
+constexpr int YOUTUBE_STALL_TIMEOUT_MS = 30000;
 
 std::vector<std::pair<QByteArray, QByteArray>> youtubeHeaders()
 {
@@ -187,7 +189,9 @@ void YouTubeLiveChat::start()
     this->skipInitialBacklog_ = false;
     this->activePollStreak_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
+    this->liveChatProgressTimer_.invalidate();
     this->setLive(false);
+    this->scheduleHealthCheck(YOUTUBE_HEALTH_CHECK_INTERVAL_MS);
     this->resolveVideoId();
 }
 
@@ -196,6 +200,7 @@ void YouTubeLiveChat::stop()
     this->running_ = false;
     this->activePollStreak_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
+    this->liveChatProgressTimer_.invalidate();
     this->lifetimeGuard_.reset();
 }
 
@@ -636,6 +641,7 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             this->failureReported_ = false;
             this->activePollStreak_ = 0;
             this->liveChatSessionRefreshTimer_.restart();
+            this->liveChatProgressTimer_.restart();
             if (this->joinedLiveVideoId_ != this->videoId_)
             {
                 this->joinedLiveVideoId_ = this->videoId_;
@@ -718,6 +724,7 @@ void YouTubeLiveChat::poll()
             auto continuation = json["continuationContents"]
                                     .toObject()["liveChatContinuation"]
                                     .toObject();
+            this->liveChatProgressTimer_.restart();
             if (continuation.isEmpty())
             {
                 this->recoverLiveChat(
@@ -864,6 +871,28 @@ void YouTubeLiveChat::schedulePoll(int delayMs)
     });
 }
 
+void YouTubeLiveChat::scheduleHealthCheck(int delayMs)
+{
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    QTimer::singleShot(delayMs, [this, weak] {
+        if (!weak.lock() || !this->running_)
+        {
+            return;
+        }
+
+        const bool shouldMonitor = this->live_ && !this->continuation_.isEmpty() &&
+                                   !this->apiKey_.isEmpty();
+        if (shouldMonitor && this->liveChatProgressTimer_.isValid() &&
+            this->liveChatProgressTimer_.elapsed() >= YOUTUBE_STALL_TIMEOUT_MS)
+        {
+            this->recoverLiveChat("YouTube live chat stalled. Reconnecting.",
+                                  YOUTUBE_RECONNECT_DELAY_MS);
+        }
+
+        this->scheduleHealthCheck(YOUTUBE_HEALTH_CHECK_INTERVAL_MS);
+    });
+}
+
 void YouTubeLiveChat::scheduleResolve(int delayMs)
 {
     auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
@@ -882,6 +911,7 @@ void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs)
     this->continuation_.clear();
     this->activePollStreak_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
+    this->liveChatProgressTimer_.invalidate();
     this->resetInnertubeContext();
     this->setStatusText(std::move(text), !this->failureReported_);
     this->failureReported_ = true;
@@ -900,6 +930,7 @@ void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
     this->skipInitialBacklog_ = false;
     this->activePollStreak_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
+    this->liveChatProgressTimer_.invalidate();
     this->setStatusText(std::move(text));
     this->scheduleResolve(retryDelayMs);
 }

@@ -54,6 +54,7 @@ private:
     void fetchLiveChatPage(bool skipInitialBacklog = true);
     void poll();
     void schedulePoll(int delayMs);
+    void scheduleHealthCheck(int delayMs);
     void scheduleResolve(int delayMs);
     void recoverLiveChat(QString text, int retryDelayMs);
     void waitForNextLive(QString text, int retryDelayMs);
@@ -97,6 +98,7 @@ private:
     int activePollStreak_{0};
     uint64_t liveViewerCount_{0};
     QElapsedTimer liveChatSessionRefreshTimer_;
+    QElapsedTimer liveChatProgressTimer_;
 
     std::shared_ptr<bool> lifetimeGuard_;
     std::unordered_set<QString> seenMessageIds_;

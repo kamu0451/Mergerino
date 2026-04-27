@@ -842,12 +842,20 @@ void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
         this->impl_->stuckConnectionTimer.stop();
     }
     if (hasLiveContent && this->impl_ && !this->impl_->checkAliveSeen &&
-        !this->live_)
+        !this->live_ && !this->roomId_.isEmpty())
     {
         // Fallback live signal: only used before check_alive has spoken.
         // Once check_alive has reported a definitive value the fallback
         // is suppressed -- otherwise stale frames after a stream end
         // re-flip live_ and re-fire the join announce.
+        //
+        // Require a confirmed roomId_: our injected JS hook captures every
+        // WebSocket the TikTok page opens, including ones pointed at sidebar
+        // recommendations on an offline user's /@user/live page. Without a
+        // roomId_ pinned by the object-form room/enter or room/info
+        // response (which TikTok only issues for our user when actually
+        // live), chat frames here may belong to a recommended room and
+        // would falsely fire "Joined TikTok live chat".
         this->setStatusText(QStringLiteral("Connected to TikTok"));
         this->setLive(true);
     }

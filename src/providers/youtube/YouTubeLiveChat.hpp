@@ -8,6 +8,7 @@
 #include "util/QStringHash.hpp"
 
 #include <pajlada/signals/signal.hpp>
+#include <QElapsedTimer>
 #include <QString>
 #include <QStringList>
 
@@ -50,7 +51,7 @@ private:
     void bootstrapInnertubeContext(std::function<void()> onReady,
                                    QString failureText);
     void resolveSourceToVideoId(const QString &source);
-    void fetchLiveChatPage();
+    void fetchLiveChatPage(bool skipInitialBacklog = true);
     void poll();
     void schedulePoll(int delayMs);
     void scheduleResolve(int delayMs);
@@ -95,6 +96,7 @@ private:
     bool skipInitialBacklog_{false};
     int activePollStreak_{0};
     uint64_t liveViewerCount_{0};
+    QElapsedTimer liveChatSessionRefreshTimer_;
 
     std::shared_ptr<bool> lifetimeGuard_;
     std::unordered_set<QString> seenMessageIds_;

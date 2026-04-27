@@ -126,18 +126,18 @@ int adjustedYouTubePollDelay(int timeoutMs, qint64 /* requestElapsedMs */,
     const auto serverDelay = cappedYouTubePollDelay(timeoutMs);
     if (deliveredMessageCount <= 0)
     {
-        constexpr int idleDelayCapMs = 3000;
+        constexpr int idleDelayCapMs = 5000;
         return std::min(serverDelay, idleDelayCapMs);
     }
 
-    int busyDelayCapMs = 650;
+    int busyDelayCapMs = 3000;
     if (deliveredMessageCount >= 25)
     {
-        busyDelayCapMs = 450;
+        busyDelayCapMs = 2000;
     }
     else if (deliveredMessageCount >= 10 || activePollStreak >= 2)
     {
-        busyDelayCapMs = 500;
+        busyDelayCapMs = 2500;
     }
 
     return std::min(serverDelay, busyDelayCapMs);
@@ -483,6 +483,7 @@ void YouTubeLiveChat::resolveSourceToVideoId(const QString &source)
                        .type(NetworkRequestType::Post)
                        .headerList(youtubeHeaders())
                        .json(root)
+                       .timeout(15000)
                        .header("Referer", liveUrl);
     if (!this->visitorData_.isEmpty())
     {
@@ -571,6 +572,7 @@ void YouTubeLiveChat::fetchLiveChatPage()
                        .type(NetworkRequestType::Post)
                        .headerList(youtubeHeaders())
                        .json(root)
+                       .timeout(15000)
                        .header("Referer",
                                QString("https://www.youtube.com/watch?v=%1")
                                    .arg(this->videoId_));
@@ -679,6 +681,7 @@ void YouTubeLiveChat::poll()
                        .type(NetworkRequestType::Post)
                        .headerList(youtubeHeaders())
                        .json(root)
+                       .timeout(15000)
                        .header("Referer",
                                QString("https://www.youtube.com/watch?v=%1")
                                    .arg(this->videoId_));

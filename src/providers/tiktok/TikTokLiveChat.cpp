@@ -105,6 +105,20 @@ struct TikTokLiveChat::Impl {
     // "Connecting..." forever.
     QTimer stuckConnectionTimer;
 
+    // Liveness staleness watchdog. Once live_ flips true we expect a steady
+    // stream of evidence: chat/gift/like/social/member frames, viewer-count
+    // updates, or check_alive batches confirming our room. If everything
+    // goes quiet for `livenessTimeoutMs`, the broadcast has almost
+    // certainly ended even though TikTok never sent us a definitive
+    // offline signal (no ws-close, no "room has finished" object-form
+    // response, and check_alive batches stop including ended rooms
+    // entirely). Without this backstop the tab can sit on "live" for
+    // hours after the streamer has gone offline.
+    QTimer livenessTimer;
+    qint64 lastLiveEvidenceMs{0};
+    static constexpr int livenessCheckIntervalMs = 30000;
+    static constexpr qint64 livenessTimeoutMs = 180000;
+
     // Set once check_alive (or the inline `alive` field) has returned a
     // definitive live/offline answer for this session. While false, the
     // WebSocket fallback can flip live_ on chat/gift frames; once true,
@@ -217,6 +231,31 @@ void TikTokLiveChat::start()
                          this->setStatusText(msg, true);
                          this->setLive(false);
                      });
+    this->impl_->livenessTimer.setSingleShot(false);
+    this->impl_->livenessTimer.setInterval(Impl::livenessCheckIntervalMs);
+    QObject::connect(&this->impl_->livenessTimer, &QTimer::timeout, [this]() {
+        if (!this->running_ || !this->live_ || !this->impl_)
+        {
+            return;
+        }
+        const auto now = QDateTime::currentMSecsSinceEpoch();
+        const auto last = this->impl_->lastLiveEvidenceMs;
+        if (last == 0 || now - last < Impl::livenessTimeoutMs)
+        {
+            return;
+        }
+        // No chat/gift/viewer-count frames, and no check_alive
+        // confirmation, in livenessTimeoutMs. TikTok stops including
+        // ended rooms in check_alive batches and often leaves the WS
+        // open silently, so this is the only reliable backstop for
+        // streams that end without a definitive offline signal.
+        qCDebug(chatterinoTikTok)
+            << "liveness watchdog: no evidence for"
+            << (now - last) / 1000 << "s, marking offline";
+        this->setStatusText(
+            QStringLiteral("TikTok live chat ended (no activity)"), true);
+        this->setLive(false);
+    });
     this->impl_->host = CreateWindowExW(
         0, kWindowClass, L"mergerino-tiktok-host", WS_POPUP, 0, 0, 1, 1,
         nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
@@ -488,6 +527,19 @@ void TikTokLiveChat::setLive(bool live)
     if (!live)
     {
         this->setViewerCount(0);
+        if (this->impl_)
+        {
+            this->impl_->livenessTimer.stop();
+            this->impl_->lastLiveEvidenceMs = 0;
+        }
+    }
+    else if (this->impl_)
+    {
+        // Seed the evidence clock so the watchdog grace period starts
+        // from the transition to live, not from the previous session.
+        this->impl_->lastLiveEvidenceMs =
+            QDateTime::currentMSecsSinceEpoch();
+        this->impl_->livenessTimer.start();
     }
     this->liveStatusChanged.invoke();
 }
@@ -650,6 +702,13 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
             {
                 this->impl_->stuckConnectionTimer.stop();
                 this->impl_->checkAliveSeen = true;
+                if (anyRoomLive)
+                {
+                    // Authoritative live confirmation - resets the
+                    // liveness staleness watchdog.
+                    this->impl_->lastLiveEvidenceMs =
+                        QDateTime::currentMSecsSinceEpoch();
+                }
             }
             this->setLive(anyRoomLive);
         }
@@ -840,6 +899,16 @@ void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
     if (hasLiveContent && this->impl_)
     {
         this->impl_->stuckConnectionTimer.stop();
+    }
+    // Liveness watchdog evidence. Only count signals that are unambiguous
+    // proof of an active broadcast: chat and gift frames. Viewer-count,
+    // member-join, social, and like frames continue to flow (or get
+    // replayed) for a while after a stream ends, so feeding them in here
+    // would defeat the watchdog.
+    if (hasLiveContent && this->impl_ && this->live_)
+    {
+        this->impl_->lastLiveEvidenceMs =
+            QDateTime::currentMSecsSinceEpoch();
     }
     if (hasLiveContent && this->impl_ && !this->impl_->checkAliveSeen &&
         !this->live_ && !this->roomId_.isEmpty())

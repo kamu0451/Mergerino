@@ -67,6 +67,7 @@ constexpr QStringView TEXT_FOLLOWERS = u"Followers: %1";
 constexpr QStringView TEXT_CREATED = u"Created: %1";
 constexpr QStringView TEXT_TITLE = u"%1's Usercard - #%2";
 constexpr QStringView TEXT_USER_ID = u"ID: ";
+constexpr QStringView TEXT_PLATFORM = u"Platform: %1";
 constexpr QStringView TEXT_UNAVAILABLE = u"(not available)";
 constexpr QStringView TEXT_PRONOUNS = u"Pronouns: %1";
 constexpr QStringView TEXT_UNSPECIFIED = u"(unspecified)";
@@ -181,6 +182,7 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
     : DraggablePopup(closeAutomatically, split)
     , split_(split)
     , closeAutomatically_(closeAutomatically)
+    , platform_(MessagePlatform::AnyOrTwitch)
 {
     assert(split != nullptr &&
            "split being nullptr causes lots of bugs down the road");
@@ -219,6 +221,10 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
          }},
         {"execModeratorAction",
          [this](std::vector<QString> arguments) -> QString {
+             if (!this->canModerateTargetUser())
+             {
+                 return "No moderation actions are available for this usercard.";
+             }
              if (arguments.empty())
              {
                  return "execModeratorAction action needs an argument, which "
@@ -269,10 +275,7 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
                            .arg(calculateTimeoutDuration(button));
              }
 
-             msg = getApp()->getCommands()->execCommand(
-                 msg, this->underlyingChannel_, false);
-
-             this->underlyingChannel_->sendMessage(msg);
+             this->sendModerationCommand(msg);
              return "";
          }},
         {"pin",
@@ -311,6 +314,16 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
                 if (this->isKick_)
                 {
                     this->onKickProfilePictureClick(button);
+                    return;
+                }
+                if (this->isGenericPlatform_)
+                {
+                    if (button == Qt::LeftButton &&
+                        !this->genericProfileUrl_.isEmpty())
+                    {
+                        QDesktopServices::openUrl(
+                            QUrl(this->genericProfileUrl_));
+                    }
                     return;
                 }
 
@@ -516,28 +529,16 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
         });
 
         QObject::connect(mod.getElement(), &Button::leftClicked, [this] {
-            QString value = "/mod " + this->userName_;
-            value = getApp()->getCommands()->execCommand(
-                value, this->underlyingChannel_, false);
-            this->underlyingChannel_->sendMessage(value);
+            this->sendModerationCommand("/mod " + this->userName_);
         });
         QObject::connect(unmod.getElement(), &Button::leftClicked, [this] {
-            QString value = "/unmod " + this->userName_;
-            value = getApp()->getCommands()->execCommand(
-                value, this->underlyingChannel_, false);
-            this->underlyingChannel_->sendMessage(value);
+            this->sendModerationCommand("/unmod " + this->userName_);
         });
         QObject::connect(vip.getElement(), &Button::leftClicked, [this] {
-            QString value = "/vip " + this->userName_;
-            value = getApp()->getCommands()->execCommand(
-                value, this->underlyingChannel_, false);
-            this->underlyingChannel_->sendMessage(value);
+            this->sendModerationCommand("/vip " + this->userName_);
         });
         QObject::connect(unvip.getElement(), &Button::leftClicked, [this] {
-            QString value = "/unvip " + this->userName_;
-            value = getApp()->getCommands()->execCommand(
-                value, this->underlyingChannel_, false);
-            this->underlyingChannel_->sendMessage(value);
+            this->sendModerationCommand("/unvip " + this->userName_);
         });
 
         // userstate
@@ -552,15 +553,9 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
 
             if (twitchChannel)
             {
-                bool isMyself =
-                    QString::compare(getApp()
-                                         ->getAccounts()
-                                         ->twitch.getCurrent()
-                                         ->getUserName(),
-                                     this->userName_, Qt::CaseInsensitive) == 0;
-
                 visibilityModButtons =
-                    twitchChannel->isBroadcaster() && !isMyself;
+                    twitchChannel->isBroadcaster() &&
+                    !this->isCurrentPlatformUser();
             }
             mod->setVisible(visibilityModButtons);
             unmod->setVisible(visibilityModButtons);
@@ -586,29 +581,7 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
         // we only connect once
         std::ignore = this->userStateChanged_.connect([this, lineMod,
                                                        timeout]() mutable {
-            TwitchChannel *twitchChannel =
-                dynamic_cast<TwitchChannel *>(this->underlyingChannel_.get());
-
-            bool visible = false;
-            if (twitchChannel)
-            {
-                bool isMyself =
-                    getApp()
-                        ->getAccounts()
-                        ->twitch.getCurrent()
-                        ->getUserName()
-                        .compare(this->userName_, Qt::CaseInsensitive) == 0;
-                bool hasModRights = twitchChannel->hasModRights();
-                visible = hasModRights && !isMyself;
-            }
-            else if (auto *kickChannel = dynamic_cast<KickChannel *>(
-                         this->underlyingChannel_.get()))
-            {
-                bool isMyself =
-                    getApp()->getAccounts()->kick.current()->username().compare(
-                        this->userName_, Qt::CaseInsensitive) == 0;
-                visible = kickChannel->hasModRights() && !isMyself;
-            }
+            bool visible = this->canModerateTargetUser();
             lineMod->setVisible(visible);
             timeout->setVisible(visible);
         });
@@ -623,38 +596,17 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
             switch (action)
             {
                 case TimeoutWidget::Ban: {
-                    if (this->underlyingChannel_)
-                    {
-                        QString value = "/ban " + this->userName_;
-                        value = getApp()->getCommands()->execCommand(
-                            value, this->underlyingChannel_, false);
-
-                        this->underlyingChannel_->sendMessage(value);
-                    }
+                    this->sendModerationCommand("/ban " + this->userName_);
                 }
                 break;
                 case TimeoutWidget::Unban: {
-                    if (this->underlyingChannel_)
-                    {
-                        QString value = "/unban " + this->userName_;
-                        value = getApp()->getCommands()->execCommand(
-                            value, this->underlyingChannel_, false);
-
-                        this->underlyingChannel_->sendMessage(value);
-                    }
+                    this->sendModerationCommand("/unban " + this->userName_);
                 }
                 break;
                 case TimeoutWidget::Timeout: {
-                    if (this->underlyingChannel_)
-                    {
-                        QString value = "/timeout " + this->userName_ + " " +
-                                        QString::number(arg) + 's';
-
-                        value = getApp()->getCommands()->execCommand(
-                            value, this->underlyingChannel_, false);
-
-                        this->underlyingChannel_->sendMessage(value);
-                    }
+                    this->sendModerationCommand(
+                        "/timeout " + this->userName_ + " " +
+                        QString::number(arg) + 's');
                 }
                 break;
             }
@@ -735,7 +687,7 @@ void UserInfoPopup::installEvents()
     QObject::connect(
         this->ui_.block, &QCheckBox::stateChanged,
         [this](int newState) mutable {
-            if (this->isKick_)
+            if (this->isKick_ || this->isGenericPlatform_)
             {
                 return;
             }
@@ -896,6 +848,24 @@ void UserInfoPopup::setData(const QString &name,
                             const ChannelPtr &contextChannel,
                             const ChannelPtr &openingChannel)
 {
+    auto platform = MessagePlatform::AnyOrTwitch;
+    auto channel = contextChannel && !contextChannel->isEmpty()
+                       ? contextChannel
+                       : openingChannel;
+    if (channel && channel->isKickChannel())
+    {
+        platform = MessagePlatform::Kick;
+    }
+
+    this->setData(name, contextChannel, openingChannel, platform);
+}
+
+void UserInfoPopup::setData(const QString &name,
+                            const ChannelPtr &contextChannel,
+                            const ChannelPtr &openingChannel,
+                            MessagePlatform platform,
+                            const QString &platformUserID)
+{
     const QStringView idPrefix = u"id:";
     bool isId = name.startsWith(idPrefix);
     if (isId)
@@ -910,29 +880,34 @@ void UserInfoPopup::setData(const QString &name,
         this->kickUserSlug_ = KickApi::slugify(name);
     }
 
-    this->channel_ = openingChannel;
+    this->channel_ = openingChannel ? openingChannel : Channel::getEmpty();
 
-    if (!contextChannel->isEmpty())
+    if (contextChannel && !contextChannel->isEmpty())
     {
         this->underlyingChannel_ = contextChannel;
     }
     else
     {
-        this->underlyingChannel_ = openingChannel;
+        this->underlyingChannel_ = this->channel_;
     }
 
     this->setWindowTitle(
         TEXT_TITLE.arg(name, this->underlyingChannel_->getName()));
-    this->isKick_ = this->underlyingChannel_->getType() == Channel::Type::Kick;
-    if (this->isKick_)
-    {
-        this->ui_.timeoutWidget->setMinTimeout(60);
-    }
+    this->platform_ = platform;
+    this->isKick_ = platform == MessagePlatform::Kick ||
+                    this->underlyingChannel_->getType() == Channel::Type::Kick;
+    this->isGenericPlatform_ = platform == MessagePlatform::YouTube ||
+                               platform == MessagePlatform::TikTok;
+    this->ui_.timeoutWidget->setMinTimeout(this->isKick_ ? 60 : 1);
 
     this->ui_.nameLabel->setText(name);
     this->ui_.nameLabel->setProperty("copy-text", name);
 
-    if (this->isKick_)
+    if (this->isGenericPlatform_)
+    {
+        this->updateGenericPlatformUserData(platformUserID);
+    }
+    else if (this->isKick_)
     {
         this->updateKickUserData();
     }
@@ -950,13 +925,110 @@ void UserInfoPopup::setData(const QString &name,
     // If we're opening by ID, this will be called as soon as we get the information from twitch
 
     auto type = this->channel_->getType();
-    if (type == Channel::Type::TwitchLive ||
+    if (this->isGenericPlatform_ || type == Channel::Type::TwitchLive ||
         type == Channel::Type::TwitchWhispers || type == Channel::Type::Misc ||
         type == Channel::Type::Kick)
     {
         // not a normal twitch channel, the url opened by the button will be invalid, so hide the button
         this->ui_.usercardLabel->hide();
     }
+}
+
+void UserInfoPopup::updateGenericPlatformUserData(
+    const QString &platformUserID)
+{
+    const auto platform = QString(this->platformName());
+    const auto platformKey = platform.toLower();
+    const auto visibleID =
+        platformUserID.isEmpty() ? this->userName_ : platformUserID;
+    auto storageID = platformUserID;
+    if (storageID.isEmpty())
+    {
+        storageID = u"name:" % this->userName_.toLower();
+    }
+
+    this->userId_ = platformKey + ":" + storageID;
+    this->helixAvatarUrl_.clear();
+    this->seventvAvatarUrl_.clear();
+    this->seventvUserID_.clear();
+    this->genericProfileUrl_.clear();
+    this->avatarUrl_.clear();
+    this->updateAvatarUrl();
+    this->updateNotes();
+
+    if (this->platform_ == MessagePlatform::YouTube &&
+        !platformUserID.isEmpty())
+    {
+        this->genericProfileUrl_ =
+            u"https://www.youtube.com/channel/" % platformUserID;
+    }
+    else if (this->platform_ == MessagePlatform::TikTok)
+    {
+        auto profileName = this->userName_;
+        if (profileName.startsWith(u"@"))
+        {
+            profileName = profileName.mid(1);
+        }
+        if (!profileName.isEmpty())
+        {
+            this->genericProfileUrl_ =
+                u"https://www.tiktok.com/@" % profileName;
+        }
+    }
+
+    this->ui_.avatarButton->setPixmap(QPixmap());
+    this->ui_.switchAvatars->hide();
+    this->ui_.liveIndicator->hide();
+    this->ui_.localizedNameLabel->setVisible(false);
+    this->ui_.localizedNameCopyButton->setVisible(false);
+    if (this->ui_.pronounsLabel != nullptr)
+    {
+        this->ui_.pronounsLabel->setVisible(false);
+    }
+
+    this->ui_.nameLabel->setText(this->userName_);
+    this->ui_.nameLabel->setProperty("copy-text", this->userName_);
+    this->setWindowTitle(TEXT_TITLE.arg(this->userName_,
+                                        this->underlyingChannel_->getName()));
+    this->ui_.followerCountLabel->setText(TEXT_PLATFORM.arg(platform));
+    this->ui_.createdDateLabel->setText(TEXT_CREATED.arg(TEXT_UNAVAILABLE));
+    this->ui_.createdDateLabel->setToolTip(QString());
+    this->ui_.followageLabel->setText(QString());
+    this->ui_.subageLabel->setText(QString());
+
+    const auto labelID = visibleID.isEmpty() ? TEXT_UNAVAILABLE.toString()
+                                            : visibleID;
+    this->ui_.userIDLabel->setText(TEXT_USER_ID % labelID);
+    this->ui_.userIDLabel->setProperty("copy-text", labelID);
+
+    {
+        QSignalBlocker blocker(this->ui_.block);
+        this->ui_.block->setChecked(false);
+    }
+    this->ui_.block->setEnabled(false);
+    this->ui_.block->setVisible(false);
+
+    bool isIgnoringHighlights = false;
+    const auto &vector = getSettings()->blacklistedUsers.raw();
+    for (const auto &blockedUser : vector)
+    {
+        if (this->userName_ == blockedUser.getPattern())
+        {
+            isIgnoringHighlights = true;
+            break;
+        }
+    }
+    const bool isRegexIgnored = getSettings()->isBlacklistedUser(
+                                   this->userName_) &&
+                               !isIgnoringHighlights;
+    this->ui_.ignoreHighlights->setChecked(isIgnoringHighlights);
+    this->ui_.ignoreHighlights->setEnabled(!isRegexIgnored);
+    this->ui_.ignoreHighlights->setVisible(true);
+    this->ui_.ignoreHighlights->setToolTip(
+        isRegexIgnored ? "Name matched by regex" : QString());
+
+    this->ui_.notesAdd->setEnabled(true);
+    this->ui_.usercardLabel->hide();
 }
 
 void UserInfoPopup::updateLatestMessages()
@@ -995,6 +1067,81 @@ void UserInfoPopup::updateLatestMessages()
                         this->updateLatestMessages();
                     }
                 }));
+}
+
+bool UserInfoPopup::isCurrentPlatformUser() const
+{
+    switch (this->platform_)
+    {
+        case MessagePlatform::Kick: {
+            return getApp()->getAccounts()->kick.current()->username().compare(
+                       this->userName_, Qt::CaseInsensitive) == 0;
+        }
+
+        case MessagePlatform::AnyOrTwitch: {
+            return getApp()
+                       ->getAccounts()
+                       ->twitch.getCurrent()
+                       ->getUserName()
+                       .compare(this->userName_, Qt::CaseInsensitive) == 0;
+        }
+
+        case MessagePlatform::YouTube:
+        case MessagePlatform::TikTok:
+            return false;
+    }
+
+    return false;
+}
+
+bool UserInfoPopup::canModerateTargetUser() const
+{
+    if (!this->underlyingChannel_ || this->underlyingChannel_->isEmpty() ||
+        this->isGenericPlatform_ || this->isCurrentPlatformUser())
+    {
+        return false;
+    }
+
+    switch (this->platform_)
+    {
+        case MessagePlatform::Kick: {
+            auto *kickChannel =
+                dynamic_cast<KickChannel *>(this->underlyingChannel_.get());
+            if (kickChannel == nullptr)
+            {
+                return false;
+            }
+            return getApp()->getAccounts()->kick.isLoggedIn();
+        }
+
+        case MessagePlatform::AnyOrTwitch: {
+            auto *twitchChannel =
+                dynamic_cast<TwitchChannel *>(this->underlyingChannel_.get());
+            if (twitchChannel == nullptr)
+            {
+                return false;
+            }
+            return twitchChannel->hasModRights();
+        }
+
+        case MessagePlatform::YouTube:
+        case MessagePlatform::TikTok:
+            return false;
+    }
+
+    return false;
+}
+
+void UserInfoPopup::sendModerationCommand(const QString &command)
+{
+    if (!this->canModerateTargetUser())
+    {
+        return;
+    }
+
+    auto value = getApp()->getCommands()->execCommand(
+        command, this->underlyingChannel_, false);
+    this->underlyingChannel_->sendMessage(value);
 }
 
 void UserInfoPopup::updateUserData()
@@ -1674,10 +1821,23 @@ void UserInfoPopup::onKickProfilePictureClick(Qt::MouseButton button)
 
 QStringView UserInfoPopup::platformName() const
 {
+    switch (this->platform_)
+    {
+        case MessagePlatform::Kick:
+            return u"Kick";
+        case MessagePlatform::YouTube:
+            return u"YouTube";
+        case MessagePlatform::TikTok:
+            return u"TikTok";
+        case MessagePlatform::AnyOrTwitch:
+            break;
+    }
+
     if (this->isKick_)
     {
         return u"Kick";
     }
+
     return u"Twitch";
 }
 

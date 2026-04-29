@@ -174,7 +174,8 @@ void Scrollbar::setDesiredValue(qreal value, bool animated)
     // this can't use std::clamp, because minimum_ < getBottom() isn't always
     // true, which is a precondition for std::clamp
     value = std::max(this->minimum_, std::min(this->getBottom(), value));
-    if (areClose(this->currentValue_, value))
+    const auto currentValueUnchanged = areClose(this->currentValue_, value);
+    if (currentValueUnchanged && areClose(this->desiredValue_, value))
     {
         // value has not changed
         return;
@@ -185,6 +186,17 @@ void Scrollbar::setDesiredValue(qreal value, bool animated)
     this->desiredValueChanged_.invoke();
 
     this->atBottom_ = areClose(this->getBottom(), value);
+
+    if (currentValueUnchanged)
+    {
+        if (this->currentValueAnimation_.state() != QPropertyAnimation::Stopped)
+        {
+            this->currentValueAnimation_.stop();
+            this->resetBounds();
+        }
+        this->updateScroll();
+        return;
+    }
 
     if (animated && getSettings()->enableSmoothScrolling)
     {

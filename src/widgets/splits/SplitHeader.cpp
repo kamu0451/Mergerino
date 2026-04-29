@@ -196,7 +196,22 @@ auto formatTooltip(const TwitchChannel::StreamStatus &s, QString thumbnail,
         return s.game.toHtmlEscaped() + "<br>";
     }();
 
-    auto extraStreamData = [&s]() -> QString {
+    auto streamSummary = [&s]() -> QString {
+        const auto liveStatus = QString(s.rerun ? "Vod-casting" : "Live");
+        if (s.uptime.isEmpty())
+        {
+            return QString("%1 with %2 viewers")
+                .arg(liveStatus)
+                .arg(localizeNumbers(s.viewerCount));
+        }
+
+        return QString("%1 for %2 with %3 viewers")
+            .arg(liveStatus)
+            .arg(s.uptime)
+            .arg(localizeNumbers(s.viewerCount));
+    };
+
+    auto extraStreamData = [&s, &streamSummary]() -> QString {
         if (getApp()->getStreamerMode()->isEnabled() &&
             getSettings()->streamerModeHideViewerCountAndDuration)
         {
@@ -205,10 +220,7 @@ auto formatTooltip(const TwitchChannel::StreamStatus &s, QString thumbnail,
                 "Mode&gt;</span>");
         }
 
-        return QString("%1 for %2 with %3 viewers")
-            .arg(s.rerun ? "Vod-casting" : "Live")
-            .arg(s.uptime)
-            .arg(localizeNumbers(s.viewerCount));
+        return streamSummary();
     }();
 
     return QString("<p style=\"text-align: center;\">" +  //
@@ -263,9 +275,15 @@ QString formatCompactStreamTooltip(const TwitchChannel::StreamStatus &s,
     }
     else
     {
-        tooltip += QString("%1 with %2 viewers")
-                       .arg(s.rerun ? "Vod-casting" : "Live")
-                       .arg(localizeNumbers(s.viewerCount));
+        const auto liveStatus = QString(s.rerun ? "Vod-casting" : "Live");
+        tooltip += s.uptime.isEmpty()
+                       ? QString("%1 with %2 viewers")
+                             .arg(liveStatus)
+                             .arg(localizeNumbers(s.viewerCount))
+                       : QString("%1 for %2 with %3 viewers")
+                             .arg(liveStatus)
+                             .arg(s.uptime)
+                             .arg(localizeNumbers(s.viewerCount));
     }
 
     tooltip += QStringLiteral("</p>");
@@ -273,7 +291,7 @@ QString formatCompactStreamTooltip(const TwitchChannel::StreamStatus &s,
 }
 
 TwitchChannel::StreamStatus toTwitchStreamStatus(
-    const QString &title, uint64_t viewerCount)
+    const QString &title, uint64_t viewerCount, const QString &uptime = {})
 {
     return {
         .live = true,
@@ -281,6 +299,7 @@ TwitchChannel::StreamStatus toTwitchStreamStatus(
             std::min<uint64_t>(viewerCount,
                                std::numeric_limits<unsigned>::max())),
         .title = title,
+        .uptime = uptime,
         .streamType = QStringLiteral("live"),
     };
 }
@@ -595,9 +614,13 @@ bool SplitHeader::eventFilter(QObject *watched, QEvent *event)
     {
         if (eventType == QEvent::Enter)
         {
-            if (watched == this->titleLabel_ && !this->tooltipText_.isEmpty())
+            if (watched == this->titleLabel_)
             {
-                this->showHoverTooltip(target, this->tooltipText_, true);
+                this->updateChannelText();
+                if (!this->tooltipText_.isEmpty())
+                {
+                    this->showHoverTooltip(target, this->tooltipText_, true);
+                }
             }
             else if (watched == this->queuedSlowChatCountLabel_ &&
                      !this->queuedSlowChatCountLabel_->getText().isEmpty())
@@ -761,7 +784,8 @@ QString SplitHeader::mergedStreamPreviewTooltip(MergedChannel *mergedChannel)
         this->updateThumbnail(youtube->previewThumbnailUrl(), true);
         return formatCompactStreamTooltip(
             toTwitchStreamStatus(youtube->liveTitle(),
-                                 youtube->liveViewerCount()),
+                                 youtube->liveViewerCount(),
+                                 youtube->liveUptime()),
             this->thumbnail_);
     }
 

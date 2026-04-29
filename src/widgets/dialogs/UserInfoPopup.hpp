@@ -14,6 +14,7 @@
 #include <QPointer>
 
 #include <chrono>
+#include <cstdint>
 
 class QCheckBox;
 class QMovie;
@@ -31,6 +32,7 @@ struct HelixUser;
 class LabelButton;
 class PixmapButton;
 class LiveIndicator;
+enum class MessagePlatform : std::uint8_t;
 
 class UserInfoPopup final : public DraggablePopup
 {
@@ -46,6 +48,9 @@ public:
     void setData(const QString &name, const ChannelPtr &channel);
     void setData(const QString &name, const ChannelPtr &contextChannel,
                  const ChannelPtr &openingChannel);
+    void setData(const QString &name, const ChannelPtr &contextChannel,
+                 const ChannelPtr &openingChannel, MessagePlatform platform,
+                 const QString &platformUserID = {});
 
 protected:
     void themeChangedEvent() override;
@@ -55,8 +60,12 @@ protected:
 private:
     void installEvents();
     void updateUserData();
+    void updateGenericPlatformUserData(const QString &platformUserID);
     void updateLatestMessages();
     void updateNotes();
+    bool canModerateTargetUser() const;
+    bool isCurrentPlatformUser() const;
+    void sendModerationCommand(const QString &command);
 
     void loadAvatar(const QString &userID, const QString &pictureURL,
                     bool isKick);
@@ -87,6 +96,7 @@ private:
     QString helixAvatarUrl_;
     QString seventvAvatarUrl_;
     QString seventvUserID_;
+    QString genericProfileUrl_;
 
     QString kickUserSlug_;
 
@@ -143,6 +153,8 @@ private:
     QPointer<EditUserNotesDialog> editUserNotesDialog_;
 
     bool isKick_ = false;
+    bool isGenericPlatform_ = false;
+    MessagePlatform platform_;
     uint64_t kickUserID_ = 0;
 
     class TimeoutWidget : public BaseWidget

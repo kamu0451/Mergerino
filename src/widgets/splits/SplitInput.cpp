@@ -43,6 +43,7 @@
 #include <QCompleter>
 #include <QImage>
 #include <QPainter>
+#include <QPen>
 #include <QSignalBlocker>
 #include <QSvgRenderer>
 #include <QVariantAnimation>
@@ -80,6 +81,27 @@ QString platformDisplayName(MessagePlatform platform)
     }
 }
 
+QString platformDisplayName(const std::vector<MessagePlatform> &platforms)
+{
+    QStringList names;
+    for (const auto platform : platforms)
+    {
+        names.append(platformDisplayName(platform));
+    }
+    return names.join(u" + "_s);
+}
+
+int platformButtonWidthForCount(int platformCount, float scale)
+{
+    platformCount = std::max(platformCount, 1);
+    if (platformCount == 1)
+    {
+        return int(22 * scale);
+    }
+
+    return int((16 * platformCount + 12 * (platformCount - 1) + 2) * scale);
+}
+
 }  // namespace
 
 class PlatformSwitchButton : public Button
@@ -107,15 +129,15 @@ public:
                          });
     }
 
-    void setPlatform(MessagePlatform platform, bool animate)
+    void setPlatforms(std::vector<MessagePlatform> platforms, bool animate)
     {
-        if (platform == this->currentPlatform_)
+        if (platforms == this->currentPlatforms_)
         {
             return;
         }
 
-        this->previousPlatform_ = this->currentPlatform_;
-        this->currentPlatform_ = platform;
+        this->previousPlatforms_ = this->currentPlatforms_;
+        this->currentPlatforms_ = std::move(platforms);
 
         this->animation_.stop();
         if (animate && this->isVisible())
@@ -157,18 +179,29 @@ protected:
 
         if (this->animationProgress_ >= 1.0)
         {
-            this->renderPlatform(painter, this->currentPlatform_, bounds, 1.0);
+            this->renderPlatforms(painter, this->currentPlatforms_, bounds, 1.0,
+                                  1.0);
         }
-        else
+        else if (this->previousPlatforms_.size() == 1 &&
+                 this->currentPlatforms_.size() == 1)
         {
             const auto slide = bounds.width() * this->animationProgress_;
             this->renderPlatform(
-                painter, this->previousPlatform_, bounds.translated(slide, 0),
-                1.0 - this->animationProgress_);
+                painter, this->previousPlatforms_.front(),
+                bounds.translated(slide, 0), 1.0 - this->animationProgress_);
             this->renderPlatform(
-                painter, this->currentPlatform_,
+                painter, this->currentPlatforms_.front(),
                 bounds.translated(slide - bounds.width(), 0),
                 this->animationProgress_);
+        }
+        else
+        {
+            this->renderPlatforms(painter, this->previousPlatforms_, bounds,
+                                  1.0 - this->animationProgress_,
+                                  1.0 - this->animationProgress_);
+            this->renderPlatforms(painter, this->currentPlatforms_, bounds,
+                                  this->animationProgress_,
+                                  this->animationProgress_);
         }
 
         painter.restore();
@@ -206,8 +239,85 @@ private:
         painter.restore();
     }
 
-    MessagePlatform currentPlatform_ = MessagePlatform::AnyOrTwitch;
-    MessagePlatform previousPlatform_ = MessagePlatform::AnyOrTwitch;
+    void renderPlus(QPainter &painter, const QPointF &center, qreal opacity)
+    {
+        if (opacity <= 0.0)
+        {
+            return;
+        }
+
+        painter.save();
+        painter.setOpacity(opacity);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const auto color = QColor(232, 232, 232);
+        const qreal half = 2.2 * this->scale();
+        const qreal width = std::max<qreal>(1.0, 1.2 * this->scale());
+        painter.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF{center.x() - half, center.y()},
+                         QPointF{center.x() + half, center.y()});
+        painter.drawLine(QPointF{center.x(), center.y() - half},
+                         QPointF{center.x(), center.y() + half});
+        painter.restore();
+    }
+
+    void renderPlatforms(QPainter &painter,
+                         const std::vector<MessagePlatform> &platforms,
+                         const QRectF &bounds, qreal opacity, qreal spread)
+    {
+        if (platforms.empty() || opacity <= 0.0)
+        {
+            return;
+        }
+
+        if (platforms.size() == 1)
+        {
+            this->renderPlatform(painter, platforms.front(), bounds, opacity);
+            return;
+        }
+
+        const auto center = bounds.center();
+        const auto iconSize = bounds.size();
+        const qreal plusWidth = 6.0 * this->scale();
+        const qreal gap = 3.0 * this->scale();
+        const qreal step = iconSize.width() + plusWidth + (gap * 2.0);
+        const qreal groupWidth =
+            (iconSize.width() * static_cast<qreal>(platforms.size())) +
+            ((plusWidth + (gap * 2.0)) *
+             static_cast<qreal>(platforms.size() - 1));
+        const qreal firstCenterX =
+            center.x() - (groupWidth / 2.0) + (iconSize.width() / 2.0);
+
+        for (size_t i = 0; i < platforms.size(); ++i)
+        {
+            const qreal targetCenterX =
+                firstCenterX + (step * static_cast<qreal>(i));
+            const qreal currentCenterX =
+                center.x() + ((targetCenterX - center.x()) * spread);
+            QRectF iconBounds{
+                QPointF{currentCenterX - (iconSize.width() / 2.0),
+                        center.y() - (iconSize.height() / 2.0)},
+                iconSize,
+            };
+            this->renderPlatform(painter, platforms[i], iconBounds, opacity);
+
+            if (i + 1 < platforms.size())
+            {
+                const qreal targetPlusX = targetCenterX +
+                                          (iconSize.width() / 2.0) + gap +
+                                          (plusWidth / 2.0);
+                const qreal currentPlusX =
+                    center.x() + ((targetPlusX - center.x()) * spread);
+                this->renderPlus(painter, QPointF{currentPlusX, center.y()},
+                                 opacity * spread);
+            }
+        }
+    }
+
+    std::vector<MessagePlatform> currentPlatforms_{
+        MessagePlatform::AnyOrTwitch};
+    std::vector<MessagePlatform> previousPlatforms_{
+        MessagePlatform::AnyOrTwitch};
     QSvgRenderer twitchRenderer_;
     QSvgRenderer kickRenderer_;
     QVariantAnimation animation_;
@@ -475,7 +585,8 @@ void SplitInput::scaleChangedEvent(float scale)
 {
     // update the icon size of the buttons
     this->updateEmoteButton();
-    this->updatePlatformButtonLayout();
+    this->updatePlatformButtonLayout(
+        static_cast<int>(this->selectedSendPlatforms().size()));
     this->updateCancelReplyButton();
 
     // set maximum height
@@ -535,12 +646,12 @@ void SplitInput::updateEmoteButton()
     this->ui_.emoteButton->setFixedWidth(int(24 * scale));
 }
 
-void SplitInput::updatePlatformButtonLayout()
+void SplitInput::updatePlatformButtonLayout(int platformCount)
 {
     auto scale = this->scale();
 
     const auto height = int(18 * scale);
-    const auto width = int(22 * scale);
+    const auto width = platformButtonWidthForCount(platformCount, scale);
     const auto minimumHeight = height * 2 + int(4 * scale);
 
     if (this->ui_.inputWrapper)
@@ -598,6 +709,55 @@ std::vector<MessagePlatform> SplitInput::availableSendPlatforms() const
     return platforms;
 }
 
+std::optional<MessagePlatform> SplitInput::replySendPlatform() const
+{
+    if (!this->replyTarget_)
+    {
+        return std::nullopt;
+    }
+
+    switch (this->replyTarget_->platform)
+    {
+        case MessagePlatform::Kick:
+            return MessagePlatform::Kick;
+        case MessagePlatform::AnyOrTwitch:
+            return MessagePlatform::AnyOrTwitch;
+        default:
+            return std::nullopt;
+    }
+}
+
+std::vector<MessagePlatform> SplitInput::selectedSendPlatforms() const
+{
+    const auto platforms = this->availableSendPlatforms();
+    if (platforms.empty())
+    {
+        return {};
+    }
+
+    if (auto replyPlatform = this->replySendPlatform())
+    {
+        if (std::ranges::find(platforms, *replyPlatform) != platforms.end())
+        {
+            return {*replyPlatform};
+        }
+        return {};
+    }
+
+    if (this->selectedSendAllPlatforms_ && platforms.size() > 1)
+    {
+        return platforms;
+    }
+
+    if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
+        platforms.end())
+    {
+        return {platforms.front()};
+    }
+
+    return {this->selectedSendPlatform_};
+}
+
 ChannelPtr SplitInput::channelForSendPlatform(MessagePlatform platform) const
 {
     auto channel = this->split_->getChannel();
@@ -647,36 +807,75 @@ void SplitInput::updatePlatformSelector(bool animate)
         return;
     }
 
+    if (this->selectedSendAllPlatforms_ && platforms.size() < 2)
+    {
+        this->selectedSendAllPlatforms_ = false;
+    }
+
     if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
         platforms.end())
     {
         this->selectedSendPlatform_ = platforms.front();
     }
 
+    const auto selectedPlatforms = this->selectedSendPlatforms();
+    if (selectedPlatforms.empty())
+    {
+        this->ui_.platformButton->hide();
+        return;
+    }
+
+    const bool replyLocked = this->replySendPlatform().has_value();
+    const auto targetCount =
+        replyLocked ? selectedPlatforms.size()
+                    : platforms.size() + (platforms.size() > 1 ? 1 : 0);
+
+    this->updatePlatformButtonLayout(static_cast<int>(selectedPlatforms.size()));
     this->ui_.platformButton->show();
-    this->ui_.platformButton->setEnabled(platforms.size() > 1);
-    this->ui_.platformButton->setPlatform(this->selectedSendPlatform_,
-                                          animate && platforms.size() > 1);
+    this->ui_.platformButton->setEnabled(!replyLocked && targetCount > 1);
+    this->ui_.platformButton->setPlatforms(selectedPlatforms,
+                                           animate && targetCount > 1);
 
     auto tooltip =
-        QString(u"Sending to %1"_s).arg(platformDisplayName(
-            this->selectedSendPlatform_));
-    if (platforms.size() > 1)
+        QString(replyLocked ? u"Replying on %1"_s : u"Sending to %1"_s)
+            .arg(platformDisplayName(selectedPlatforms));
+    if (!replyLocked && targetCount > 1)
     {
-        auto next = platforms.begin();
-        auto it = std::ranges::find(platforms, this->selectedSendPlatform_);
-        if (it != platforms.end() && ++it != platforms.end())
+        QString nextTarget;
+        if (this->selectedSendAllPlatforms_)
         {
-            next = it;
+            nextTarget = platformDisplayName(platforms.front());
         }
-        tooltip += QString(u". Click to switch to %1"_s)
-                       .arg(platformDisplayName(*next));
+        else
+        {
+            auto it = std::ranges::find(platforms, this->selectedSendPlatform_);
+            if (it != platforms.end() && ++it != platforms.end())
+            {
+                nextTarget = platformDisplayName(*it);
+            }
+            else
+            {
+                nextTarget = platformDisplayName(platforms);
+            }
+        }
+        tooltip += QString(u". Click to switch to %1"_s).arg(nextTarget);
     }
     this->ui_.platformButton->setToolTip(tooltip);
+    this->updateEmotePopupChannel();
 }
 
 std::optional<MessagePlatform> SplitInput::selectedSendPlatform() const
 {
+    if (auto replyPlatform = this->replySendPlatform())
+    {
+        return *replyPlatform;
+    }
+
+    if (this->selectedSendAllPlatforms_)
+    {
+        return std::nullopt;
+    }
+
     const auto platforms = this->availableSendPlatforms();
     if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
         platforms.end())
@@ -692,30 +891,38 @@ std::optional<MessagePlatform> SplitInput::selectedSendPlatform() const
 
 QString SplitInput::selectedSendPlatformDisplayName() const
 {
-    auto platform = this->selectedSendPlatform();
-    return platform ? platformDisplayName(*platform) : QString{};
+    return platformDisplayName(this->selectedSendPlatforms());
 }
 
 QString SplitInput::selectedSendAccountName() const
 {
-    auto platform = this->selectedSendPlatform();
-    if (!platform)
+    QStringList accountNames;
+    for (const auto platform : this->selectedSendPlatforms())
     {
-        return {};
+        switch (platform)
+        {
+            case MessagePlatform::Kick: {
+                auto user = getApp()->getAccounts()->kick.current();
+                if (user && !user->isAnonymous())
+                {
+                    accountNames.append(user->username());
+                }
+            }
+            break;
+            case MessagePlatform::AnyOrTwitch:
+            default: {
+                auto user = getApp()->getAccounts()->twitch.getCurrent();
+                if (user && !user->isAnon())
+                {
+                    accountNames.append(user->getUserName());
+                }
+            }
+            break;
+        }
     }
 
-    switch (*platform)
-    {
-        case MessagePlatform::Kick: {
-            auto user = getApp()->getAccounts()->kick.current();
-            return user && !user->isAnonymous() ? user->username() : QString{};
-        }
-        case MessagePlatform::AnyOrTwitch:
-        default: {
-            auto user = getApp()->getAccounts()->twitch.getCurrent();
-            return user && !user->isAnon() ? user->getUserName() : QString{};
-        }
-    }
+    accountNames.removeDuplicates();
+    return accountNames.join(u" + "_s);
 }
 
 void SplitInput::selectSendPlatform(MessagePlatform platform)
@@ -725,13 +932,33 @@ void SplitInput::selectSendPlatform(MessagePlatform platform)
         return;
     }
 
-    if (this->selectedSendPlatform_ == platform)
+    if (!this->selectedSendAllPlatforms_ &&
+        this->selectedSendPlatform_ == platform)
     {
         this->cycleSendPlatform();
         return;
     }
 
+    this->selectedSendAllPlatforms_ = false;
     this->selectedSendPlatform_ = platform;
+    this->updatePlatformSelector(true);
+    this->sendPlatformChanged.invoke();
+}
+
+void SplitInput::selectAllSendPlatforms()
+{
+    if (this->availableSendPlatforms().size() < 2)
+    {
+        return;
+    }
+
+    if (this->selectedSendAllPlatforms_)
+    {
+        this->cycleSendPlatform();
+        return;
+    }
+
+    this->selectedSendAllPlatforms_ = true;
     this->updatePlatformSelector(true);
     this->sendPlatformChanged.invoke();
 }
@@ -739,15 +966,23 @@ void SplitInput::selectSendPlatform(MessagePlatform platform)
 void SplitInput::cycleSendPlatform()
 {
     const auto platforms = this->availableSendPlatforms();
-    if (platforms.size() < 2)
+    const auto targetCount = platforms.size() + (platforms.size() > 1 ? 1 : 0);
+    if (targetCount < 2)
     {
+        return;
+    }
+
+    if (this->selectedSendAllPlatforms_)
+    {
+        this->selectSendPlatform(platforms.front());
         return;
     }
 
     auto it = std::ranges::find(platforms, this->selectedSendPlatform_);
     if (it == platforms.end() || ++it == platforms.end())
     {
-        it = platforms.begin();
+        this->selectAllSendPlatforms();
+        return;
     }
     this->selectSendPlatform(*it);
 }
@@ -790,10 +1025,26 @@ void SplitInput::openEmotePopup()
             });
     }
 
-    this->emotePopup_->loadChannel(this->split_->getChannel());
+    this->updateEmotePopupChannel();
     this->emotePopup_->show();
     this->emotePopup_->raise();
     this->emotePopup_->activateWindow();
+}
+
+void SplitInput::updateEmotePopupChannel()
+{
+    if (!this->emotePopup_)
+    {
+        return;
+    }
+
+    auto channel = this->split_->getChannel();
+    if (channel == nullptr)
+    {
+        return;
+    }
+
+    this->emotePopup_->loadChannel(channel, this->selectedSendPlatforms());
 }
 
 QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)
@@ -804,88 +1055,119 @@ QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)
         return "";
     }
 
-    auto sendChannel = c;
+    struct SendTarget {
+        ChannelPtr channel;
+        std::optional<MessagePlatform> platform;
+    };
+
+    std::vector<SendTarget> sendTargets;
     auto *merged = dynamic_cast<MergedChannel *>(c.get());
-    std::optional<MessagePlatform> sendPlatform;
     if (merged)
     {
         this->updatePlatformSelector();
-        sendPlatform = this->selectedSendPlatform();
-        if (!sendPlatform)
+        const auto sendPlatforms = this->selectedSendPlatforms();
+        if (sendPlatforms.empty())
         {
-            c->addSystemMessage(
-                u"Log in to Twitch or Kick to send merged chat."_s);
+            if (auto replyPlatform = this->replySendPlatform())
+            {
+                c->addSystemMessage(
+                    QString(u"Log in to %1 to reply in merged chat."_s)
+                        .arg(platformDisplayName(*replyPlatform)));
+            }
+            else
+            {
+                c->addSystemMessage(
+                    u"Log in to Twitch or Kick to send merged chat."_s);
+            }
             return "";
         }
 
-        sendChannel = this->channelForSendPlatform(*sendPlatform);
-        if (!sendChannel || !this->canSendToPlatform(*sendPlatform))
+        for (const auto platform : sendPlatforms)
         {
-            c->addSystemMessage(
-                QString(u"Log in to %1 to send merged chat."_s)
-                    .arg(platformDisplayName(*sendPlatform)));
-            return "";
+            auto sendChannel = this->channelForSendPlatform(platform);
+            if (!sendChannel || !this->canSendToPlatform(platform))
+            {
+                c->addSystemMessage(
+                    QString(u"Log in to %1 to send merged chat."_s)
+                        .arg(platformDisplayName(platform)));
+                return "";
+            }
+            sendTargets.push_back({sendChannel, platform});
         }
     }
-
-    const bool replyMatchesSendPlatform =
-        !merged || this->replyTarget_ == nullptr || !sendPlatform ||
-        this->replyTarget_->platform == *sendPlatform;
-
-    if (!sendChannel->isTwitchOrKickChannel() || this->replyTarget_ == nullptr ||
-        !replyMatchesSendPlatform)
+    else
     {
-        // standard message send behavior
-        QString message = this->ui_.textEdit->toPlainText();
-
-        message = message.replace('\n', ' ');
-        QString sendMessage =
-            getApp()->getCommands()->execCommand(message, sendChannel, false);
-
-        sendChannel->sendMessage(sendMessage);
-
-        this->postMessageSend(message, arguments);
-        return "";
-    }
-
-    // Reply to message
-    auto *tc = dynamic_cast<TwitchChannel *>(sendChannel.get());
-    auto *kc = dynamic_cast<KickChannel *>(sendChannel.get());
-    if (!tc && !kc)
-    {
-        // this should not fail
-        return "";
+        sendTargets.push_back({c, std::nullopt});
     }
 
     QString message = this->ui_.textEdit->toPlainText();
+    message = message.replace('\n', ' ');
+    QString historyMessage = message;
 
-    if (this->enableInlineReplying_)
+    for (const auto &target : sendTargets)
     {
-        // Remove @username prefix that is inserted when doing inline replies
-        message.remove(0, this->replyTarget_->displayName.length() +
-                              1);  // remove "@username"
+        const bool replyMatchesSendPlatform =
+            !target.platform || this->replyTarget_ == nullptr ||
+            this->replyTarget_->platform == *target.platform;
 
-        if (!message.isEmpty() && message.at(0) == ' ')
+        if (this->replyTarget_ != nullptr && !replyMatchesSendPlatform)
         {
-            message.remove(0, 1);  // remove possible space
+            continue;
+        }
+
+        if (!target.channel->isTwitchOrKickChannel() ||
+            this->replyTarget_ == nullptr)
+        {
+            // standard message send behavior
+            QString sendMessage = getApp()->getCommands()->execCommand(
+                message, target.channel, false);
+
+            target.channel->sendMessage(sendMessage);
+            continue;
+        }
+
+        // Reply to message
+        auto *tc = dynamic_cast<TwitchChannel *>(target.channel.get());
+        auto *kc = dynamic_cast<KickChannel *>(target.channel.get());
+        if (!tc && !kc)
+        {
+            // this should not fail
+            continue;
+        }
+
+        QString replyMessage = message;
+        if (this->enableInlineReplying_)
+        {
+            // Remove @username prefix that is inserted when doing inline replies
+            replyMessage.remove(0, this->replyTarget_->displayName.length() +
+                                       1);  // remove "@username"
+
+            if (!replyMessage.isEmpty() && replyMessage.at(0) == ' ')
+            {
+                replyMessage.remove(0, 1);  // remove possible space
+            }
+        }
+
+        QString sendMessage = getApp()->getCommands()->execCommand(
+            replyMessage, target.channel, false);
+
+        // Reply within TwitchChannel
+        if (tc)
+        {
+            tc->sendReply(sendMessage, this->replyTarget_->id);
+        }
+        else if (kc)
+        {
+            kc->sendReply(sendMessage, this->replyTarget_->id);
+        }
+
+        if (sendTargets.size() == 1)
+        {
+            historyMessage = replyMessage;
         }
     }
 
-    message = message.replace('\n', ' ');
-    QString sendMessage =
-        getApp()->getCommands()->execCommand(message, sendChannel, false);
-
-    // Reply within TwitchChannel
-    if (tc)
-    {
-        tc->sendReply(sendMessage, this->replyTarget_->id);
-    }
-    else if (kc)
-    {
-        kc->sendReply(sendMessage, this->replyTarget_->id);
-    }
-
-    this->postMessageSend(message, arguments);
+    this->postMessageSend(historyMessage, arguments);
     return "";
 }
 
@@ -1733,15 +2015,13 @@ void SplitInput::setReply(MessagePtr target)
             this->ui_.replyLabel->setText("Replying to @" +
                                           this->replyTarget_->displayName);
         }
+
+        this->updatePlatformSelector(true);
+        this->sendPlatformChanged.invoke();
     }
     else
     {
-        this->replyTarget_.reset();
-
-        if (this->enableInlineReplying_)
-        {
-            this->clearReplyTarget();
-        }
+        this->clearReplyTarget();
     }
 }
 
@@ -1755,20 +2035,23 @@ void SplitInput::clearInput()
     this->currMsg_ = "";
     this->ui_.textEdit->setText("");
     this->ui_.textEdit->moveCursor(QTextCursor::Start);
-    if (this->enableInlineReplying_)
-    {
-        this->clearReplyTarget();
-    }
+    this->clearReplyTarget();
 }
 
 void SplitInput::clearReplyTarget()
 {
+    const bool hadReply = this->replyTarget_ != nullptr;
     this->replyTarget_.reset();
     this->ui_.replyMessage->clearMessage();
     this->ui_.vbox->setSpacing(0);
     if (!this->isHidden())
     {
         this->setMaximumHeight(this->scaledMaxHeight());
+    }
+    if (hadReply)
+    {
+        this->updatePlatformSelector(true);
+        this->sendPlatformChanged.invoke();
     }
 }
 

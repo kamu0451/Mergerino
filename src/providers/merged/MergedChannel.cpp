@@ -16,6 +16,7 @@
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/youtube/YouTubeLiveChat.hpp"
+#include "singletons/WindowManager.hpp"
 #include "util/QStringHash.hpp"
 
 #include <QPainter>
@@ -252,6 +253,31 @@ bool MergedChannel::isRerun() const
     return false;
 }
 
+bool MergedChannel::canReconnect() const
+{
+    return this->youtubeLiveChat_ != nullptr || this->tiktokLiveChat_ != nullptr;
+}
+
+void MergedChannel::reconnect()
+{
+    if (this->youtubeLiveChat_ != nullptr)
+    {
+        this->youtubeLive_ = false;
+        this->youtubeLiveChat_->stop();
+        this->youtubeLiveChat_->start();
+    }
+
+    if (this->tiktokLiveChat_ != nullptr)
+    {
+        this->tiktokLive_ = false;
+        this->tiktokLiveChat_->stop();
+        this->tiktokLiveChat_->start();
+    }
+
+    this->refreshStatusText();
+    this->streamStatusChanged.invoke();
+}
+
 QString MergedChannel::getCurrentStreamID() const
 {
     if (this->youtubeLiveChat_ && !this->youtubeLiveChat_->videoId().isEmpty())
@@ -437,6 +463,7 @@ void MergedChannel::initializeSources()
                 if (!source.isEmpty())
                 {
                     this->config_.youtubeStreamUrl = source;
+                    getApp()->getWindows()->queueSave();
                 }
             });
         this->youtubeConnections_.managedConnect(
@@ -499,6 +526,16 @@ void MergedChannel::connectSourceSignals(
             this->appendMergedMessage(message, platform);
         });
     connections.managedConnect(
+        source->messagesAddedAtStart,
+        [this, platform](const std::vector<MessagePtr> &messages) {
+            this->addMergedMessagesAtStart(messages, platform);
+        });
+    connections.managedConnect(
+        source->filledInMessages,
+        [this, platform](const std::vector<MessagePtr> &messages) {
+            this->fillInMergedMessages(messages, platform);
+        });
+    connections.managedConnect(
         source->messageReplaced,
         [this, platform](size_t, const MessagePtr &previous,
                          const MessagePtr &replacement) {
@@ -559,40 +596,65 @@ void MergedChannel::appendInitialMessages(const ChannelPtr &source,
     const auto snapshot = source->getMessageSnapshot(150);
     for (const auto &message : snapshot)
     {
-        this->appendMergedMessage(message, platform);
+        auto merged = this->createAndTrackMergedMessage(message, platform, true);
+        if (!merged)
+        {
+            continue;
+        }
+
+        this->addMessage(merged, MessageContext::Repost);
+    }
+}
+
+void MergedChannel::addMergedMessagesAtStart(
+    const std::vector<MessagePtr> &messages, MessagePlatform platform)
+{
+    std::vector<MessagePtr> mergedMessages;
+    mergedMessages.reserve(messages.size());
+
+    for (const auto &message : messages)
+    {
+        auto merged = this->createAndTrackMergedMessage(message, platform, true);
+        if (merged)
+        {
+            mergedMessages.emplace_back(std::move(merged));
+        }
+    }
+
+    if (!mergedMessages.empty())
+    {
+        this->addMessagesAtStart(mergedMessages);
+    }
+}
+
+void MergedChannel::fillInMergedMessages(
+    const std::vector<MessagePtr> &messages, MessagePlatform platform)
+{
+    std::vector<MessagePtr> mergedMessages;
+    mergedMessages.reserve(messages.size());
+
+    for (const auto &message : messages)
+    {
+        auto merged = this->createAndTrackMergedMessage(message, platform, true);
+        if (merged)
+        {
+            mergedMessages.emplace_back(std::move(merged));
+        }
+    }
+
+    if (!mergedMessages.empty())
+    {
+        this->fillInMissingMessages(mergedMessages);
     }
 }
 
 void MergedChannel::appendMergedMessage(const MessagePtr &source,
                                         MessagePlatform platform)
 {
-    if (!shouldMirrorSourceMessage(source))
-    {
-        return;
-    }
-
-    const auto key = messageKey(source, platform);
-    if (!key.isEmpty() && this->mirroredMessages_.contains(key))
-    {
-        return;
-    }
-
-    auto merged = this->createMergedMessage(source, platform);
+    auto merged = this->createAndTrackMergedMessage(source, platform);
     if (!merged)
     {
         return;
-    }
-
-    if (!key.isEmpty())
-    {
-        this->mirroredMessages_[key] = merged;
-    }
-
-    const auto chatterName =
-        !merged->loginName.isEmpty() ? merged->loginName : merged->displayName;
-    if (!chatterName.isEmpty())
-    {
-        this->addRecentChatter(chatterName);
     }
 
     this->addMessage(merged, MessageContext::Repost);
@@ -614,7 +676,9 @@ void MergedChannel::replaceMergedMessage(const MessagePtr &previous,
         return;
     }
 
-    auto updated = this->createMergedMessage(replacement, platform);
+    auto updated = this->createMergedMessage(
+        replacement, platform,
+        it->second->flags.has(MessageFlag::RecentMessage));
     if (!updated)
     {
         return;
@@ -632,8 +696,43 @@ void MergedChannel::replaceMergedMessage(const MessagePtr &previous,
     it->second = updated;
 }
 
+std::shared_ptr<Message> MergedChannel::createAndTrackMergedMessage(
+    const MessagePtr &source, MessagePlatform platform, bool markAsRecent)
+{
+    if (!shouldMirrorSourceMessage(source))
+    {
+        return nullptr;
+    }
+
+    const auto key = messageKey(source, platform);
+    if (!key.isEmpty() && this->mirroredMessages_.contains(key))
+    {
+        return nullptr;
+    }
+
+    auto merged = this->createMergedMessage(source, platform, markAsRecent);
+    if (!merged)
+    {
+        return nullptr;
+    }
+
+    if (!key.isEmpty())
+    {
+        this->mirroredMessages_[key] = merged;
+    }
+
+    const auto chatterName =
+        !merged->loginName.isEmpty() ? merged->loginName : merged->displayName;
+    if (!chatterName.isEmpty())
+    {
+        this->addRecentChatter(chatterName);
+    }
+
+    return merged;
+}
+
 std::shared_ptr<Message> MergedChannel::createMergedMessage(
-    const MessagePtr &source, MessagePlatform platform) const
+    const MessagePtr &source, MessagePlatform platform, bool markAsRecent) const
 {
     if (!source)
     {
@@ -643,6 +742,10 @@ std::shared_ptr<Message> MergedChannel::createMergedMessage(
     auto merged = source->clone();
     merged->platform = platform;
     merged->platformAccentColor = platformAccent(platform);
+    if (markAsRecent)
+    {
+        merged->flags.set(MessageFlag::RecentMessage);
+    }
 
     if (platform == MessagePlatform::AnyOrTwitch)
     {
@@ -659,8 +762,21 @@ std::shared_ptr<Message> MergedChannel::createMergedMessage(
     const auto badge = platformBadge(platform);
     if (badge)
     {
+        auto badgePosition = merged->elements.begin();
+        while (badgePosition != merged->elements.end())
+        {
+            const auto &element = *badgePosition;
+            if (!element ||
+                !element->getFlags().has(MessageElementFlag::RepliedMessage))
+            {
+                break;
+            }
+
+            ++badgePosition;
+        }
+
         merged->elements.insert(
-            merged->elements.begin(),
+            badgePosition,
             std::make_unique<BadgeElement>(badge,
                                            MessageElementFlag::PlatformBadge));
     }

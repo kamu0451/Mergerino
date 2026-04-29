@@ -1080,8 +1080,10 @@ void ChannelView::clearMessages()
     this->messages_.clear();
     this->scrollBar_->clearHighlights();
     this->scrollBar_->resetBounds();
+    this->scrollBar_->setPageSize(0);
     this->scrollBar_->setMaximum(0);
     this->scrollBar_->setMinimum(0);
+    this->scrollBar_->scrollToTop(false);
     this->queueLayout();
     this->update();
 
@@ -1267,6 +1269,11 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         return message;
     }
 
+    if (message->flags.has(MessageFlag::RecentMessage))
+    {
+        return std::nullopt;
+    }
+
     if (suppressNextAnnouncementMessage)
     {
         suppressNextAnnouncementMessage = false;
@@ -1279,6 +1286,15 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
     if (isActivityTwitchAnnouncementHeaderMessage(*message))
     {
         suppressNextAnnouncementMessage = true;
+        return std::nullopt;
+    }
+
+    if (isActivityGiftRecipientMessage(*message))
+    {
+        if (pendingGiftRecipients > 0)
+        {
+            pendingGiftRecipients--;
+        }
         return std::nullopt;
     }
 
@@ -1296,12 +1312,6 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         pendingGiftRecipients = std::max(0, *recipientCount);
         return makeActivityCompactMessage(message,
                                           compactActivityGiftBombText(*message));
-    }
-
-    if (pendingGiftRecipients > 0 && isActivityGiftRecipientMessage(*message))
-    {
-        pendingGiftRecipients--;
-        return std::nullopt;
     }
 
     return message;
@@ -3664,62 +3674,62 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
     });
 
     // Only display reply option where it makes sense
-    if (this->canReplyToMessages())
+    auto replyMessage = layout->getMessagePtr();
+    if (this->canReplyToMessage(replyMessage))
     {
-        const auto &messagePtr = layout->getMessagePtr();
-        switch (messagePtr->isReplyable())
+        switch (replyMessage->isReplyable())
         {
             case Message::ReplyStatus::Replyable: {
-                menu->addAction("&Reply to message", [this, &messagePtr] {
-                    this->setInputReply(messagePtr);
+                menu->addAction("&Reply to message", [this, replyMessage] {
+                    this->setInputReply(replyMessage);
                 });
                 break;
             }
 
             case Message::ReplyStatus::NotReplyable: {
                 const auto &replyAction =
-                    menu->addAction("&Reply to message", [this, &messagePtr] {
-                        this->setInputReply(messagePtr);
+                    menu->addAction("&Reply to message", [this, replyMessage] {
+                        this->setInputReply(replyMessage);
                     });
                 replyAction->setEnabled(false);
                 break;
             }
 
             case Message::ReplyStatus::ReplyableWithThread: {
-                menu->addAction("&Reply to message", [this, &messagePtr] {
-                    this->setInputReply(messagePtr);
+                menu->addAction("&Reply to message", [this, replyMessage] {
+                    this->setInputReply(replyMessage);
                 });
                 menu->addAction(
-                    "Reply to &original thread", [this, &messagePtr] {
-                        this->setInputReply(messagePtr->replyThread->root());
+                    "Reply to &original thread", [this, replyMessage] {
+                        this->setInputReply(replyMessage->replyThread->root());
                     });
                 break;
             }
 
             case Message::ReplyStatus::NotReplyableWithThread: {
                 const auto &replyAction =
-                    menu->addAction("&Reply to message", [this, &messagePtr] {
-                        this->setInputReply(messagePtr);
+                    menu->addAction("&Reply to message", [this, replyMessage] {
+                        this->setInputReply(replyMessage);
                     });
                 replyAction->setEnabled(false);
 
                 menu->addAction(
-                    "Reply to &original thread", [this, &messagePtr] {
-                        this->setInputReply(messagePtr->replyThread->root());
+                    "Reply to &original thread", [this, replyMessage] {
+                        this->setInputReply(replyMessage->replyThread->root());
                     });
                 break;
             }
 
             case Message::ReplyStatus::NotReplyableDueToThread: {
                 const auto &replyAction =
-                    menu->addAction("&Reply to message", [this, &messagePtr] {
-                        this->setInputReply(messagePtr);
+                    menu->addAction("&Reply to message", [this, replyMessage] {
+                        this->setInputReply(replyMessage);
                     });
                 replyAction->setEnabled(false);
 
                 const auto &replyThreadAction = menu->addAction(
-                    "Reply to &original thread", [this, &messagePtr] {
-                        this->setInputReply(messagePtr->replyThread->root());
+                    "Reply to &original thread", [this, replyMessage] {
+                        this->setInputReply(replyMessage->replyThread->root());
                     });
 
                 replyThreadAction->setEnabled(false);
@@ -3727,10 +3737,10 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
             }
         }
 
-        if (const auto &threadMessage = layout->getMessagePtr();
+        if (auto threadMessage = layout->getMessagePtr();
             threadMessage->replyThread != nullptr)
         {
-            menu->addAction("View &thread", [this, &threadMessage] {
+            menu->addAction("View &thread", [this, threadMessage] {
                 this->showReplyThreadPopup(threadMessage);
             });
         }
@@ -3802,8 +3812,8 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
     bool isAutomod = this->channel()->getType() == Channel::Type::TwitchAutomod;
     if (isSearch || isMentions || isReplyOrUserCard || isAutomod)
     {
-        const auto &messagePtr = layout->getMessagePtr();
-        menu->addAction("&Go to message", [this, &messagePtr, isSearch,
+        auto messagePtr = layout->getMessagePtr();
+        menu->addAction("&Go to message", [this, messagePtr, isSearch,
                                            isMentions, isReplyOrUserCard,
                                            isAutomod] {
             if (isSearch)
@@ -4039,7 +4049,8 @@ void ChannelView::hideEvent(QHideEvent * /*event*/)
 
 void ChannelView::showUserInfoPopup(const QString &userName,
                                     MessagePlatform platform,
-                                    const QString &alternativePopoutChannel)
+                                    const QString &alternativePopoutChannel,
+                                    const QString &platformUserID)
 {
     if (!this->split_)
     {
@@ -4049,33 +4060,59 @@ void ChannelView::showUserInfoPopup(const QString &userName,
         return;
     }
 
-    if (platform == MessagePlatform::YouTube ||
-        platform == MessagePlatform::TikTok)
-    {
-        return;
-    }
-
     auto *userPopup =
         new UserInfoPopup(getSettings()->autoCloseUserPopup, this->split_);
 
     auto openingChannel = this->hasSourceChannel() ? this->sourceChannel_
                                                    : this->underlyingChannel_;
     ChannelPtr contextChannel;
-    if (openingChannel && platform == MessagePlatform::Kick)
+    auto *mergedChannel =
+        openingChannel ? dynamic_cast<MergedChannel *>(openingChannel.get())
+                       : nullptr;
+    if (platform == MessagePlatform::Kick)
     {
-        contextChannel =
-            getApp()->getKickChatServer()->findBySlug(alternativePopoutChannel);
+        if (mergedChannel != nullptr)
+        {
+            contextChannel = mergedChannel->kickChannel();
+        }
+        if (!contextChannel && openingChannel && openingChannel->isKickChannel())
+        {
+            contextChannel = openingChannel;
+        }
+        if (!contextChannel)
+        {
+            contextChannel = getApp()->getKickChatServer()->findBySlug(
+                alternativePopoutChannel);
+        }
         if (!contextChannel)
         {
             contextChannel = Channel::getEmpty();
         }
     }
+    else if (platform == MessagePlatform::YouTube ||
+             platform == MessagePlatform::TikTok)
+    {
+        contextChannel = Channel::getEmpty();
+    }
     else
     {
-        contextChannel =
-            getApp()->getTwitch()->getChannelOrEmpty(alternativePopoutChannel);
+        if (mergedChannel != nullptr)
+        {
+            contextChannel = mergedChannel->twitchChannel();
+        }
+        if (!contextChannel && openingChannel &&
+            openingChannel->isTwitchChannel())
+        {
+            contextChannel = openingChannel;
+        }
+        if (!contextChannel)
+        {
+            contextChannel = getApp()->getTwitch()->getChannelOrEmpty(
+                alternativePopoutChannel);
+        }
     }
-    userPopup->setData(userName, contextChannel, openingChannel);
+    userPopup->setData(userName, contextChannel, openingChannel, platform,
+                       platformUserID);
 
     QPoint offset(userPopup->width() / 3, userPopup->height() / 5);
     userPopup->moveTo(QCursor::pos() - offset,
@@ -4125,7 +4162,8 @@ void ChannelView::handleLinkClick(QMouseEvent *event, const Link &link,
         case Link::UserInfo: {
             auto user = link.value;
             this->showUserInfoPopup(user, layout->getMessage()->platform,
-                                    layout->getMessage()->channelName);
+                                    layout->getMessage()->channelName,
+                                    layout->getMessage()->userID);
         }
         break;
 
@@ -4237,7 +4275,8 @@ void ChannelView::handleLinkClick(QMouseEvent *event, const Link &link,
         }
         break;
         case Link::ReplyToMessage: {
-            if (layout->getMessagePtr()->isReplyable() !=
+            if (this->canReplyToMessage(layout->getMessagePtr()) &&
+                layout->getMessagePtr()->isReplyable() !=
                 Message::ReplyStatus::NotReplyable)
             {
                 this->setInputReply(layout->getMessagePtr());
@@ -4385,12 +4424,31 @@ void ChannelView::setInputReply(const MessagePtr &message)
         return;
     }
 
+    auto replyChannel = this->underlyingChannel_;
+    if (auto *merged = dynamic_cast<MergedChannel *>(replyChannel.get()))
+    {
+        switch (message->platform)
+        {
+            case MessagePlatform::Kick:
+                replyChannel = merged->kickChannel();
+                break;
+            case MessagePlatform::AnyOrTwitch:
+                replyChannel = merged->twitchChannel();
+                break;
+            default:
+                qCWarning(chatterinoCommon)
+                    << "Failed to create reply thread for unsupported merged "
+                       "platform"
+                    << qmagicenum::enumNameString(message->platform);
+                return;
+        }
+    }
+
     if (!message->replyThread)
     {
         // Message did not already have a thread attached, try to find or create one
-        auto *tc =
-            dynamic_cast<TwitchChannel *>(this->underlyingChannel_.get());
-        auto *kc = dynamic_cast<KickChannel *>(this->underlyingChannel_.get());
+        auto *tc = dynamic_cast<TwitchChannel *>(replyChannel.get());
+        auto *kc = dynamic_cast<KickChannel *>(replyChannel.get());
 
         if (tc)
         {
@@ -4452,19 +4510,55 @@ bool ChannelView::canReplyToMessages() const
     }
 
     assert(this->channel_ != nullptr);
+    auto channel =
+        this->underlyingChannel_ != nullptr ? this->underlyingChannel_
+                                            : this->channel_;
 
-    if (!this->channel_->isTwitchOrKickChannel())
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel.get()))
+    {
+        return merged->twitchChannel() != nullptr ||
+               merged->kickChannel() != nullptr;
+    }
+
+    if (!channel->isTwitchOrKickChannel())
     {
         return false;
     }
 
-    if (this->channel_->getType() == Channel::Type::TwitchWhispers ||
-        this->channel_->getType() == Channel::Type::TwitchLive)
+    if (channel->getType() == Channel::Type::TwitchWhispers ||
+        channel->getType() == Channel::Type::TwitchLive)
     {
         return false;
     }
 
     return true;
+}
+
+bool ChannelView::canReplyToMessage(const MessagePtr &message) const
+{
+    if (!this->canReplyToMessages() || message == nullptr)
+    {
+        return false;
+    }
+
+    auto channel =
+        this->underlyingChannel_ != nullptr ? this->underlyingChannel_
+                                            : this->channel_;
+    const auto *merged = dynamic_cast<MergedChannel *>(channel.get());
+    if (merged == nullptr)
+    {
+        return true;
+    }
+
+    switch (message->platform)
+    {
+        case MessagePlatform::Kick:
+            return merged->kickChannel() != nullptr;
+        case MessagePlatform::AnyOrTwitch:
+            return merged->twitchChannel() != nullptr;
+        default:
+            return false;
+    }
 }
 
 void ChannelView::setLinkInfoTooltip(LinkInfo *info)

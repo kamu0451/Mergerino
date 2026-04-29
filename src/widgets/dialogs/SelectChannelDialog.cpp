@@ -163,7 +163,7 @@ QString normalizeYouTubeSource(QString value)
 
     if (value.startsWith('@'))
     {
-        return value.section('/', 0, 0).toLower();
+        return value.section('/', 0, 0).trimmed();
     }
 
     if (isLikelyYouTubeChannelId(value))
@@ -175,6 +175,12 @@ QString normalizeYouTubeSource(QString value)
         !videoId.isEmpty())
     {
         return QString("https://www.youtube.com/watch?v=%1").arg(videoId);
+    }
+
+    if (!value.contains("://") && !value.contains('/') &&
+        !value.contains('\\'))
+    {
+        return value;
     }
 
     if (!value.contains("://") &&
@@ -195,7 +201,7 @@ QString normalizeYouTubeSource(QString value)
     const auto path = trimTrailingSlash(url.path());
     if (url.host().toLower().endsWith("youtube.com") && path.startsWith("/@"))
     {
-        return path.section('/', 1, 1).toLower();
+        return path.section('/', 1, 1).trimmed();
     }
     if (url.host().toLower().endsWith("youtube.com") &&
         path.startsWith("/channel/"))
@@ -204,6 +210,23 @@ QString normalizeYouTubeSource(QString value)
         if (isLikelyYouTubeChannelId(channelId))
         {
             return channelId;
+        }
+    }
+
+    if (url.host().toLower().endsWith("youtube.com"))
+    {
+        const auto firstSegment = path.section('/', 1, 1).trimmed();
+        if (firstSegment == "c" || firstSegment == "user")
+        {
+            return path.section('/', 2, 2).trimmed();
+        }
+
+        if (!firstSegment.isEmpty() && firstSegment != "watch" &&
+            firstSegment != "shorts" && firstSegment != "embed" &&
+            firstSegment != "live" && firstSegment != "playlist" &&
+            firstSegment != "results" && firstSegment != "feed")
+        {
+            return QUrl::fromPercentEncoding(firstSegment.toUtf8()).trimmed();
         }
     }
 

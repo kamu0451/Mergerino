@@ -40,6 +40,7 @@
 #include <QStringBuilder>
 #include <QTabWidget>
 
+#include <algorithm>
 #include <utility>
 
 namespace {
@@ -132,15 +133,36 @@ void addEmotes(Channel &channel, auto &&emotes, const QString &title)
                        MessageContext::Original);
 }
 
+void addEmotesToTabAndAll(Channel &channel, Channel &allChannel,
+                          const auto &emotes, const QString &title)
+{
+    addEmotes(channel, emotes, title);
+    if (&channel != &allChannel && !emotes.empty())
+    {
+        addEmotes(allChannel, emotes, title);
+    }
+}
+
+void addEmotesToAll(Channel &allChannel, const auto &emotes,
+                    const QString &title)
+{
+    if (!emotes.empty())
+    {
+        addEmotes(allChannel, emotes, title);
+    }
+}
+
 void addTwitchEmoteSets(const std::shared_ptr<const EmoteMap> &local,
                         const std::shared_ptr<const TwitchEmoteSetMap> &sets,
-                        Channel &globalChannel, Channel &subChannel,
+                        Channel &allChannel, Channel &channelChannel,
+                        Channel &globalChannel,
                         const QString &currentChannelID,
                         const QString &channelName)
 {
     if (!local->empty())
     {
-        addEmotes(subChannel, *local, channelName % u" (Follower)");
+        addEmotesToTabAndAll(channelChannel, allChannel, *local,
+                              channelName % u" (Follower)");
     }
 
     std::vector<
@@ -152,7 +174,8 @@ void addTwitchEmoteSets(const std::shared_ptr<const EmoteMap> &local,
         if (set.owner->id == currentChannelID)
         {
             // Put current channel emotes at the top
-            addEmotes(subChannel, set.emotes, set.title());
+            addEmotesToTabAndAll(channelChannel, allChannel, set.emotes,
+                                  set.title());
         }
         else
         {
@@ -166,8 +189,11 @@ void addTwitchEmoteSets(const std::shared_ptr<const EmoteMap> &local,
 
     for (const auto &[title, set] : sortedSets)
     {
-        addEmotes(set.get().isSubLike ? subChannel : globalChannel,
-                  set.get().emotes, title);
+        addEmotesToAll(allChannel, set.get().emotes, title);
+        if (!set.get().isSubLike)
+        {
+            addEmotes(globalChannel, set.get().emotes, title);
+        }
     }
 }
 
@@ -333,7 +359,7 @@ EmotePopup::EmotePopup(QWidget *parent)
     layout->addWidget(this->notebook_);
     layout->setContentsMargins(0, 0, 0, 0);
 
-    this->subEmotesView_ = makeView("Subs");
+    this->allEmotesView_ = makeView("All");
     this->channelEmotesView_ = makeView("Channel");
     this->globalEmotesView_ = makeView("Global");
     this->viewEmojis_ = makeView("Emojis");
@@ -456,26 +482,43 @@ void EmotePopup::addShortcuts()
         HotkeyCategory::PopupWindow, actions, this);
 }
 
-void EmotePopup::loadChannel(ChannelPtr channel)
+void EmotePopup::loadChannel(ChannelPtr channel,
+                             std::vector<MessagePlatform> platforms)
 {
     BenchmarkGuard guard("loadChannel");
 
     this->channel_ = std::move(channel);
-    this->twitchChannel_ = dynamic_cast<TwitchChannel *>(this->channel_.get());
-    this->kickChannel_ = dynamic_cast<KickChannel *>(this->channel_.get());
+    auto includesPlatform = [&platforms](MessagePlatform platform) {
+        return platforms.empty() ||
+               std::find(platforms.begin(), platforms.end(), platform) !=
+                   platforms.end();
+    };
+
+    this->twitchChannel_ =
+        includesPlatform(MessagePlatform::AnyOrTwitch)
+            ? dynamic_cast<TwitchChannel *>(this->channel_.get())
+            : nullptr;
+    this->kickChannel_ =
+        includesPlatform(MessagePlatform::Kick)
+            ? dynamic_cast<KickChannel *>(this->channel_.get())
+            : nullptr;
     if (auto *merged = dynamic_cast<MergedChannel *>(this->channel_.get()))
     {
         this->twitchChannel_ =
-            dynamic_cast<TwitchChannel *>(merged->twitchChannel().get());
+            includesPlatform(MessagePlatform::AnyOrTwitch)
+                ? dynamic_cast<TwitchChannel *>(merged->twitchChannel().get())
+                : nullptr;
         this->kickChannel_ =
-            dynamic_cast<KickChannel *>(merged->kickChannel().get());
+            includesPlatform(MessagePlatform::Kick)
+                ? dynamic_cast<KickChannel *>(merged->kickChannel().get())
+                : nullptr;
     }
 
     this->setWindowTitle("Emotes in #" + this->channel_->getDisplayName());
 
-    this->globalEmotesView_->setChannel(
+    this->allEmotesView_->setChannel(
         std::make_shared<Channel>("", Channel::Type::None));
-    this->subEmotesView_->setChannel(
+    this->globalEmotesView_->setChannel(
         std::make_shared<Channel>("", Channel::Type::None));
     this->channelEmotesView_->setChannel(
         std::make_shared<Channel>("", Channel::Type::None));
@@ -487,11 +530,11 @@ void EmotePopup::loadChannel(ChannelPtr channel)
 
 void EmotePopup::reloadEmotes()
 {
-    auto subChannel = this->subEmotesView_->underlyingChannel();
+    auto allChannel = this->allEmotesView_->underlyingChannel();
     auto globalChannel = this->globalEmotesView_->underlyingChannel();
     auto channelChannel = this->channelEmotesView_->underlyingChannel();
 
-    subChannel->clearMessages();
+    allChannel->clearMessages();
     globalChannel->clearMessages();
     channelChannel->clearMessages();
 
@@ -501,24 +544,27 @@ void EmotePopup::reloadEmotes()
         addTwitchEmoteSets(
             twitchChannel_->localTwitchEmotes(),
             *getApp()->getAccounts()->twitch.getCurrent()->accessEmoteSets(),
-            *globalChannel, *subChannel, twitchChannel_->roomId(),
-            twitchChannel_->getName());
+            *allChannel, *channelChannel, *globalChannel,
+            twitchChannel_->roomId(), twitchChannel_->getName());
 
         // channel
         if (Settings::instance().enableBTTVChannelEmotes)
         {
-            addEmotes(*channelChannel, *this->twitchChannel_->bttvEmotes(),
-                      "BetterTTV");
+            addEmotesToTabAndAll(*channelChannel, *allChannel,
+                                  *this->twitchChannel_->bttvEmotes(),
+                                  "BetterTTV");
         }
         if (Settings::instance().enableFFZChannelEmotes)
         {
-            addEmotes(*channelChannel, *this->twitchChannel_->ffzEmotes(),
-                      "FrankerFaceZ");
+            addEmotesToTabAndAll(*channelChannel, *allChannel,
+                                  *this->twitchChannel_->ffzEmotes(),
+                                  "FrankerFaceZ");
         }
         if (Settings::instance().enableSevenTVChannelEmotes)
         {
-            addEmotes(*channelChannel, *this->twitchChannel_->seventvEmotes(),
-                      "7TV");
+            addEmotesToTabAndAll(*channelChannel, *allChannel,
+                                  *this->twitchChannel_->seventvEmotes(),
+                                  "7TV");
         }
 
         // personal
@@ -526,20 +572,21 @@ void EmotePopup::reloadEmotes()
              getApp()->getSeventvPersonalEmotes()->getEmoteSetsForTwitchUser(
                  getApp()->getAccounts()->twitch.getCurrent()->getUserId()))
         {
-            addEmotes(*subChannel, *map, "7TV (Personal)");
+            addEmotesToAll(*allChannel, *map, "7TV (Personal)");
         }
     }
     if (this->kickChannel_)
     {
         // Kick
-        addEmotes(*globalChannel,
-                  *getApp()->getKickChatServer()->globalEmotes(), "Kick");
+        addEmotesToTabAndAll(*globalChannel, *allChannel,
+                              *getApp()->getKickChatServer()->globalEmotes(),
+                              "Kick");
 
         // channel
         if (Settings::instance().enableSevenTVChannelEmotes)
         {
-            addEmotes(*channelChannel, *this->kickChannel_->seventvEmotes(),
-                      "7TV");
+            addEmotesToTabAndAll(*channelChannel, *allChannel,
+                                  *this->kickChannel_->seventvEmotes(), "7TV");
         }
 
         // personal
@@ -548,35 +595,39 @@ void EmotePopup::reloadEmotes()
                 getApp()->getAccounts()->kick.current()->userID());
         for (const auto &map : personalEmotes)
         {
-            addEmotes(*subChannel, *map, "7TV (Personal)");
+            addEmotesToAll(*allChannel, *map, "7TV (Personal)");
         }
     }
     // global
-    if (Settings::instance().enableBTTVGlobalEmotes)
+    if (this->twitchChannel_ && Settings::instance().enableBTTVGlobalEmotes)
     {
-        addEmotes(*globalChannel, *getApp()->getBttvEmotes()->emotes(),
-                  "BetterTTV");
+        addEmotesToTabAndAll(*globalChannel, *allChannel,
+                              *getApp()->getBttvEmotes()->emotes(),
+                              "BetterTTV");
     }
-    if (Settings::instance().enableFFZGlobalEmotes)
+    if (this->twitchChannel_ && Settings::instance().enableFFZGlobalEmotes)
     {
-        addEmotes(*globalChannel, *getApp()->getFfzEmotes()->emotes(),
-                  "FrankerFaceZ");
+        addEmotesToTabAndAll(*globalChannel, *allChannel,
+                              *getApp()->getFfzEmotes()->emotes(),
+                              "FrankerFaceZ");
     }
-    if (Settings::instance().enableSevenTVGlobalEmotes)
+    if ((this->twitchChannel_ || this->kickChannel_) &&
+        Settings::instance().enableSevenTVGlobalEmotes)
     {
-        addEmotes(*globalChannel, *getApp()->getSeventvEmotes()->globalEmotes(),
-                  "7TV");
+        addEmotesToTabAndAll(*globalChannel, *allChannel,
+                              *getApp()->getSeventvEmotes()->globalEmotes(),
+                              "7TV");
     }
 
-    if (!subChannel->hasMessages())
+    if (!allChannel->hasMessages())
     {
         MessageBuilder builder;
         builder->flags.set(MessageFlag::Centered);
         builder->flags.set(MessageFlag::DisableCompactEmotes);
-        builder.emplace<TextElement>("no subscription emotes available",
+        builder.emplace<TextElement>("no emotes available",
                                      MessageElementFlag::Text,
                                      MessageColor::System);
-        subChannel->addMessage(builder.release(), MessageContext::Original);
+        allChannel->addMessage(builder.release(), MessageContext::Original);
     }
 }
 
@@ -628,25 +679,31 @@ void EmotePopup::filterTwitchEmotes(std::shared_ptr<Channel> searchChannel,
         }
     }
 
-    auto bttvGlobalEmotes =
-        filterEmoteMap(searchText, getApp()->getBttvEmotes()->emotes());
-    auto ffzGlobalEmotes =
-        filterEmoteMap(searchText, getApp()->getFfzEmotes()->emotes());
-    auto seventvGlobalEmotes = filterEmoteMap(
-        searchText, getApp()->getSeventvEmotes()->globalEmotes());
-
     // global
-    if (!bttvGlobalEmotes.empty())
+    if (this->twitchChannel_)
     {
-        addEmotes(*searchChannel, bttvGlobalEmotes, "BetterTTV (Global)");
+        auto bttvGlobalEmotes =
+            filterEmoteMap(searchText, getApp()->getBttvEmotes()->emotes());
+        auto ffzGlobalEmotes =
+            filterEmoteMap(searchText, getApp()->getFfzEmotes()->emotes());
+
+        if (!bttvGlobalEmotes.empty())
+        {
+            addEmotes(*searchChannel, bttvGlobalEmotes, "BetterTTV (Global)");
+        }
+        if (!ffzGlobalEmotes.empty())
+        {
+            addEmotes(*searchChannel, ffzGlobalEmotes, "FrankerFaceZ (Global)");
+        }
     }
-    if (!ffzGlobalEmotes.empty())
+    if (this->twitchChannel_ || this->kickChannel_)
     {
-        addEmotes(*searchChannel, ffzGlobalEmotes, "FrankerFaceZ (Global)");
-    }
-    if (!seventvGlobalEmotes.empty())
-    {
-        addEmotes(*searchChannel, seventvGlobalEmotes, "7TV (Global)");
+        auto seventvGlobalEmotes = filterEmoteMap(
+            searchText, getApp()->getSeventvEmotes()->globalEmotes());
+        if (!seventvGlobalEmotes.empty())
+        {
+            addEmotes(*searchChannel, seventvGlobalEmotes, "7TV (Global)");
+        }
     }
 
     if (this->kickChannel_)

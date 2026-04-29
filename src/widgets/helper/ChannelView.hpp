@@ -206,7 +206,8 @@ public:
      * @param alternativePopoutChannel Optional parameter containing the channel name to use for context
      **/
     void showUserInfoPopup(const QString &userName, MessagePlatform platform,
-                           const QString &alternativePopoutChannel = {});
+                           const QString &alternativePopoutChannel = {},
+                           const QString &platformUserID = {});
 
     /**
      * @brief This method is meant to be used when filtering out channels.
@@ -335,6 +336,7 @@ private:
     void setInputReply(const MessagePtr &message);
     void showReplyThreadPopup(const MessagePtr &message);
     bool canReplyToMessages() const;
+    bool canReplyToMessage(const MessagePtr &message) const;
 
     void updateID();
     void refreshMessageColors();

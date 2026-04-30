@@ -708,7 +708,6 @@ void YouTubeLiveChat::start()
     this->liveStartedAt_ = {};
     this->liveViewerCount_ = 0;
     this->seenMessageIds_.clear();
-    this->joinedLiveVideoId_.clear();
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
     this->activePollStreak_ = 0;
@@ -1566,17 +1565,11 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             this->activePollStreak_ = 0;
             this->liveChatSessionRefreshTimer_.restart();
             this->liveChatProgressTimer_.restart();
-            if (this->joinedLiveVideoId_ != this->videoId_)
-            {
-                this->joinedLiveVideoId_ = this->videoId_;
-                auto joinedText = this->liveTitle_.isEmpty()
-                                      ? QString("Joined YouTube live chat")
-                                      : QString("Joined YouTube live chat: %1")
-                                            .arg(this->liveTitle_);
-                this->systemMessageReceived.invoke(
-                    makeSystemStatusMessage(joinedText,
-                                            YOUTUBE_PLATFORM_ACCENT));
-            }
+            // "Joined YouTube live chat: <title>" is announced by
+            // MergedChannel's liveStatusChanged handler via the same flag
+            // pattern Twitch/Kick/TikTok use. setLive(true) below fires the
+            // signal; liveTitle_ is already set above so MergedChannel can
+            // read it.
             this->setStatusText(
                 this->liveTitle_.isEmpty()
                     ? QString("Watching YouTube live chat for %1")

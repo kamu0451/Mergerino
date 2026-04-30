@@ -90,9 +90,9 @@ TEST(YouTubeLiveChat, maybeExtractVideoIdReturnsEmptyOnBlank)
     EXPECT_TRUE(YouTubeLiveChat::maybeExtractVideoId("   ").isEmpty());
 }
 
-TEST(YouTubeLiveChat, normalizeSourcePreservesAtHandleAndLowercases)
+TEST(YouTubeLiveChat, normalizeSourcePreservesAtHandleCase)
 {
-    EXPECT_EQ(YouTubeLiveChat::normalizeSource("@FooBar"), "@foobar");
+    EXPECT_EQ(YouTubeLiveChat::normalizeSource("@FooBar"), "@FooBar");
     EXPECT_EQ(YouTubeLiveChat::normalizeSource("@gevad1ch"), "@gevad1ch");
 }
 
@@ -113,7 +113,7 @@ TEST(YouTubeLiveChat, normalizeSourceExtractsHandleFromFullUrl)
               "@foobar");
     EXPECT_EQ(YouTubeLiveChat::normalizeSource(
                   "https://www.youtube.com/@FooBar/live"),
-              "@foobar");
+              "@FooBar");
 }
 
 TEST(YouTubeLiveChat, normalizeSourceExtractsChannelIdFromFullUrl)

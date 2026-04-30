@@ -1725,6 +1725,11 @@ void Split::setChannel(IndirectChannel newChannel)
     this->channelChanged.invoke();
     this->actionRequested.invoke(Action::RefreshTab);
 
+    if (auto *merged = dynamic_cast<MergedChannel *>(this->channel_.get().get()))
+    {
+        merged->reconnect();
+    }
+
     // Queue up save because: Split channel changed
     getApp()->getWindows()->queueSave();
 }

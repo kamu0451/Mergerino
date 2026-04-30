@@ -120,7 +120,7 @@ protected:
     void postMessageSend(const QString &message,
                          const std::vector<QString> &arguments);
 
-    /// Clears the input box, clears reply target if inline replies are enabled
+    /// Clears the input box and any active reply target
     void clearInput();
 
     void addShortcuts() override;
@@ -131,11 +131,12 @@ protected:
     void onTextChanged();
     void updateEmoteButton();
     void updateCompletionPopup();
-    void updatePlatformButtonLayout();
+    void updatePlatformButtonLayout(int platformCount = 1);
     void showCompletionPopup(const QString &text, CompletionKind kind);
     void hideCompletionPopup();
     void insertCompletionText(const QString &input_) const;
     void openEmotePopup();
+    void updateEmotePopupChannel();
     void clearReplyTarget();
 
     void updateCancelReplyButton();
@@ -155,9 +156,12 @@ protected:
     int replyMessageWidth() const;
 
     std::vector<MessagePlatform> availableSendPlatforms() const;
+    std::optional<MessagePlatform> replySendPlatform() const;
+    std::vector<MessagePlatform> selectedSendPlatforms() const;
     ChannelPtr channelForSendPlatform(MessagePlatform platform) const;
     bool canSendToPlatform(MessagePlatform platform) const;
     void selectSendPlatform(MessagePlatform platform);
+    void selectAllSendPlatforms();
     void cycleSendPlatform();
 
     Split *const split_;
@@ -198,6 +202,7 @@ protected:
     QString currMsg_;
     int prevIndex_ = 0;
     MessagePlatform selectedSendPlatform_ = MessagePlatform::AnyOrTwitch;
+    bool selectedSendAllPlatforms_ = false;
 
     // Hidden denotes whether this split input should be hidden or not
     // This is used instead of the regular QWidget::hide/show because

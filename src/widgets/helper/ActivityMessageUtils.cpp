@@ -212,10 +212,16 @@ bool shouldShowMessageInActivityPane(const Message &message,
         return false;
     }
 
+    if (message.flags.has(MessageFlag::RecentMessage))
+    {
+        return false;
+    }
+
     if (isActivityDateSeparatorMessage(message) ||
         isActivityKickRewardRedemptionMessage(message) ||
         isActivityTwitchAnnouncementHeaderMessage(message) ||
-        isActivityTwitchBitsBadgeMessage(message))
+        isActivityTwitchBitsBadgeMessage(message) ||
+        isActivityGiftRecipientMessage(message))
     {
         return false;
     }

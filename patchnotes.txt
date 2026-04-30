@@ -1,5 +1,16 @@
 Patch Notes
 
+29/04/2026
+- Added recent message history
+- Added uptime to stream info preview
+- Added usercards for all platforms
+- Added mod actions for Kick
+- Added reply to message function
+- Added multi-platform chat mode
+- Added emoji rendering to YouTube chat
+- Improved YouTube livestream fetching
+- Improved emote tab
+
 27/04/2026
 - Added auto update
 - Added clear activity tab

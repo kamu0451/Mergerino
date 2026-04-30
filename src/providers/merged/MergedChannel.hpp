@@ -19,6 +19,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace chatterino {
 
@@ -62,6 +63,8 @@ public:
     bool hasModRights() const override;
     bool isLive() const override;
     bool isRerun() const override;
+    bool canReconnect() const override;
+    void reconnect() override;
     QString getCurrentStreamID() const override;
 
     QString statusSuffix() const;
@@ -119,14 +122,20 @@ private:
                               pajlada::Signals::SignalHolder &connections);
     void appendInitialMessages(const ChannelPtr &source,
                                MessagePlatform platform);
+    void addMergedMessagesAtStart(const std::vector<MessagePtr> &messages,
+                                  MessagePlatform platform);
+    void fillInMergedMessages(const std::vector<MessagePtr> &messages,
+                              MessagePlatform platform);
     void appendMergedMessage(const MessagePtr &source, MessagePlatform platform);
-    void fillMergedMessages(const std::vector<MessagePtr> &messages,
-                            MessagePlatform platform);
     void replaceMergedMessage(const MessagePtr &previous,
                               const MessagePtr &replacement,
                               MessagePlatform platform);
+    std::shared_ptr<Message> createAndTrackMergedMessage(
+        const MessagePtr &source, MessagePlatform platform,
+        bool markAsRecent = false);
     std::shared_ptr<Message> createMergedMessage(const MessagePtr &source,
-                                                 MessagePlatform platform) const;
+                                                 MessagePlatform platform,
+                                                 bool markAsRecent = false) const;
     void addSystemStatusMessage(const MessagePtr &message);
     void addSystemStatusMessage(const QString &message);
     void announceJoinedLiveChat(MessagePlatform platform,

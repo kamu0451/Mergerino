@@ -23,7 +23,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           submodules: recursive
-          fetch-depth: 1
+          # Full history needed for cmake/GIT.cmake's `git rev-list --count HEAD`
+          # which feeds the auto-bumped PATCH into PROJECT_VERSION. A shallow
+          # clone bakes "1.5.1" into every CI build regardless of branch state.
+          fetch-depth: 0
 
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4.3.0

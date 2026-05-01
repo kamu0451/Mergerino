@@ -159,8 +159,11 @@ void StreamerMode::start()
 
 StreamerModePrivate::StreamerModePrivate(StreamerMode *parent)
     : parent_(parent)
-    , timer_(new QTimer(&this->thread_))
+    , timer_(new QTimer())
 {
+    // Don't parent the timer to thread_: Qt forbids moveToThread on objects
+    // with a parent (the parent's thread affinity governs them). Construct
+    // parentless and rely on deleteLater() in the destructor for teardown.
     this->thread_.setObjectName("StreamerMode");
     this->timer_->moveToThread(&this->thread_);
     QObject::connect(this->timer_, &QTimer::timeout, [this] {

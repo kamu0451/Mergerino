@@ -40,6 +40,20 @@ public:
     TikTokLiveChat(const TikTokLiveChat &) = delete;
     TikTokLiveChat &operator=(const TikTokLiveChat &) = delete;
 
+    // Returns a shared instance for `source`. Sharing is especially important
+    // here because each TikTokLiveChat hosts its own WebView2 (memory- and
+    // CPU-expensive); two MergedChannels for the same TikTok username should
+    // not spin up two browser hosts. Calls start() lazily on first creation.
+    static std::shared_ptr<TikTokLiveChat> getOrCreateShared(
+        const QString &source);
+
+    /// Drops the registry strong refs and releases the process-wide shared
+    /// `ICoreWebView2Environment`. Call from Application::aboutToQuit() so
+    /// the env is released while Qt's event loop and the WebView2 message
+    /// pump are still alive; releasing it at static-destructor time (after
+    /// main returns) is a known crash pattern on Windows.
+    static void releaseSharedEnvironment();
+
     void start();
     void stop();
 
@@ -86,6 +100,7 @@ private:
                                     const QString &loginName = {},
                                     uint32_t diamondCount = 0) const;
 
+    void launchControllerCreate();
     void handleLike(const tiktok::DecodedLikeEvent &ev);
     void handleMember(const tiktok::DecodedMemberEvent &ev);
     void handleSocial(const tiktok::DecodedSocialEvent &ev);

@@ -28,6 +28,8 @@
 #include <algorithm>
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
 
 // Windows / WebView2 - kept out of the public header.
 // clang-format off
@@ -79,6 +81,150 @@ QString fromWide(const wchar_t *data)
     return QString::fromWCharArray(data);
 }
 
+// One ICoreWebView2Environment is reusable across many controllers; sharing
+// is also REQUIRED, because two concurrent CreateCoreWebView2EnvironmentWith-
+// Options calls against the same userDataDir race and the loser's controller
+// callback fires with E_ABORT (0x80004004). Observed when 3 TikTok tabs
+// started together: 2 of 3 hit "controller failed".
+//
+// All access on the UI thread (TikTokLiveChat is a UI-thread object).
+enum class EnvState
+{
+    NotStarted,
+    Creating,
+    Ready,
+    Failed,
+};
+EnvState g_envState{EnvState::NotStarted};
+ComPtr<ICoreWebView2Environment> g_env;
+HRESULT g_envHr{S_OK};
+std::vector<std::function<void(HRESULT, ICoreWebView2Environment *)>>
+    g_envWaiters;
+
+void requestSharedEnvironment(
+    const std::wstring &userDataDirW,
+    std::function<void(HRESULT, ICoreWebView2Environment *)> cb)
+{
+    switch (g_envState)
+    {
+        case EnvState::Ready:
+            cb(S_OK, g_env.Get());
+            return;
+        case EnvState::Failed:
+            cb(g_envHr, nullptr);
+            return;
+        case EnvState::Creating:
+            g_envWaiters.push_back(std::move(cb));
+            return;
+        case EnvState::NotStarted:
+            g_envState = EnvState::Creating;
+            g_envWaiters.push_back(std::move(cb));
+            const HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
+                nullptr, userDataDirW.c_str(), nullptr,
+                Callback<
+                    ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+                    [](HRESULT envHr,
+                       ICoreWebView2Environment *env) -> HRESULT {
+                        if (SUCCEEDED(envHr) && env != nullptr)
+                        {
+                            g_env = env;
+                            g_envState = EnvState::Ready;
+                        }
+                        else
+                        {
+                            g_envHr = envHr;
+                            g_envState = EnvState::Failed;
+                        }
+                        auto waiters = std::move(g_envWaiters);
+                        g_envWaiters.clear();
+                        for (auto &w : waiters)
+                        {
+                            w(envHr, env);
+                        }
+                        return S_OK;
+                    })
+                    .Get());
+            if (FAILED(hr))
+            {
+                g_envHr = hr;
+                g_envState = EnvState::Failed;
+                auto waiters = std::move(g_envWaiters);
+                g_envWaiters.clear();
+                for (auto &w : waiters)
+                {
+                    w(hr, nullptr);
+                }
+            }
+            return;
+    }
+}
+
+// Concurrent CreateCoreWebView2Controller calls against the same environment
+// race in WebView2's internals: with 3 controllers requested simultaneously
+// (3 TikTok tabs at startup), 2 typically come back with E_ABORT. Serialize
+// them: only one in-flight at a time, others queue and start when the prior
+// finishes.
+//
+// All access on the UI thread.
+struct PendingControllerRequest
+{
+    HWND host;
+    std::function<void(HRESULT, ICoreWebView2Controller *)> callback;
+};
+bool g_controllerInFlight{false};
+std::vector<PendingControllerRequest> g_controllerQueue;
+
+void processNextController();
+
+void requestController(
+    HWND host,
+    std::function<void(HRESULT, ICoreWebView2Controller *)> cb)
+{
+    g_controllerQueue.push_back({host, std::move(cb)});
+    if (!g_controllerInFlight)
+    {
+        processNextController();
+    }
+}
+
+void processNextController()
+{
+    if (g_controllerQueue.empty() || g_envState != EnvState::Ready ||
+        !g_env)
+    {
+        return;
+    }
+    g_controllerInFlight = true;
+    auto next = std::move(g_controllerQueue.front());
+    g_controllerQueue.erase(g_controllerQueue.begin());
+
+    auto cb = std::make_shared<
+        std::function<void(HRESULT, ICoreWebView2Controller *)>>(
+        std::move(next.callback));
+    // WebView2's CreateCoreWebView2Controller occasionally fires its
+    // completion handler twice (known SDK quirk - usually one good
+    // invocation followed by a stale E_ABORT). Guard with a one-shot flag
+    // so we don't double-process the same request.
+    auto fired = std::make_shared<bool>(false);
+    g_env->CreateCoreWebView2Controller(
+        next.host,
+        Callback<
+            ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+            [cb, fired](HRESULT hr,
+                        ICoreWebView2Controller *controller) -> HRESULT {
+                if (*fired)
+                {
+                    return S_OK;
+                }
+                *fired = true;
+                (*cb)(hr, controller);
+                g_controllerInFlight = false;
+                processNextController();
+                return S_OK;
+            })
+            .Get());
+}
+
 }  // namespace
 
 struct TikTokLiveChat::Impl {
@@ -88,6 +234,13 @@ struct TikTokLiveChat::Impl {
     ComPtr<ICoreWebView2> webview;
     EventRegistrationToken navToken{};
     EventRegistrationToken msgToken{};
+    EventRegistrationToken resReqToken{};
+    // Number of times CreateCoreWebView2Controller has come back with
+    // E_ABORT. WebView2 occasionally hands E_ABORT back even with our
+    // serialized + shared-env path (transient internal race); a short retry
+    // ladder works around it.
+    int controllerRetryCount{0};
+    static constexpr int controllerMaxRetries = 5;
 
     // Activity-event aggregation. TikTok likes / joins can burst at tens per
     // second; we accumulate and flush on a debounce timer.
@@ -145,6 +298,10 @@ struct TikTokLiveChat::Impl {
             {
                 webview->remove_WebMessageReceived(msgToken);
             }
+            if (resReqToken.value != 0)
+            {
+                webview->remove_WebResourceRequested(resReqToken);
+            }
         }
         if (controller)
         {
@@ -166,6 +323,77 @@ TikTokLiveChat::TikTokLiveChat(QString source)
 TikTokLiveChat::~TikTokLiveChat()
 {
     this->stop();
+}
+
+namespace {
+
+// Process-wide registry. WebView2 hosts are expensive (each is a chromium
+// renderer); MergedChannels with the same TikTok username share one. Keyed by
+// the normalized username so different forms (`@user`, `user`, the full live
+// URL) all collapse onto the same instance.
+//
+// Holds STRONG references on purpose: the layout-restore path creates and
+// destroys throwaway MergedChannels in rapid succession (probing what each
+// "merged" descriptor resolves to), and a weak_ptr-only registry would let
+// the instance die between the throwaway MergedChannel dropping it and the
+// real one picking it up. Three controller-create attempts per source result
+// (each from a fresh Impl with a different host HWND), and the racy ones get
+// E_ABORT from WebView2. Strong-ref keeps the instance alive across the
+// churn; a unique TikTok source produces exactly one Impl for the app's
+// lifetime.
+std::mutex g_tiktokRegistryMutex;
+std::unordered_map<QString, std::shared_ptr<TikTokLiveChat>> g_tiktokRegistry;
+
+}  // namespace
+
+std::shared_ptr<TikTokLiveChat> TikTokLiveChat::getOrCreateShared(
+    const QString &source)
+{
+    const QString key = TikTokLiveChat::normalizeSource(source);
+    std::lock_guard<std::mutex> lock(g_tiktokRegistryMutex);
+
+    auto it = g_tiktokRegistry.find(key);
+    if (it != g_tiktokRegistry.end())
+    {
+        return it->second;
+    }
+
+    auto shared = std::make_shared<TikTokLiveChat>(source);
+    g_tiktokRegistry.emplace(key, shared);
+    shared->start();
+    return shared;
+}
+
+void TikTokLiveChat::releaseSharedEnvironment()
+{
+    // Application is shutting down. Drop the registry strong refs so each
+    // TikTokLiveChat destructs (which calls Impl::~Impl, releasing the
+    // controller/webview/env refs held by the Impl). Then drop our own
+    // env ref and reject any pending env waiters. Doing this from
+    // Application::aboutToQuit() means the Qt event loop is still alive
+    // for the WebView2 message pump; releasing g_env at static-destructor
+    // time (after main returns) is a known crash pattern on Windows.
+    {
+        std::lock_guard<std::mutex> lock(g_tiktokRegistryMutex);
+        g_tiktokRegistry.clear();
+    }
+
+    // Drop pending controller requests; their per-Impl callbacks would
+    // short-circuit on guard.expired() anyway since the Impls are gone.
+    g_controllerQueue.clear();
+
+    // Reject any callers still waiting on env creation so they don't sit
+    // forever or fire after we've torn down.
+    auto waiters = std::move(g_envWaiters);
+    g_envWaiters.clear();
+    for (auto &w : waiters)
+    {
+        w(E_ABORT, nullptr);
+    }
+
+    g_env.Reset();
+    g_envState = EnvState::NotStarted;
+    g_envHr = S_OK;
 }
 
 void TikTokLiveChat::start()
@@ -276,50 +504,98 @@ void TikTokLiveChat::start()
 
     std::weak_ptr<bool> guard = this->lifetimeGuard_;
 
-    HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
-        nullptr, userDataDirW.c_str(), nullptr,
-        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [this, guard](HRESULT envHr,
-                          ICoreWebView2Environment *env) -> HRESULT {
-                if (guard.expired())
-                {
-                    return S_OK;
-                }
-                if (FAILED(envHr) || env == nullptr)
-                {
-                    this->setStatusText(
-                        QStringLiteral(
-                            "TikTok: WebView2 Runtime unavailable (0x%1)")
-                            .arg(static_cast<quint32>(envHr), 8, 16,
-                                 QChar('0')),
-                        true);
-                    this->running_ = false;
-                    return S_OK;
-                }
-                this->impl_->env = env;
+    requestSharedEnvironment(
+        userDataDirW,
+        [this, guard](HRESULT envHr, ICoreWebView2Environment *env) {
+            if (guard.expired())
+            {
+                return;
+            }
+            if (FAILED(envHr) || env == nullptr)
+            {
+                this->setStatusText(
+                    QStringLiteral(
+                        "TikTok: WebView2 Runtime unavailable (0x%1)")
+                        .arg(static_cast<quint32>(envHr), 8, 16, QChar('0')),
+                    true);
+                this->running_ = false;
+                return;
+            }
+            this->impl_->env = env;
+            this->launchControllerCreate();
+        });
+}
 
-                return env->CreateCoreWebView2Controller(
-                    this->impl_->host,
-                    Callback<
-                        ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [this, guard](
-                            HRESULT ctrlHr,
-                            ICoreWebView2Controller *controller) -> HRESULT {
+void TikTokLiveChat::launchControllerCreate()
+{
+    if (!this->running_ || !this->impl_ || this->impl_->host == nullptr)
+    {
+        return;
+    }
+    std::weak_ptr<bool> guard = this->lifetimeGuard_;
+    requestController(
+        this->impl_->host,
+        [this, guard](HRESULT ctrlHr,
+                      ICoreWebView2Controller *controller) {
                             if (guard.expired())
                             {
-                                return S_OK;
+                                return;
                             }
                             if (FAILED(ctrlHr) || controller == nullptr)
                             {
-                                this->setStatusText(
-                                    QStringLiteral(
-                                        "TikTok: controller failed (0x%1)")
-                                        .arg(static_cast<quint32>(ctrlHr), 8,
-                                             16, QChar('0')),
-                                    true);
+                                // E_ABORT (0x80004004) is a known transient
+                                // race even with shared env + serialized
+                                // creation. Retry a few times before giving
+                                // up - usually succeeds on the second try.
+                                // Also retry on ERROR_INVALID_WINDOW_HANDLE
+                                // (0x80070578) which we've seen on first
+                                // controller-create after env init.
+                                const bool retryable =
+                                    ctrlHr == E_ABORT ||
+                                    static_cast<quint32>(ctrlHr) == 0x80070578;
+                                if (retryable && this->impl_ &&
+                                    this->impl_->controllerRetryCount <
+                                        Impl::controllerMaxRetries)
+                                {
+                                    this->impl_->controllerRetryCount++;
+                                    qCWarning(chatterinoTikTok).nospace()
+                                        << "[" << this->username_
+                                        << "] controller create E_ABORT, "
+                                           "retry "
+                                        << this->impl_->controllerRetryCount
+                                        << "/" << Impl::controllerMaxRetries;
+                                    QTimer::singleShot(
+                                        250, [this, guard] {
+                                            if (guard.expired())
+                                            {
+                                                return;
+                                            }
+                                            this->launchControllerCreate();
+                                        });
+                                    return;
+                                }
+                                // Don't surface as a chat system message -
+                                // WebView2 sometimes fires this callback
+                                // twice per request (the second invocation
+                                // arrives with a stale E_ABORT, a known
+                                // SDK quirk), so the user would see noise
+                                // even when retry succeeds. Log to file
+                                // for diagnostics; the channel will simply
+                                // stay disconnected if all retries fail.
+                                qCWarning(chatterinoTikTok).nospace()
+                                    << "[" << this->username_
+                                    << "] controller create failed hr=0x"
+                                    << QString::number(
+                                           static_cast<quint32>(ctrlHr), 16)
+                                    << " after "
+                                    << (this->impl_
+                                            ? this->impl_->controllerRetryCount
+                                            : 0)
+                                    << " retries (suppressed from UI)";
                                 this->running_ = false;
-                                return S_OK;
+                                return;
                             }
+                            this->impl_->controllerRetryCount = 0;
                             this->impl_->controller = controller;
                             controller->get_CoreWebView2(&this->impl_->webview);
                             if (!this->impl_->webview)
@@ -327,8 +603,59 @@ void TikTokLiveChat::start()
                                 this->setStatusText(
                                     QStringLiteral("TikTok: no webview"), true);
                                 this->running_ = false;
-                                return S_OK;
+                                return;
                             }
+
+                            // We never display this WebView (host is a hidden
+                            // 1x1 popup) and only need the chat WebSocket and
+                            // /webcast/room/* fetches. Disable visible
+                            // compositing, mute audio, and block image / media
+                            // / font network requests at the resource layer so
+                            // TikTok's HLS live-video player never decodes a
+                            // frame. Drops idle CPU from ~14% per tab to <1%.
+                            controller->put_IsVisible(FALSE);
+                            ComPtr<ICoreWebView2_8> webview8;
+                            if (SUCCEEDED(this->impl_->webview.As(&webview8)) &&
+                                webview8)
+                            {
+                                webview8->put_IsMuted(TRUE);
+                            }
+
+                            this->impl_->webview->AddWebResourceRequestedFilter(
+                                L"*",
+                                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE);
+                            this->impl_->webview->AddWebResourceRequestedFilter(
+                                L"*",
+                                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MEDIA);
+                            this->impl_->webview->AddWebResourceRequestedFilter(
+                                L"*",
+                                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FONT);
+                            this->impl_->webview->add_WebResourceRequested(
+                                Callback<
+                                    ICoreWebView2WebResourceRequestedEventHandler>(
+                                    [this, guard](
+                                        ICoreWebView2 *,
+                                        ICoreWebView2WebResourceRequestedEventArgs
+                                            *args) -> HRESULT {
+                                        if (guard.expired() || !this->impl_ ||
+                                            !this->impl_->env)
+                                        {
+                                            return S_OK;
+                                        }
+                                        ComPtr<ICoreWebView2WebResourceResponse>
+                                            resp;
+                                        this->impl_->env
+                                            ->CreateWebResourceResponse(
+                                                nullptr, 403, L"Blocked", L"",
+                                                &resp);
+                                        if (resp)
+                                        {
+                                            args->put_Response(resp.Get());
+                                        }
+                                        return S_OK;
+                                    })
+                                    .Get(),
+                                &this->impl_->resReqToken);
 
                             // NavigationCompleted: detect page load state
                             this->impl_->webview->add_NavigationCompleted(
@@ -418,21 +745,7 @@ void TikTokLiveChat::start()
                                             return S_OK;
                                         })
                                         .Get());
-                            return S_OK;
-                        })
-                        .Get());
-            })
-            .Get());
-
-    if (FAILED(hr))
-    {
-        this->setStatusText(
-            QStringLiteral("TikTok: env create failed (0x%1)")
-                .arg(static_cast<quint32>(hr), 8, 16, QChar('0')),
-            true);
-        this->impl_.reset();
-        this->running_ = false;
-    }
+        });
 }
 
 void TikTokLiveChat::stop()

@@ -28,6 +28,14 @@ public:
     explicit YouTubeLiveChat(QString streamUrl);
     ~YouTubeLiveChat();
 
+    // Returns a shared instance for `source` (the user-entered handle / URL /
+    // channelId). Multiple MergedChannels with the same source share one
+    // instance: one set of network polls, one resolver state, one announce
+    // ladder. Calls `start()` lazily on first creation. The instance dies
+    // when the last shared_ptr drops.
+    static std::shared_ptr<YouTubeLiveChat> getOrCreateShared(
+        const QString &source);
+
     void start();
     void stop();
 
@@ -82,6 +90,7 @@ private:
     void schedulePoll(int delayMs);
     void scheduleHealthCheck(int delayMs);
     void scheduleResolve(int delayMs);
+    bool videoIdRecentlyFailed(const QString &videoId) const;
     void recoverLiveChat(QString text, int retryDelayMs);
     void waitForNextLive(QString text, int retryDelayMs);
     void resetInnertubeContext();
@@ -121,6 +130,27 @@ private:
     bool failureReported_{false};
     bool skipInitialBacklog_{false};
     int activePollStreak_{0};
+    // Recovery escalation: counts consecutive recoverLiveChat() calls since
+    // the last successful poll. Reset by poll success and waitForNextLive.
+    // After hitting the escalation threshold we promote to waitForNextLive
+    // so the tab's live marker turns off and we stop pretending the stream
+    // is live - covers genuine end-of-stream and the case where the resolver
+    // settled on a non-live page (e.g. a Shorts thumbnail).
+    int consecutiveRecoveries_{0};
+    // Tracks the videoId that the rebootstrap loop just escalated on. If
+    // resolveVideoId hands back the SAME id within `recentlyFailedWindowMs`,
+    // we know the channel's /live endpoint is still serving a stale or non-
+    // live page (typical: Shorts thumbnails) - treat as offline instead of
+    // setting live=true and retrying the same dead session every ~12s.
+    QString recentlyFailedVideoId_;
+    QElapsedTimer recentlyFailedTimer_;
+    // How many times in a row this same videoId has been escalated. Each new
+    // failure on the same id doubles the cooldown (5min, 10min, 20min, ...
+    // up to recentlyFailedMaxWindowMs) so a chronically-bogus videoId stops
+    // re-flashing the live marker every 5 minutes.
+    int recentlyFailedStreak_{0};
+    static constexpr qint64 recentlyFailedBaseWindowMs = 5LL * 60 * 1000;
+    static constexpr qint64 recentlyFailedMaxWindowMs = 60LL * 60 * 1000;
     uint64_t liveViewerCount_{0};
     QElapsedTimer liveChatSessionRefreshTimer_;
     QElapsedTimer liveChatProgressTimer_;

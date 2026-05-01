@@ -27,7 +27,9 @@
 #include <algorithm>
 #include <atomic>
 #include <limits>
+#include <mutex>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -689,6 +691,47 @@ YouTubeLiveChat::~YouTubeLiveChat()
     this->stop();
 }
 
+namespace {
+
+// Process-wide registry so MergedChannels with the same youtube source share
+// one YouTubeLiveChat instance (one resolver, one poll loop, one announce
+// ladder). Strong refs on purpose: the layout-restore path creates and
+// destroys throwaway MergedChannels in rapid succession; with weak_ptrs the
+// instance would die between drop and re-pickup, churning multiple resolver
+// chains. Strong refs keep one instance per unique source for the app's
+// lifetime, which is what we want anyway.
+std::mutex g_youtubeRegistryMutex;
+std::unordered_map<QString, std::shared_ptr<YouTubeLiveChat>>
+    g_youtubeRegistry;
+
+}  // namespace
+
+std::shared_ptr<YouTubeLiveChat> YouTubeLiveChat::getOrCreateShared(
+    const QString &source)
+{
+    // Normalize so @foo, https://youtube.com/@foo, and the channel-id form all
+    // collapse to the same registry key; otherwise dedupe is broken for the
+    // most common URL-vs-handle case and we silently create duplicate
+    // instances for the same channel.
+    QString key = normalizeSource(source);
+    if (key.isEmpty())
+    {
+        key = source.trimmed();
+    }
+    std::lock_guard<std::mutex> lock(g_youtubeRegistryMutex);
+
+    auto it = g_youtubeRegistry.find(key);
+    if (it != g_youtubeRegistry.end())
+    {
+        return it->second;
+    }
+
+    auto shared = std::make_shared<YouTubeLiveChat>(key);
+    g_youtubeRegistry.emplace(key, shared);
+    shared->start();
+    return shared;
+}
+
 void YouTubeLiveChat::start()
 {
     if (this->running_)
@@ -715,6 +758,7 @@ void YouTubeLiveChat::start()
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
     this->activePollStreak_ = 0;
+    this->consecutiveRecoveries_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
     this->liveChatProgressTimer_.invalidate();
     this->setLive(false);
@@ -888,11 +932,38 @@ void YouTubeLiveChat::resolveVideoId()
                     return;
                 }
 
+                if (this->videoIdRecentlyFailed(videoId))
+                {
+                    qCWarning(chatterinoYouTube).nospace()
+                        << "[" << this->streamUrl_
+                        << "] resolveVideoId skipping recently-failed videoId="
+                        << videoId << " - treating as offline";
+                    this->waitForNextLive(
+                        QString("Waiting for %1 to go live on YouTube.")
+                            .arg(channelId),
+                        YOUTUBE_RECONNECT_DELAY_MS);
+                    return;
+                }
+
                 this->videoId_ = std::move(videoId);
                 this->seenMessageIds_.clear();
                 this->fetchLiveChatPage();
             });
     });
+}
+
+bool YouTubeLiveChat::videoIdRecentlyFailed(const QString &videoId) const
+{
+    if (videoId.isEmpty() || this->recentlyFailedVideoId_ != videoId ||
+        !this->recentlyFailedTimer_.isValid())
+    {
+        return false;
+    }
+    const qint64 cooldown = std::min(
+        recentlyFailedMaxWindowMs,
+        recentlyFailedBaseWindowMs *
+            (1LL << std::min(this->recentlyFailedStreak_ - 1, 8)));
+    return this->recentlyFailedTimer_.elapsed() < cooldown;
 }
 
 void YouTubeLiveChat::resolveChannelIdFromSource(
@@ -1450,7 +1521,10 @@ void YouTubeLiveChat::bootstrapInnertubeContext(std::function<void()> onReady,
                 return;
             }
 
-            this->failureReported_ = false;
+            // See fetchLiveChatPage success path: failureReported_ is only
+            // cleared once poll() actually returns chat data. Bootstrapping
+            // the InnerTube context proves nothing about the live chat
+            // endpoint itself.
             onReady();
             }))
         .onError(guardedCallback(
@@ -1477,6 +1551,10 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
 
     const bool activeLiveRefresh = this->live_;
     const auto requestedVideoId = this->videoId_;
+    qCDebug(chatterinoYouTube).nospace()
+        << "[" << this->streamUrl_ << "] fetchLiveChatPage videoId="
+        << requestedVideoId << " activeLiveRefresh=" << activeLiveRefresh
+        << " skipInitialBacklog=" << skipInitialBacklog;
 
     if (this->apiKey_.isEmpty() || this->clientVersion_.isEmpty())
     {
@@ -1537,6 +1615,12 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             }
             if (this->continuation_.isEmpty())
             {
+                qCWarning(chatterinoYouTube).nospace()
+                    << "[" << this->streamUrl_
+                    << "] fetchLiveChatPage no continuation videoId="
+                    << this->videoId_ << " activeLiveRefresh="
+                    << activeLiveRefresh << " handleSource="
+                    << this->shouldResolveLiveStreamFromSource();
                 if (activeLiveRefresh && !this->failureReported_)
                 {
                     this->recoverLiveChat(
@@ -1565,6 +1649,36 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             }
 
             this->liveTitle_ = extractLiveStreamTitle(json);
+            qCDebug(chatterinoYouTube).nospace()
+                << "[" << this->streamUrl_
+                << "] fetchLiveChatPage continuation found videoId="
+                << this->videoId_ << " title=\"" << this->liveTitle_
+                << "\" activeLiveRefresh=" << activeLiveRefresh;
+            // Shorts pages sometimes return a non-empty conversationBar /
+            // liveChatRenderer that is NOT a real live chat (the polls 400
+            // out and we'd otherwise announce "Joined" for a Shorts thumb).
+            // Title contains "#shorts" verbatim - definitive non-live signal.
+            // Mark the videoId as recently-failed and route to offline.
+            if (this->liveTitle_.contains(QStringLiteral("#shorts"),
+                                          Qt::CaseInsensitive))
+            {
+                qCWarning(chatterinoYouTube).nospace()
+                    << "[" << this->streamUrl_
+                    << "] fetchLiveChatPage rejecting Shorts videoId="
+                    << this->videoId_ << " title=\"" << this->liveTitle_
+                    << "\"";
+                this->recentlyFailedVideoId_ = this->videoId_;
+                this->recentlyFailedTimer_.restart();
+                if (this->recentlyFailedStreak_ < 1)
+                {
+                    this->recentlyFailedStreak_ = 1;
+                }
+                this->waitForNextLive(
+                    QStringLiteral("Waiting for a live YouTube stream "
+                                   "(ignored Shorts)."),
+                    YOUTUBE_RECONNECT_DELAY_MS);
+                return;
+            }
             const auto liveStartedAt = extractLiveStartTime(json);
             if (liveStartedAt.isValid())
             {
@@ -1578,22 +1692,29 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             {
                 this->liveViewerCount_ = 0;
             }
-            this->failureReported_ = false;
+            // Don't clear failureReported_ here: getting a continuation back
+            // from the watch page only proves the SPA can reach YouTube, not
+            // that polling will work. The poll() success path resets it once
+            // we've actually pulled chat. Otherwise a recoverLiveChat loop
+            // (poll fails -> rebootstrap succeeds -> poll fails -> ...) re-
+            // arms the "Reconnecting." status message every cycle.
             this->activePollStreak_ = 0;
             this->liveChatSessionRefreshTimer_.restart();
             this->liveChatProgressTimer_.restart();
-            // "Joined YouTube live chat: <title>" is announced by
-            // MergedChannel's liveStatusChanged handler via the same flag
-            // pattern Twitch/Kick/TikTok use. setLive(true) below fires the
-            // signal; liveTitle_ is already set above so MergedChannel can
-            // read it.
+            // Don't setLive(true) here. Finding a continuation in the watch
+            // page only proves the page exists; it doesn't prove the live
+            // chat endpoint will accept this continuation. Mis-resolved
+            // videos (Shorts, ended streams returning a stale conversation
+            // bar) reach this point too and would briefly flash the live
+            // marker / fire "Joined" before escalation drops them ~8s later.
+            // poll() is the authoritative check: setLive(true) happens only
+            // after the first successful chat poll.
             this->setStatusText(
                 this->liveTitle_.isEmpty()
-                    ? QString("Watching YouTube live chat for %1")
+                    ? QString("Connecting to YouTube live chat (%1)...")
                           .arg(this->videoId_)
-                    : QString("Watching YouTube live chat for %1")
+                    : QString("Connecting to YouTube live chat (%1)...")
                           .arg(this->liveTitle_));
-            this->setLive(true);
             this->skipInitialBacklog_ = skipInitialBacklog;
             this->poll();
             }))
@@ -1782,7 +1903,28 @@ void YouTubeLiveChat::poll()
                 return;
             }
 
+            qCDebug(chatterinoYouTube).nospace()
+                << "[" << this->streamUrl_ << "] poll ok videoId="
+                << this->videoId_ << " actions=" << actions.size()
+                << " delivered=" << deliveredMessageCount
+                << " viewers=" << this->liveViewerCount_
+                << " nextDelay=" << nextDelay << "ms"
+                << " (counter " << this->consecutiveRecoveries_ << "->0)";
             this->failureReported_ = false;
+            this->consecutiveRecoveries_ = 0;
+            this->recentlyFailedStreak_ = 0;
+            this->recentlyFailedVideoId_.clear();
+            // First successful poll proves the chat session is real - now
+            // it's safe to flip live and fire the "Joined" announce.
+            if (!this->live_)
+            {
+                this->setStatusText(
+                    this->liveTitle_.isEmpty()
+                        ? QString("Watching YouTube live chat for %1")
+                              .arg(this->videoId_)
+                        : QString("Watching YouTube live chat for %1")
+                              .arg(this->liveTitle_));
+            }
             this->setLive(true);
             if (this->liveChatSessionRefreshTimer_.isValid() &&
                 this->liveChatSessionRefreshTimer_.elapsed() >=
@@ -1794,12 +1936,16 @@ void YouTubeLiveChat::poll()
             this->schedulePoll(nextDelay);
             }))
         .onError(guardedCallback(this->lifetimeGuard_,
-                                 [this](NetworkResult) {
+                                 [this](NetworkResult result) {
             if (!this->running_)
             {
                 return;
             }
 
+            qCWarning(chatterinoYouTube).nospace()
+                << "[" << this->streamUrl_ << "] poll error videoId="
+                << this->videoId_ << " status="
+                << result.status().value_or(-1);
             this->recoverLiveChat("YouTube live chat polling failed. "
                                   "Reconnecting.",
                                   YOUTUBE_RECONNECT_DELAY_MS);
@@ -1861,13 +2007,49 @@ void YouTubeLiveChat::scheduleResolve(int delayMs)
 
 void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs)
 {
-    // Empty continuation, stalled progress, or a poll error all mean the
-    // chat session we were tracking is gone. Drop live_ here so the rest
-    // of the app stops believing the stream is live while we rebootstrap.
-    // If the next fetchLiveChatPage finds a fresh chat session, setLive(true)
-    // restores it.
-    this->setLive(false);
-    this->liveViewerCount_ = 0;
+    // Don't drop live_ on every call. recoverLiveChat fires on every
+    // transient poll hiccup (3s cadence); flipping live_ false->true each
+    // cycle made the tab's red live marker flash and re-fired the join
+    // announce. Instead, count consecutive recoveries since the last
+    // successful poll: at the threshold, escalate to waitForNextLive so
+    // the live marker actually turns off when the stream genuinely ended
+    // or was mis-resolved (e.g. a Shorts page that has no real live chat).
+    constexpr int kRecoveryEscalationThreshold = 3;
+    this->consecutiveRecoveries_++;
+    qCWarning(chatterinoYouTube).nospace()
+        << "[" << this->streamUrl_ << "] recoverLiveChat #"
+        << this->consecutiveRecoveries_ << "/" << kRecoveryEscalationThreshold
+        << " text=\"" << text << "\" videoId=" << this->videoId_
+        << " live=" << this->live_;
+    if (this->consecutiveRecoveries_ >= kRecoveryEscalationThreshold)
+    {
+        if (this->recentlyFailedVideoId_ == this->videoId_)
+        {
+            this->recentlyFailedStreak_++;
+        }
+        else
+        {
+            this->recentlyFailedStreak_ = 1;
+        }
+        const qint64 cooldown = std::min(
+            recentlyFailedMaxWindowMs,
+            recentlyFailedBaseWindowMs *
+                (1LL << std::min(this->recentlyFailedStreak_ - 1, 8)));
+        qCWarning(chatterinoYouTube).nospace()
+            << "[" << this->streamUrl_
+            << "] recoverLiveChat threshold hit -> waitForNextLive"
+            << " (videoId=" << this->videoId_ << " streak="
+            << this->recentlyFailedStreak_ << " cooldown=" << cooldown / 1000
+            << "s)";
+        this->consecutiveRecoveries_ = 0;
+        this->recentlyFailedVideoId_ = this->videoId_;
+        this->recentlyFailedTimer_.restart();
+        this->waitForNextLive(
+            QStringLiteral(
+                "YouTube live chat unavailable. Waiting for next stream."),
+            retryDelayMs);
+        return;
+    }
     this->continuation_.clear();
     this->activePollStreak_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
@@ -1895,6 +2077,9 @@ void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs)
 
 void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
 {
+    qCWarning(chatterinoYouTube).nospace()
+        << "[" << this->streamUrl_ << "] waitForNextLive videoId="
+        << this->videoId_ << " text=\"" << text << "\"";
     this->setLive(false);
     this->videoId_.clear();
     this->continuation_.clear();
@@ -1905,6 +2090,7 @@ void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
     this->activePollStreak_ = 0;
+    this->consecutiveRecoveries_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
     this->liveChatProgressTimer_.invalidate();
     this->setStatusText(std::move(text));
@@ -1925,6 +2111,10 @@ void YouTubeLiveChat::setLive(bool live)
         return;
     }
 
+    qCWarning(chatterinoYouTube).nospace()
+        << "[" << this->streamUrl_ << "] setLive " << (live ? "true" : "false")
+        << " (videoId=" << this->videoId_ << ", title=\"" << this->liveTitle_
+        << "\")";
     this->live_ = live;
     this->liveStatusChanged.invoke();
 }
@@ -2191,7 +2381,11 @@ QString YouTubeLiveChat::extractVideoChannelId(const QString &html)
 
 QString YouTubeLiveChat::extractEmbedLiveVideoId(const QString &html)
 {
-    return extractFirstMatch(
+    // The page we LOAD is /embed/live_stream?channel=...; YouTube echoes that
+    // path back in fallback markup when the channel isn't live, so the embed-
+    // path regexes will happily capture the literal "live_stream" (exactly 11
+    // chars of [A-Za-z0-9_-]) and pass it back as a real videoId. Filter it.
+    auto match = extractFirstMatch(
         html,
         {R"yt(<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")yt",
          R"yt(<meta property="og:url" content="https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")yt",
@@ -2200,6 +2394,11 @@ QString YouTubeLiveChat::extractEmbedLiveVideoId(const QString &html)
          R"yt(https://www\.youtube\.com/embed/([A-Za-z0-9_-]{11}))yt",
          R"yt(/embed/([A-Za-z0-9_-]{11}))yt",
          R"yt(\\/embed\\/([A-Za-z0-9_-]{11}))yt"});
+    if (match == QStringLiteral("live_stream"))
+    {
+        return {};
+    }
+    return match;
 }
 
 QString YouTubeLiveChat::extractLiveVideoId(const QString &html,

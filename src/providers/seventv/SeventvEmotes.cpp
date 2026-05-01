@@ -374,9 +374,11 @@ void SeventvEmotes::loadChannelEmotes(
             }
             if (result.status() == 404)
             {
-                qCWarning(chatterinoSeventv)
-                    << "Error occurred fetching 7TV emotes: "
-                    << result.parseJson();
+                // 404 = streamer is not registered on 7TV. Predictable for
+                // most non-7TV channels; not an error we need to wave at the
+                // user. Downgraded from warning to debug.
+                qCDebug(chatterinoSeventv)
+                    << "7TV has no emote set for this channel (404)";
                 if (manualRefresh)
                 {
                     shared->addSystemMessage(CHANNEL_HAS_NO_EMOTES);
@@ -474,9 +476,11 @@ void SeventvEmotes::loadKickChannelEmotes(
             }
             if (result.status() == 404)
             {
-                qCWarning(chatterinoSeventv)
-                    << "Error occurred fetching 7TV emotes: "
-                    << result.parseJson();
+                // 404 = streamer is not registered on 7TV. Predictable for
+                // most non-7TV channels; not an error we need to wave at the
+                // user. Downgraded from warning to debug.
+                qCDebug(chatterinoSeventv)
+                    << "7TV has no emote set for this channel (404)";
                 if (manualRefresh)
                 {
                     shared->addSystemMessage(CHANNEL_HAS_NO_EMOTES);

@@ -37,7 +37,7 @@ Use the latest GitHub release instead:
 
 ## Build Your Own
 
-Mergerino currently supports Windows only.
+Mergerino currently supports Windows only. The build needs Visual Studio 2022 (Desktop C++ workload), Qt 6 with `qtimageformats` on PATH, CMake, and Git. Build instructions for Conan and vcpkg are in [CLAUDE.md](CLAUDE.md).
 
 Clone with submodules:
 
@@ -56,3 +56,4 @@ git submodule update --init --recursive
 - This is an unofficial fork of [Chatterino](https://github.com/Chatterino/chatterino2).
 - Mergerino is intended to provide a merged multi-service chat client and Windows distribution path, not to represent the upstream project.
 - GitHub workflows and release packaging in this repo are Windows-only.
+- The TikTok provider runs TikTok's own webapp inside a hidden WebView2 host. Windows 11 ships the Edge WebView2 Runtime by default; on Windows 10 you may need to install it from Microsoft if TikTok rooms fail to connect.

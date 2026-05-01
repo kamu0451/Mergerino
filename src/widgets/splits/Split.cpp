@@ -2370,7 +2370,7 @@ void Split::showSearch(bool singleChannel)
 
 void Split::reconnect()
 {
-    this->getChannel()->reconnect();
+    this->getChannel()->userReconnect();
 }
 
 void Split::dragEnterEvent(QDragEnterEvent *event)

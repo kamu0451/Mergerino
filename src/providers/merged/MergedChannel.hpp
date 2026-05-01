@@ -65,6 +65,7 @@ public:
     bool isRerun() const override;
     bool canReconnect() const override;
     void reconnect() override;
+    void userReconnect() override;
     QString getCurrentStreamID() const override;
 
     QString statusSuffix() const;
@@ -157,8 +158,10 @@ private:
 
     ChannelPtr twitchChannel_;
     ChannelPtr kickChannel_;
-    std::unique_ptr<YouTubeLiveChat> youtubeLiveChat_;
-    std::unique_ptr<TikTokLiveChat> tiktokLiveChat_;
+    // Shared so multiple MergedChannels referencing the same source dedupe
+    // onto one underlying instance (one poll loop / one WebView2 host).
+    std::shared_ptr<YouTubeLiveChat> youtubeLiveChat_;
+    std::shared_ptr<TikTokLiveChat> tiktokLiveChat_;
 
     pajlada::Signals::SignalHolder twitchConnections_;
     pajlada::Signals::SignalHolder kickConnections_;
@@ -184,8 +187,18 @@ private:
     bool tiktokLive_{false};
     bool twitchLiveJoinAnnounced_{false};
     bool kickLiveJoinAnnounced_{false};
-    bool tiktokLiveJoinAnnounced_{false};
-    bool youtubeLiveJoinAnnounced_{false};
+    // Per-video latch: holds the videoId we last announced for. Cleared on
+    // setLive(false) so a future stream re-announces even if it resolves
+    // to the same videoId. Plain bool would re-fire on every recovery
+    // cycle - but recoverLiveChat() no longer drops live_, so setLive(false)
+    // here is only end-of-stream (waitForNextLive).
+    QString youtubeAnnouncedVideoId_;
+    // Per-room latch: holds the roomId we last announced for. Same shape
+    // as youtubeAnnouncedVideoId_ but deliberately NOT cleared on offline:
+    // TikTok flips live false transiently during reconnect / check_alive
+    // timeout / EOF watchdog, and clearing on those would re-announce the
+    // same room. Only a different roomId re-arms the announce.
+    QString tiktokAnnouncedRoomId_;
 };
 
 }  // namespace chatterino

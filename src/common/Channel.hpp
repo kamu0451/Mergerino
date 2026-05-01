@@ -152,6 +152,13 @@ public:
     virtual bool shouldIgnoreHighlights() const;
     virtual bool canReconnect() const;
     virtual void reconnect();
+    /// User-driven reconnect entry point (header button, /reconnect command,
+    /// reconnect message link). Defaults to reconnect(); MergedChannel
+    /// overrides this so user-driven reconnects forward to its Twitch/Kick
+    /// children, while reconnect() (called from Split::setChannel during
+    /// layout-restore) stays a lightweight rebind that does not disrupt
+    /// shared YouTube/TikTok providers.
+    virtual void userReconnect();
     virtual QString getCurrentStreamID() const;
 
     static std::shared_ptr<Channel> getEmpty();

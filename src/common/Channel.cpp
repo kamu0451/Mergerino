@@ -574,6 +574,11 @@ void Channel::reconnect()
 {
 }
 
+void Channel::userReconnect()
+{
+    this->reconnect();
+}
+
 QString Channel::getCurrentStreamID() const
 {
     return {};

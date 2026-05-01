@@ -331,20 +331,40 @@ bool MergedChannel::canReconnect() const
 
 void MergedChannel::reconnect()
 {
-    if (this->youtubeLiveChat_ != nullptr)
-    {
-        this->youtubeLive_ = false;
-        this->youtubeLiveChat_->stop();
-        this->youtubeLiveChat_->start();
-    }
+    // Lightweight rebind path. Split::setChannel calls reconnect() on every
+    // Split-bind during layout-restore; with shared YouTube/TikTok providers,
+    // 3 Splits sharing the same source would trigger 3 stop/start cycles in
+    // rapid succession - each tearing down the WebView2 host mid-controller-
+    // create and producing the "TikTok: controller failed" error spam.
+    //
+    // We deliberately don't reset Twitch/Kick here either, even though they
+    // are not shared (Twitch global IRC reconnect on every layout-restore
+    // bind would be wasteful). User-driven reconnects route through
+    // userReconnect() instead.
+    this->refreshStatusText();
+    this->streamStatusChanged.invoke();
+}
 
-    if (this->tiktokLiveChat_ != nullptr)
+void MergedChannel::userReconnect()
+{
+    // User-driven reconnect (header button, /reconnect command, message
+    // link). Forward to non-shared child channels: Twitch's reconnect
+    // triggers a global IRC reconnect (same path a non-merged Twitch tab
+    // uses), Kick falls through to the base no-op.
+    //
+    // Deliberately skip the YouTube/TikTok shared providers: they're shared
+    // via getOrCreateShared so multiple MergedChannels point at one
+    // instance, and stopping a shared instance disrupts every consumer and
+    // tears down expensive state (WebView2 host for TikTok). Each shared
+    // provider has its own retry/recovery logic.
+    if (this->twitchChannel_)
     {
-        this->tiktokLive_ = false;
-        this->tiktokLiveChat_->stop();
-        this->tiktokLiveChat_->start();
+        this->twitchChannel_->reconnect();
     }
-
+    if (this->kickChannel_)
+    {
+        this->kickChannel_->reconnect();
+    }
     this->refreshStatusText();
     this->streamStatusChanged.invoke();
 }
@@ -726,8 +746,8 @@ void MergedChannel::initializeSources()
     if (this->config_.youtubeEnabled &&
         !this->config_.youtubeStreamUrl.trimmed().isEmpty())
     {
-        this->youtubeLiveChat_ =
-            std::make_unique<YouTubeLiveChat>(this->config_.youtubeStreamUrl);
+        this->youtubeLiveChat_ = YouTubeLiveChat::getOrCreateShared(
+            this->config_.youtubeStreamUrl);
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->messageReceived,
             [this](const MessagePtr &message) {
@@ -751,7 +771,14 @@ void MergedChannel::initializeSources()
                 this->youtubeLive_ = this->youtubeLiveChat_->isLive();
                 if (this->youtubeLive_)
                 {
-                    if (!this->youtubeLiveJoinAnnounced_)
+                    // Announce only when a different video is now live.
+                    // Transient poll-failure recoveries no longer drop
+                    // live_ at the provider level (recoverLiveChat keeps
+                    // live_ true while it tries to recover), so we never
+                    // see false->true on the same videoId from recovery.
+                    const QString currentId =
+                        this->youtubeLiveChat_->videoId();
+                    if (currentId != this->youtubeAnnouncedVideoId_)
                     {
                         this->announceJoinedLiveChat(
                             MessagePlatform::YouTube,
@@ -760,7 +787,11 @@ void MergedChannel::initializeSources()
                 }
                 else
                 {
-                    this->youtubeLiveJoinAnnounced_ = false;
+                    // setLive(false) here is end-of-stream (waitForNextLive
+                    // after 3 consecutive recovery cycles); clear the latch
+                    // so a future stream re-announces even if it resolves
+                    // to the same videoId.
+                    this->youtubeAnnouncedVideoId_.clear();
                 }
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
@@ -771,13 +802,28 @@ void MergedChannel::initializeSources()
                 this->streamStatusChanged.invoke();
             });
         this->youtubeLiveChat_->start();
+        // Late-joining a shared instance: a previously-created MergedChannel
+        // for the same source already triggered start()/resolve/setLive, so
+        // we missed those signals. Seed our derived state from the current
+        // shared state and announce if already live with a fresh videoId.
+        this->youtubeLive_ = this->youtubeLiveChat_->isLive();
+        if (this->youtubeLive_)
+        {
+            const QString currentId = this->youtubeLiveChat_->videoId();
+            if (currentId != this->youtubeAnnouncedVideoId_)
+            {
+                this->announceJoinedLiveChat(
+                    MessagePlatform::YouTube,
+                    this->youtubeLiveChat_->liveTitle());
+            }
+        }
     }
 
     if (this->config_.tiktokEnabled &&
         !this->config_.tiktokUsername.trimmed().isEmpty())
     {
         this->tiktokLiveChat_ =
-            std::make_unique<TikTokLiveChat>(this->config_.tiktokUsername);
+            TikTokLiveChat::getOrCreateShared(this->config_.tiktokUsername);
         this->tiktokConnections_.managedConnect(
             this->tiktokLiveChat_->messageReceived,
             [this](const MessagePtr &message) {
@@ -802,16 +848,21 @@ void MergedChannel::initializeSources()
                 this->tiktokLive_ = this->tiktokLiveChat_->isLive();
                 if (this->tiktokLive_)
                 {
-                    if (!this->tiktokLiveJoinAnnounced_)
+                    // Announce only when a different room is now live.
+                    // TikTok has multiple transient setLive(false) sites
+                    // (check_alive timeout, ws-reconnect, EOF watchdog);
+                    // a bool latch reset on offline re-announced on every
+                    // recovery. Per-roomId comparison alone gates this:
+                    // transient drops keep the same roomId so they no
+                    // longer re-fire the "Joined" message.
+                    const QString currentId =
+                        this->tiktokLiveChat_->roomId();
+                    if (currentId != this->tiktokAnnouncedRoomId_)
                     {
                         this->announceJoinedLiveChat(
                             MessagePlatform::TikTok,
                             this->tiktokLiveChat_->liveTitle());
                     }
-                }
-                else
-                {
-                    this->tiktokLiveJoinAnnounced_ = false;
                 }
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
@@ -822,6 +873,19 @@ void MergedChannel::initializeSources()
                 this->streamStatusChanged.invoke();
             });
         this->tiktokLiveChat_->start();
+        // Late-joining a shared instance: seed our derived state and announce
+        // if already live (see equivalent block for YouTube above).
+        this->tiktokLive_ = this->tiktokLiveChat_->isLive();
+        if (this->tiktokLive_)
+        {
+            const QString currentId = this->tiktokLiveChat_->roomId();
+            if (currentId != this->tiktokAnnouncedRoomId_)
+            {
+                this->announceJoinedLiveChat(
+                    MessagePlatform::TikTok,
+                    this->tiktokLiveChat_->liveTitle());
+            }
+        }
     }
 }
 
@@ -1155,11 +1219,19 @@ void MergedChannel::announceJoinedLiveChat(MessagePlatform platform,
     }
     else if (platform == MessagePlatform::TikTok)
     {
-        this->tiktokLiveJoinAnnounced_ = true;
+        if (this->tiktokLiveChat_)
+        {
+            this->tiktokAnnouncedRoomId_ =
+                this->tiktokLiveChat_->roomId();
+        }
     }
     else if (platform == MessagePlatform::YouTube)
     {
-        this->youtubeLiveJoinAnnounced_ = true;
+        if (this->youtubeLiveChat_)
+        {
+            this->youtubeAnnouncedVideoId_ =
+                this->youtubeLiveChat_->videoId();
+        }
     }
 
     this->addSystemStatusMessage(message);

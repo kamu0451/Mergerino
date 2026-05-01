@@ -1757,7 +1757,7 @@ void SplitHeader::reloadSubscriberEmotes()
 
 void SplitHeader::reconnect()
 {
-    this->split_->getChannel()->reconnect();
+    this->split_->getChannel()->userReconnect();
 }
 
 }  // namespace chatterino

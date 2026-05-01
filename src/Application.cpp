@@ -47,6 +47,7 @@
 #include "providers/seventv/SeventvEventAPI.hpp"
 #include "providers/seventv/SeventvPaints.hpp"
 #include "providers/seventv/SeventvPersonalEmotes.hpp"
+#include "providers/tiktok/TikTokLiveChat.hpp"
 #include "providers/twitch/ChannelPointReward.hpp"
 #include "providers/twitch/PubSubManager.hpp"
 #include "providers/twitch/PubSubMessages.hpp"
@@ -693,6 +694,14 @@ void Application::aboutToQuit()
     this->windows->save();
 
     this->windows->closeAll();
+
+    // Release the shared WebView2 environment used by the TikTok provider
+    // while Qt's event loop and WebView2's message pump are still alive.
+    // After windows->closeAll() the MergedChannels (and their TikTokLiveChat
+    // refs) drop, but the provider registry holds strong refs that would
+    // otherwise persist until static-destructor time, which is a known COM
+    // crash pattern on Windows.
+    TikTokLiveChat::releaseSharedEnvironment();
 }
 
 void Application::stop()

@@ -1309,6 +1309,7 @@ void SplitHeader::updateChannelText()
     {
         this->resetThumbnail();
         this->titleLabel_->setText(this->split_->activityPaneTitle());
+        this->titleLabel_->setTrailingText({}, {});
         return;
     }
 

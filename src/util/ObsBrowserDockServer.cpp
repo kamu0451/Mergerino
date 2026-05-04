@@ -6,7 +6,11 @@
 
 #include "Application.hpp"
 #include "common/Channel.hpp"
+#include "messages/Emote.hpp"
+#include "messages/Image.hpp"
+#include "messages/ImageSet.hpp"
 #include "messages/Message.hpp"
+#include "messages/MessageElement.hpp"
 #include "messages/layouts/MessageLayout.hpp"
 #include "providers/colors/ColorProvider.hpp"
 #include "providers/merged/MergedChannel.hpp"
@@ -263,6 +267,91 @@ QString splitLabel(Split *split)
     }
 
     return QStringLiteral("Selected split");
+}
+
+QJsonObject emoteTokenJson(const EmotePtr &emote)
+{
+    if (!emote)
+    {
+        return {};
+    }
+
+    const auto &image = emote->images.getImage(1.0F);
+    if (!image || image->url().string.isEmpty())
+    {
+        return {};
+    }
+
+    return QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("emote")},
+        {QStringLiteral("code"), emote->name.string},
+        {QStringLiteral("url"), image->url().string},
+        {QStringLiteral("zeroWidth"), emote->zeroWidth},
+    };
+}
+
+QJsonArray messageTokensJson(const Message &message)
+{
+    using Flag = MessageElementFlag;
+    constexpr MessageElementFlags SKIP_FLAGS{
+        Flag::ChannelName,    Flag::Username,    Flag::Timestamp,
+        Flag::RepliedMessage, Flag::ReplyButton, Flag::ModeratorTools,
+    };
+
+    QJsonArray tokens;
+
+    for (const auto &element : message.elements)
+    {
+        const auto *raw = element.get();
+        if (raw == nullptr)
+        {
+            continue;
+        }
+
+        if (raw->getFlags().hasAny(SKIP_FLAGS))
+        {
+            continue;
+        }
+
+        if (const auto *te = dynamic_cast<const TextElement *>(raw))
+        {
+            if (!te->getFlags().has(Flag::Text))
+            {
+                continue;
+            }
+            const auto words = te->words();
+            if (words.isEmpty())
+            {
+                continue;
+            }
+            tokens.push_back(QJsonObject{
+                {QStringLiteral("type"), QStringLiteral("text")},
+                {QStringLiteral("text"), words.join(QLatin1Char(' '))},
+            });
+        }
+        else if (const auto *ee = dynamic_cast<const EmoteElement *>(raw))
+        {
+            auto token = emoteTokenJson(ee->getEmote());
+            if (!token.isEmpty())
+            {
+                tokens.push_back(token);
+            }
+        }
+        else if (const auto *le =
+                     dynamic_cast<const LayeredEmoteElement *>(raw))
+        {
+            for (const auto &layer : le->getEmotes())
+            {
+                auto token = emoteTokenJson(layer.ptr);
+                if (!token.isEmpty())
+                {
+                    tokens.push_back(token);
+                }
+            }
+        }
+    }
+
+    return tokens;
 }
 
 void appendPlatform(QJsonArray &platforms, QSet<QString> &seen,
@@ -983,6 +1072,19 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
       color: var(--msg-system);
     }
 
+    .body img.emote {
+      display: inline-block;
+      height: 1.6em;
+      max-height: 28px;
+      width: auto;
+      vertical-align: middle;
+      margin: -0.2em 1px 0 1px;
+    }
+
+    .body img.emote.zero-width {
+      margin-left: -1.4em;
+    }
+
     .empty {
       min-height: 100%;
       display: grid;
@@ -1069,6 +1171,31 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
 
     function platformIcon(platform) {
       return platformIcons[escapePlatform(platform)] || platformIcons.twitch;
+    }
+
+    function renderTokens(target, message) {
+      target.replaceChildren();
+      const tokens = Array.isArray(message.tokens) ? message.tokens : null;
+      if (!tokens || tokens.length === 0) {
+        target.textContent = message.text || '';
+        return;
+      }
+      tokens.forEach((token, idx) => {
+        if (idx > 0) {
+          target.appendChild(document.createTextNode(' '));
+        }
+        if (token.type === 'emote' && token.url) {
+          const img = document.createElement('img');
+          img.className = 'emote' + (token.zeroWidth ? ' zero-width' : '');
+          img.src = token.url;
+          img.alt = token.code || '';
+          img.title = token.code || '';
+          img.loading = 'lazy';
+          target.appendChild(img);
+        } else if (token.type === 'text') {
+          target.appendChild(document.createTextNode(token.text || ''));
+        }
+      });
     }
 
     function applyTabsCollapsedState() {
@@ -1218,7 +1345,7 @@ QByteArray ObsBrowserDockServer::dockPageHtml() const
 
         const body = document.createElement('div');
         body.className = 'body';
-        body.textContent = message.text || '';
+        renderTokens(body, message);
 
         item.appendChild(top);
         item.appendChild(body);
@@ -1448,6 +1575,19 @@ QByteArray ObsBrowserDockServer::overlayPageHtml() const
       display: none;
     }
 
+    .body img.emote {
+      display: inline-block;
+      height: 1.6em;
+      width: auto;
+      vertical-align: middle;
+      margin: -0.2em 1px 0 1px;
+      filter: drop-shadow(0 0 2px rgba(0, 0, 0, 0.9));
+    }
+
+    .body img.emote.zero-width {
+      margin-left: -1.4em;
+    }
+
     @keyframes fade-in {
       from {
         opacity: 0;
@@ -1496,6 +1636,31 @@ QByteArray ObsBrowserDockServer::overlayPageHtml() const
       return platformIcons[escapePlatform(platform)] || platformIcons.twitch;
     }
 
+    function renderTokens(target, message) {
+      target.replaceChildren();
+      const tokens = Array.isArray(message.tokens) ? message.tokens : null;
+      if (!tokens || tokens.length === 0) {
+        target.textContent = message.text || '';
+        return;
+      }
+      tokens.forEach((token, idx) => {
+        if (idx > 0) {
+          target.appendChild(document.createTextNode(' '));
+        }
+        if (token.type === 'emote' && token.url) {
+          const img = document.createElement('img');
+          img.className = 'emote' + (token.zeroWidth ? ' zero-width' : '');
+          img.src = token.url;
+          img.alt = token.code || '';
+          img.title = token.code || '';
+          img.loading = 'lazy';
+          target.appendChild(img);
+        } else if (token.type === 'text') {
+          target.appendChild(document.createTextNode(token.text || ''));
+        }
+      });
+    }
+
     function trim() {
       while (order.length > maxMessages) {
         const id = order.shift();
@@ -1522,11 +1687,11 @@ QByteArray ObsBrowserDockServer::overlayPageHtml() const
           if (node.parentElement) {
             node.remove();
           }
-          seen.delete(id);
-          const idx = order.indexOf(id);
-          if (idx >= 0) {
-            order.splice(idx, 1);
-          }
+          // Keep id in `seen` and `order` so the next poll does not
+          // re-append the same message (it is still in mergerino's channel
+          // snapshot and would otherwise loop fade-in / fade-out forever).
+          // `trim()` still evicts old ids when maxMessages is exceeded, so
+          // memory stays bounded.
           fadeTimers.delete(id);
         }, 650);
       }, fadeAfter * 1000);
@@ -1576,7 +1741,7 @@ QByteArray ObsBrowserDockServer::overlayPageHtml() const
 
       const body = document.createElement('span');
       body.className = 'body';
-      body.textContent = message.text || '';
+      renderTokens(body, message);
       item.appendChild(body);
 
       feed.appendChild(item);
@@ -1737,8 +1902,20 @@ QByteArray ObsBrowserDockServer::dockStateJson(const QString &view,
             message->platformAccentColor.value_or(
                 defaultPlatformAccent(message->platform)));
 
+        // System messages have no id; the overlay client synthesises a
+        // random id per missing-id message per poll, re-appending the same
+        // system message every refresh. Fall back to the message address,
+        // which is stable across polls (the snapshot holds the same
+        // shared_ptrs).
+        QString messageId = message->id;
+        if (messageId.isEmpty())
+        {
+            messageId = QStringLiteral("addr-%1").arg(
+                QString::number(reinterpret_cast<quintptr>(message), 16));
+        }
+
         messages.push_back(QJsonObject{
-            {QStringLiteral("id"), message->id},
+            {QStringLiteral("id"), messageId},
             {QStringLiteral("timestamp"),
              message->parseTime.isValid()
                  ? message->parseTime.toString(QStringLiteral("H:mm"))
@@ -1749,6 +1926,7 @@ QByteArray ObsBrowserDockServer::dockStateJson(const QString &view,
                  ? cssColor(message->usernameColor)
                  : QString()},
             {QStringLiteral("text"), message->messageText},
+            {QStringLiteral("tokens"), messageTokensJson(*message)},
             {QStringLiteral("platform"), platformName(message->platform)},
             {QStringLiteral("platformAccentColor"), platformAccentColor},
             {QStringLiteral("highlightColor"),

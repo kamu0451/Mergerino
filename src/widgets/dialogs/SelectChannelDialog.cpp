@@ -21,11 +21,14 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
 #include <QRadioButton>
 #include <QRegularExpression>
+#include <QToolButton>
+#include <QToolTip>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVBoxLayout>
@@ -226,6 +229,35 @@ QString normalizeYouTubeSource(QString value)
     return {};
 }
 
+QToolButton *makeHelpButton(const QString &tip, QWidget *parent)
+{
+    auto *btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("?"));
+    btn->setToolTip(tip);
+    btn->setAutoRaise(true);
+    btn->setCursor(Qt::WhatsThisCursor);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setFixedSize(16, 16);
+    QObject::connect(btn, &QToolButton::clicked, btn, [btn]() {
+        QToolTip::showText(
+            btn->mapToGlobal(QPoint(btn->width() / 2, btn->height())),
+            btn->toolTip(), btn);
+    });
+    return btn;
+}
+
+QWidget *makeRowWithHelp(QWidget *primary, const QString &tip)
+{
+    auto *row = new QWidget;
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    layout->addWidget(primary);
+    layout->addWidget(makeHelpButton(tip, row));
+    layout->addStretch(1);
+    return row;
+}
+
 }  // namespace
 
 SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
@@ -304,17 +336,20 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
         "Choose whether merged messages use platform-colored rows, "
         "platform logo badges, or both.");
     platformLayout->addRow("Platform style", ui.indicatorMode);
-    ui.enableActivity = new QCheckBox("Enable activity tab");
-    ui.enableActivity->setToolTip(
-        "Open the linked activity tab for this merged tab and keep it in "
-        "sync with this channel.");
-    platformLayout->addRow(ui.enableActivity);
-    ui.filterActivity = new QCheckBox("Filter activity");
-    ui.filterActivity->setToolTip(
-        "Hide sub, hype chat, and cheer activity from the main chat. "
-        "When the linked Activity tab is enabled, this starts turned on by "
-        "default.");
-    platformLayout->addRow(ui.filterActivity);
+    ui.enableActivity = new QCheckBox("Show activity tab");
+    const QString activityTabTip =
+        QStringLiteral("Open the linked activity tab for this merged tab and "
+                       "keep it in sync with this channel.");
+    ui.enableActivity->setToolTip(activityTabTip);
+    platformLayout->addRow(makeRowWithHelp(ui.enableActivity, activityTabTip));
+    ui.filterActivity = new QCheckBox("Hide activity from main chat");
+    const QString filterActivityTip =
+        QStringLiteral("Hide sub, hype chat, and cheer activity from the main "
+                       "chat. Turning on the activity tab also enables this "
+                       "automatically.");
+    ui.filterActivity->setToolTip(filterActivityTip);
+    platformLayout->addRow(
+        makeRowWithHelp(ui.filterActivity, filterActivityTip));
 
     mergedLayout->addWidget(platformGroup);
 
@@ -402,8 +437,8 @@ void SelectChannelDialog::setMergedDefaults()
 {
     this->ui_.notebook->select(this->ui_.mergedPage);
     this->ui_.tabName->clear();
-    this->ui_.enableActivity->setChecked(false);
-    this->ui_.filterActivity->setChecked(false);
+    this->ui_.enableActivity->setChecked(true);
+    this->ui_.filterActivity->setChecked(true);
     this->ui_.enableTwitch->setChecked(true);
     this->ui_.twitchName->clear();
     this->ui_.enableKick->setChecked(true);

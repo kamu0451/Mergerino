@@ -1786,19 +1786,19 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
         dialog->setSelectedChannel(activityOwnerSplit
                                        ? activityOwnerSplit->getIndirectChannel()
                                        : this->getIndirectChannel());
+        dialog->setActivityPaneEnabled(linkedActivityPane != nullptr);
+        dialog->setFilterActivity(activityOwnerSplit
+                                      ? activityOwnerSplit->filterActivity()
+                                      : this->filterActivity());
+        dialog->setPlatformIndicatorMode(activityOwnerSplit
+                                             ? activityOwnerSplit
+                                                   ->platformIndicatorMode()
+                                             : this->platformIndicatorMode());
     }
     else
     {
         dialog->setSelectedChannel({});
     }
-    dialog->setActivityPaneEnabled(linkedActivityPane != nullptr);
-    dialog->setFilterActivity(activityOwnerSplit
-                                  ? activityOwnerSplit->filterActivity()
-                                  : this->filterActivity());
-    dialog->setPlatformIndicatorMode(activityOwnerSplit
-                                         ? activityOwnerSplit
-                                               ->platformIndicatorMode()
-                                         : this->platformIndicatorMode());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(dialogTitle);
     dialog->show();

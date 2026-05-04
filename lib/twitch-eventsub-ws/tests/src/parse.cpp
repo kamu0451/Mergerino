@@ -141,6 +141,11 @@ class NoOpListener : public chatterino::eventsub::lib::Listener
         override
     {
     }
+    void onChannelShoutoutReceive(
+        const messages::Metadata &metadata,
+        const payload::channel_shoutout_receive::v1::Payload &payload) override
+    {
+    }
 };
 
 }  // namespace

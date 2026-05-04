@@ -419,6 +419,42 @@ void Connection::onChannelChatUserMessageUpdate(
     });
 }
 
+void Connection::onChannelShoutoutReceive(
+    const lib::messages::Metadata &metadata,
+    const lib::payload::channel_shoutout_receive::v1::Payload &payload)
+{
+    (void)metadata;
+
+    auto broadcasterLogin =
+        QString::fromStdString(payload.event.broadcasterUserLogin);
+    auto channelPtr =
+        getApp()->getTwitch()->getChannelOrEmpty(broadcasterLogin);
+    if (channelPtr->isEmpty())
+    {
+        qCDebug(LOG)
+            << "Channel shoutout receive for broadcaster we're not interested "
+               "in"
+            << broadcasterLogin;
+        return;
+    }
+
+    auto fromName =
+        QString::fromStdString(payload.event.fromBroadcasterUserName);
+    auto fromLogin =
+        QString::fromStdString(payload.event.fromBroadcasterUserLogin);
+    if (fromName.isEmpty())
+    {
+        fromName = fromLogin;
+    }
+
+    auto text = QStringLiteral("%1 gave you a Shoutout to %2 viewers.")
+                    .arg(fromName, QString::number(payload.event.viewerCount));
+
+    runInGuiThread([channelPtr, text] {
+        channelPtr->addSystemMessage(text);
+    });
+}
+
 QString Connection::getSessionID() const
 {
     return this->sessionID;

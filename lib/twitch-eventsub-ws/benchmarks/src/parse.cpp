@@ -163,6 +163,14 @@ public:
         benchmark::DoNotOptimize(&metadata);
         benchmark::DoNotOptimize(&payload);
     }
+
+    void onChannelShoutoutReceive(
+        const messages::Metadata &metadata,
+        const payload::channel_shoutout_receive::v1::Payload &payload) override
+    {
+        benchmark::DoNotOptimize(&metadata);
+        benchmark::DoNotOptimize(&payload);
+    }
     // NOLINTEND(cppcoreguidelines-pro-type-const-cast)
 };
 

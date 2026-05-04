@@ -1591,6 +1591,7 @@ void TwitchChannel::refreshPubSub()
         this->eventSubSuspiciousUserUpdateHandle.reset();
         this->eventSubChannelChatUserMessageHoldHandle.reset();
         this->eventSubChannelChatUserMessageUpdateHandle.reset();
+        this->eventSubChannelShoutoutReceiveHandle.reset();
         return;
     }
 
@@ -1684,6 +1685,24 @@ void TwitchChannel::refreshPubSub()
                     },
             });
 
+        this->eventSubChannelShoutoutReceiveHandle =
+            getApp()->getEventSub()->subscribe(eventsub::SubscriptionRequest{
+                .subscriptionType = "channel.shoutout.receive",
+                .subscriptionVersion = "1",
+                .ownerTwitchUserID = currentTwitchUserID,
+                .conditions =
+                    {
+                        {
+                            "broadcaster_user_id",
+                            roomId,
+                        },
+                        {
+                            "moderator_user_id",
+                            currentTwitchUserID,
+                        },
+                    },
+            });
+
         this->eventSubChannelChatUserMessageHoldHandle.reset();
         this->eventSubChannelChatUserMessageUpdateHandle.reset();
     }
@@ -1694,6 +1713,7 @@ void TwitchChannel::refreshPubSub()
         this->eventSubAutomodMessageUpdateHandle.reset();
         this->eventSubSuspiciousUserMessageHandle.reset();
         this->eventSubSuspiciousUserUpdateHandle.reset();
+        this->eventSubChannelShoutoutReceiveHandle.reset();
 
         this->eventSubChannelChatUserMessageHoldHandle =
             getApp()->getEventSub()->subscribe(eventsub::SubscriptionRequest{

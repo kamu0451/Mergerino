@@ -236,6 +236,20 @@ const NotificationHandlers NOTIFICATION_HANDLERS{
             return boost::system::error_code{};
         },
     },
+    {
+        {"channel.shoutout.receive", "1"},
+        [](const auto &metadata, const auto &jv, auto &listener) {
+            auto oPayload =
+                parsePayload<payload::channel_shoutout_receive::v1::Payload>(
+                    jv);
+            if (!oPayload)
+            {
+                return oPayload.error();
+            }
+            listener->onChannelShoutoutReceive(metadata, *oPayload);
+            return boost::system::error_code{};
+        },
+    },
     // Add your new subscription types above this line
 };
 

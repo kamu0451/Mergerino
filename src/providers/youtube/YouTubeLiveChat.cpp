@@ -676,6 +676,46 @@ QString extractLiveChatContinuationFromJson(const QJsonValue &value)
     return {};
 }
 
+// Walks the InnerTube /next response for a definitive "live now" signal.
+// The watch-page microformat path used by /player isn't present here, so
+// we look for the videoPrimaryInfoRenderer's view-count block, which carries
+// `isLive: true` exactly when the broadcast is live. As a backup we also
+// honour `videoDetails.isLiveContent` + `videoDetails.isLive` if YouTube
+// changes the renderer shape. Conservative: returns false on any structure
+// we don't recognise so we don't false-positive recently-ended streams.
+bool extractIsLiveFromNextResponse(const QJsonObject &json)
+{
+    const auto contents = json["contents"]
+                              .toObject()["twoColumnWatchNextResults"]
+                              .toObject()["results"]
+                              .toObject()["results"]
+                              .toObject()["contents"]
+                              .toArray();
+    for (const auto &itemValue : contents)
+    {
+        const auto primary =
+            itemValue.toObject()["videoPrimaryInfoRenderer"].toObject();
+        if (primary.isEmpty())
+        {
+            continue;
+        }
+        const auto viewCount = primary["viewCount"].toObject();
+        const auto renderer = viewCount["videoViewCountRenderer"].toObject();
+        if (renderer.contains("isLive"))
+        {
+            return renderer["isLive"].toBool(false);
+        }
+    }
+
+    const auto videoDetails = json["videoDetails"].toObject();
+    if (videoDetails.contains("isLive"))
+    {
+        return videoDetails["isLive"].toBool(false);
+    }
+
+    return false;
+}
+
 }  // namespace
 
 namespace chatterino {
@@ -1654,17 +1694,24 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
                 << "] fetchLiveChatPage continuation found videoId="
                 << this->videoId_ << " title=\"" << this->liveTitle_
                 << "\" activeLiveRefresh=" << activeLiveRefresh;
-            // Shorts pages sometimes return a non-empty conversationBar /
-            // liveChatRenderer that is NOT a real live chat (the polls 400
-            // out and we'd otherwise announce "Joined" for a Shorts thumb).
-            // Title contains "#shorts" verbatim - definitive non-live signal.
-            // Mark the videoId as recently-failed and route to offline.
-            if (this->liveTitle_.contains(QStringLiteral("#shorts"),
-                                          Qt::CaseInsensitive))
+            // Authoritative non-live signal: the videoPrimaryInfoRenderer
+            // viewCount block exposes `isLive: true` only for an actively
+            // broadcasting stream. We used to gate Shorts on
+            // `liveTitle_.contains("#shorts")`, but streamers routinely put
+            // "#shorts" hashtags in real live-stream titles for SEO -- e.g.
+            // gevad1ch's "SUUUUPER DEEP MONDAY GROUP @GEVAD1CH#shorts" --
+            // which produced false positives that locked the recently-failed
+            // cache against legitimate live streams.
+            //
+            // Note: the InnerTube /next endpoint does NOT include
+            // microformat.playerMicroformatRenderer.liveBroadcastDetails;
+            // that field is on the /player endpoint. Don't gate on it here.
+            const bool isLiveBroadcast = extractIsLiveFromNextResponse(json);
+            if (!isLiveBroadcast)
             {
                 qCWarning(chatterinoYouTube).nospace()
                     << "[" << this->streamUrl_
-                    << "] fetchLiveChatPage rejecting Shorts videoId="
+                    << "] fetchLiveChatPage rejecting non-live videoId="
                     << this->videoId_ << " title=\"" << this->liveTitle_
                     << "\"";
                 this->recentlyFailedVideoId_ = this->videoId_;
@@ -1674,8 +1721,7 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
                     this->recentlyFailedStreak_ = 1;
                 }
                 this->waitForNextLive(
-                    QStringLiteral("Waiting for a live YouTube stream "
-                                   "(ignored Shorts)."),
+                    QStringLiteral("Waiting for a live YouTube stream."),
                     YOUTUBE_RECONNECT_DELAY_MS);
                 return;
             }

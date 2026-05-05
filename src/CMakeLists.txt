@@ -1015,6 +1015,7 @@ target_link_libraries(${LIBRARY_PROJECT}
         Threads::Threads
         LRUCache
         MagicEnum
+        ZLIB::ZLIB
         $<$<BOOL:${WIN32}>:Wtsapi32>
         $<$<BOOL:${WIN32}>:Mergerino::WebView2>
         twitch-eventsub-ws

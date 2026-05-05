@@ -194,6 +194,11 @@ find_package(Boost REQUIRED CONFIG COMPONENTS ${BOOST_REQUIRED_COMPONENTS} OPTIO
 # Find OpenSSL on the system
 find_package(OpenSSL REQUIRED)
 
+# zlib is used to inflate TikTok's gzipped WebcastPushFrame payloads
+# (envelope field 6 == "gzip"). Pulled in transitively by openssl/boost,
+# but we depend on it directly so make it explicit.
+find_package(ZLIB REQUIRED)
+
 find_package(Threads REQUIRED)
 
 if(CHATTERINO_SPELLCHECK)

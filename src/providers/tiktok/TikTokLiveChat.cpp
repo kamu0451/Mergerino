@@ -1248,12 +1248,6 @@ void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
         this->setViewerCount(static_cast<unsigned>(frame.roomViewerCount));
     }
 
-    // Known follow-up: TikTok's current WebcastPushFrame schema sometimes
-    // gzips the inner payload (envelope field 6 = "gzip"). We don't yet
-    // decompress, so those frames produce no events. Uncompressed frames
-    // (heartbeats, keepalive, occasional raw frames) still decode, which
-    // is why chat / viewer-count works intermittently.
-
     // Only chat messages and gift events are unambiguous proof the room is
     // actively broadcasting. Likes can be replayed from cache; member-join /
     // social events and roomViewerCount > 0 still arrive on rooms that just

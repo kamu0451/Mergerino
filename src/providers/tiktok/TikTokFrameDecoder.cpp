@@ -5,8 +5,11 @@
 
 #include "providers/tiktok/ProtobufReader.hpp"
 
+#include <zlib.h>
+
 #include <span>
 #include <string_view>
+#include <vector>
 
 namespace chatterino::tiktok {
 
@@ -543,14 +546,24 @@ bool decodeFetchResult(std::span<const std::uint8_t> bytes, DecodedFrame &out)
         {
             return false;
         }
-        if (field == 1 && wire == WireType::LengthDelimited)
+        if (wire == WireType::LengthDelimited)
         {
             std::span<const std::uint8_t> sub;
             if (!r.readLengthDelimited(sub))
             {
                 return false;
             }
-            decodeBaseMessage(sub, out);
+            // TikTok's webcast envelope historically put the repeated
+            // BaseProtoMessage messages at field 1. As of mid-2026 the
+            // wire format moved them to field 2 (with field 1 now carrying
+            // a small response-metadata sub-message: response_code, cursor,
+            // server time). Try both: decodeBaseMessage returns harmlessly
+            // when the sub-bytes don't match the BaseMessage shape, so
+            // probing both costs nothing.
+            if (field == 1 || field == 2)
+            {
+                decodeBaseMessage(sub, out);
+            }
         }
         else if (!r.skip(wire))
         {
@@ -650,7 +663,69 @@ DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes)
     const bool tryDecode = payloadTypeKnown || out.payloadType.isEmpty();
     if (tryDecode && !innerPayload.empty())
     {
-        decodeFetchResult(innerPayload, out);
+        // TikTok wraps most chat-bearing payloads in gzip (envelope field
+        // 6 == "gzip"). Without this decompression the FetchResult decoder
+        // sees raw deflate bytes and silently returns no events, which is
+        // why "TikTok says they're live but no chat shows" was the typical
+        // symptom. Run zlib's gzip-aware inflate and decode the result.
+        if (out.payloadEncoding == QStringLiteral("gzip"))
+        {
+            std::vector<std::uint8_t> inflated;
+            // 32 KiB initial; grow up to 4 MiB. Real frames top out at
+            // ~80 KiB but caps protect against runaway inputs.
+            inflated.resize(32 * 1024);
+            constexpr std::size_t kMaxInflated = 4 * 1024 * 1024;
+            z_stream strm{};
+            strm.next_in =
+                const_cast<Bytef *>(innerPayload.data());
+            strm.avail_in = static_cast<uInt>(innerPayload.size());
+            // 15 + 32 lets zlib auto-detect gzip vs zlib headers.
+            if (inflateInit2(&strm, 15 + 32) == Z_OK)
+            {
+                std::size_t produced = 0;
+                int rc = Z_OK;
+                while (true)
+                {
+                    strm.next_out = inflated.data() + produced;
+                    strm.avail_out =
+                        static_cast<uInt>(inflated.size() - produced);
+                    rc = inflate(&strm, Z_NO_FLUSH);
+                    produced = inflated.size() - strm.avail_out;
+                    if (rc == Z_STREAM_END || rc < 0)
+                    {
+                        break;
+                    }
+                    // Z_OK / Z_BUF_ERROR with output buffer full: grow.
+                    if (strm.avail_out == 0)
+                    {
+                        if (inflated.size() >= kMaxInflated)
+                        {
+                            break;
+                        }
+                        inflated.resize(
+                            std::min(kMaxInflated, inflated.size() * 2));
+                        continue;
+                    }
+                    // avail_out > 0 and not Z_STREAM_END: inflate stalled
+                    // because input was consumed but more is expected.
+                    // Truncated frame; bail.
+                    break;
+                }
+                inflateEnd(&strm);
+                if (rc == Z_STREAM_END && produced > 0)
+                {
+                    inflated.resize(produced);
+                    decodeFetchResult(
+                        std::span<const std::uint8_t>(inflated.data(),
+                                                      inflated.size()),
+                        out);
+                }
+            }
+        }
+        else
+        {
+            decodeFetchResult(innerPayload, out);
+        }
     }
     return out;
 }

@@ -33,6 +33,10 @@ class Chatterino(ConanFile):
 
         self.requires("openssl/3.6.1")
         self.requires("hunspell/1.7.2")
+        # Used directly to inflate TikTok webcast WebSocket frames; pulled
+        # transitively by openssl but CMakeDeps only generates ZLIB-config
+        # for direct requires.
+        self.requires("zlib/1.3.1")
 
     def generate(self):
         tc = CMakeToolchain(self)

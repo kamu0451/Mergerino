@@ -407,6 +407,8 @@ void TikTokLiveChat::start()
         this->setStatusText(QStringLiteral("Invalid TikTok source"), true);
         return;
     }
+    qCDebug(chatterinoTikTok)
+        << "start() username=" << this->username_;
     this->running_ = true;
     this->sourceResolved.invoke(this->username_);
     this->setStatusText(QStringLiteral("Connecting to TikTok..."), false);
@@ -662,7 +664,7 @@ void TikTokLiveChat::launchControllerCreate()
                                 Callback<
                                     ICoreWebView2NavigationCompletedEventHandler>(
                                     [this, guard](
-                                        ICoreWebView2 *,
+                                        ICoreWebView2 *wv,
                                         ICoreWebView2NavigationCompletedEventArgs
                                             *args) -> HRESULT {
                                         if (guard.expired())
@@ -671,6 +673,25 @@ void TikTokLiveChat::launchControllerCreate()
                                         }
                                         BOOL ok = FALSE;
                                         args->get_IsSuccess(&ok);
+                                        COREWEBVIEW2_WEB_ERROR_STATUS errorStatus =
+                                            COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+                                        args->get_WebErrorStatus(&errorStatus);
+                                        LPWSTR src = nullptr;
+                                        QString srcStr;
+                                        if (wv != nullptr &&
+                                            SUCCEEDED(wv->get_Source(&src)) &&
+                                            src != nullptr)
+                                        {
+                                            srcStr = fromWide(src);
+                                            CoTaskMemFree(src);
+                                        }
+                                        qCDebug(chatterinoTikTok).nospace()
+                                            << "[" << this->username_
+                                            << "] NavigationCompleted ok="
+                                            << static_cast<bool>(ok)
+                                            << " webErrorStatus="
+                                            << static_cast<int>(errorStatus)
+                                            << " source=" << srcStr;
                                         if (!ok)
                                         {
                                             this->setStatusText(
@@ -735,11 +756,25 @@ void TikTokLiveChat::launchControllerCreate()
                                         ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler>(
                                         [this, guard, url](HRESULT addHr,
                                                            LPCWSTR) -> HRESULT {
-                                            if (guard.expired() ||
-                                                FAILED(addHr))
+                                            if (guard.expired())
                                             {
                                                 return S_OK;
                                             }
+                                            if (FAILED(addHr))
+                                            {
+                                                qCWarning(chatterinoTikTok).nospace()
+                                                    << "[" << this->username_
+                                                    << "] AddScriptToExecuteOnDocumentCreated"
+                                                    << " failed hr=0x"
+                                                    << QString::number(
+                                                           static_cast<quint32>(
+                                                               addHr),
+                                                           16);
+                                                return S_OK;
+                                            }
+                                            qCDebug(chatterinoTikTok).nospace()
+                                                << "[" << this->username_
+                                                << "] Navigate -> " << url;
                                             this->impl_->webview->Navigate(
                                                 toWide(url).c_str());
                                             return S_OK;
@@ -1062,6 +1097,22 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         else if (!room.isEmpty())
         {
             this->roomId_ = room.value(QStringLiteral("id_str")).toString();
+        }
+        if (!this->roomId_.isEmpty())
+        {
+            qCDebug(chatterinoTikTok).nospace()
+                << "[" << this->username_ << "] pinned roomId from object-form="
+                << this->roomId_;
+        }
+        else
+        {
+            qCDebug(chatterinoTikTok).nospace()
+                << "[" << this->username_
+                << "] object-form had no usable id_str (data keys="
+                << QStringList(dataObj.keys()).join(QStringLiteral(","))
+                << " room keys="
+                << QStringList(room.keys()).join(QStringLiteral(","))
+                << ")";
         }
     }
 }

@@ -35,6 +35,7 @@
 // clang-format off
 #include <windows.h>
 #include <wrl.h>
+#include <wrl/implements.h>
 #include <WebView2.h>
 // clang-format on
 
@@ -44,6 +45,100 @@ namespace {
 
 using Microsoft::WRL::Callback;
 using Microsoft::WRL::ComPtr;
+
+// Minimal ICoreWebView2EnvironmentOptions implementation.
+// We deliberately don't pull in WebView2EnvironmentOptions.h because the
+// SDK header uses clang-only __attribute__((annotate(...))) syntax that
+// MSVC fails to parse (147.0.3912.50). All getters return a freshly
+// CoTaskMemAlloc'd wide string (never null) - WebView2's loader copies
+// these into its own state and rejects null pointers with E_INVALIDARG.
+// TargetCompatibleBrowserVersion in particular MUST be the runtime's
+// expected product version or env creation fails.
+class WebView2EnvOptions
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+          ICoreWebView2EnvironmentOptions>
+{
+public:
+    HRESULT RuntimeClassInitialize(LPCWSTR additionalArgs)
+    {
+        if (additionalArgs != nullptr)
+        {
+            this->additionalArgs_ = additionalArgs;
+        }
+        return S_OK;
+    }
+
+    static HRESULT copyOut(const std::wstring &src, LPWSTR *dst)
+    {
+        if (dst == nullptr)
+        {
+            return E_POINTER;
+        }
+        const SIZE_T bytes = (src.size() + 1) * sizeof(wchar_t);
+        auto *buf = static_cast<wchar_t *>(CoTaskMemAlloc(bytes));
+        if (buf == nullptr)
+        {
+            return E_OUTOFMEMORY;
+        }
+        memcpy(buf, src.c_str(), bytes);
+        *dst = buf;
+        return S_OK;
+    }
+
+    STDMETHODIMP get_AdditionalBrowserArguments(LPWSTR *value) override
+    {
+        return copyOut(this->additionalArgs_, value);
+    }
+    STDMETHODIMP put_AdditionalBrowserArguments(LPCWSTR value) override
+    {
+        this->additionalArgs_ = value != nullptr ? value : L"";
+        return S_OK;
+    }
+    STDMETHODIMP get_Language(LPWSTR *value) override
+    {
+        return copyOut(this->language_, value);
+    }
+    STDMETHODIMP put_Language(LPCWSTR value) override
+    {
+        this->language_ = value != nullptr ? value : L"";
+        return S_OK;
+    }
+    STDMETHODIMP get_TargetCompatibleBrowserVersion(LPWSTR *value) override
+    {
+        return copyOut(this->targetVersion_, value);
+    }
+    STDMETHODIMP put_TargetCompatibleBrowserVersion(LPCWSTR value) override
+    {
+        this->targetVersion_ = value != nullptr ? value : L"";
+        return S_OK;
+    }
+    STDMETHODIMP get_AllowSingleSignOnUsingOSPrimaryAccount(
+        BOOL *allow) override
+    {
+        if (allow == nullptr)
+        {
+            return E_POINTER;
+        }
+        *allow = FALSE;
+        return S_OK;
+    }
+    STDMETHODIMP put_AllowSingleSignOnUsingOSPrimaryAccount(
+        BOOL /*allow*/) override
+    {
+        return S_OK;
+    }
+
+private:
+    std::wstring additionalArgs_;
+    // Empty Language => use the OS default. WebView2 accepts empty here.
+    std::wstring language_;
+    // Match the SDK's CORE_WEBVIEW_TARGET_PRODUCT_VERSION for the bundled
+    // header (147.0.3912.50). WebView2 uses this to pick a compatible
+    // runtime; an empty/nullptr string returns E_INVALIDARG from
+    // CreateCoreWebView2EnvironmentWithOptions on some runtime versions.
+    std::wstring targetVersion_{L"147.0.3912.50"};
+};
 
 constexpr wchar_t kWindowClass[] = L"MergerinoTikTokWebView2Host";
 std::atomic_flag g_windowClassRegistered = ATOMIC_FLAG_INIT;
@@ -119,8 +214,38 @@ void requestSharedEnvironment(
         case EnvState::NotStarted:
             g_envState = EnvState::Creating;
             g_envWaiters.push_back(std::move(cb));
-            const HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
-                nullptr, userDataDirW.c_str(), nullptr,
+            // Lighten the Edge runtime: disable features the chat scrape
+            // doesn't need (translate, media routing, federated identity,
+            // optimization hints, privacy sandbox negotiation, live captions,
+            // sync, default-browser checks, background networking,
+            // first-run/component updates). Cuts steady-state renderer CPU
+            // and startup work on every TikTok host.
+            //
+            // Login mode keeps the same args - nothing here breaks the sign-in
+            // flow (we never disable JS, scripts, cookies, or storage).
+            {
+                ComPtr<WebView2EnvOptions> options;
+                Microsoft::WRL::MakeAndInitialize<WebView2EnvOptions>(
+                    &options,
+                    L"--disable-features="
+                        L"Translate,InterestCohort,FedCm,OptimizationHints,"
+                        L"MediaRouter,DialMediaRouteProvider,"
+                        L"GlobalMediaControls,MediaSessionService,WebOTP,"
+                        L"LensStandalone,PrivacySandboxSettings4,"
+                        L"AcceptCHFrame,LiveCaption,CalculateNativeWinOcclusion"
+                        L" --renderer-process-limit=4"
+                        L" --disable-background-networking"
+                        L" --disable-default-apps"
+                        L" --disable-extensions"
+                        L" --disable-sync"
+                        L" --disable-component-update"
+                        L" --disable-domain-reliability"
+                        L" --disable-client-side-phishing-detection"
+                        L" --no-default-browser-check"
+                        L" --no-pings"
+                        L" --no-first-run");
+                const HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
+                    nullptr, userDataDirW.c_str(), options.Get(),
                 Callback<
                     ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
                     [](HRESULT envHr,
@@ -144,15 +269,16 @@ void requestSharedEnvironment(
                         return S_OK;
                     })
                     .Get());
-            if (FAILED(hr))
-            {
-                g_envHr = hr;
-                g_envState = EnvState::Failed;
-                auto waiters = std::move(g_envWaiters);
-                g_envWaiters.clear();
-                for (auto &w : waiters)
+                if (FAILED(hr))
                 {
-                    w(hr, nullptr);
+                    g_envHr = hr;
+                    g_envState = EnvState::Failed;
+                    auto waiters = std::move(g_envWaiters);
+                    g_envWaiters.clear();
+                    for (auto &w : waiters)
+                    {
+                        w(hr, nullptr);
+                    }
                 }
             }
             return;

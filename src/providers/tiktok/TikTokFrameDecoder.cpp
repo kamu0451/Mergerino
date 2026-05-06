@@ -622,12 +622,20 @@ constexpr int kMaxDumpedFrames = 600;
 void maybeDumpFrame(std::span<const std::uint8_t> raw,
                     std::span<const std::uint8_t> inflated)
 {
-    static std::atomic<int> counter{0};
-    const char *dir = std::getenv("TIKTOK_DUMP_DIR");
-    if (dir == nullptr || *dir == '\0')
+    // Cache the env lookup once - getenv hits the OS env block on every
+    // call; this runs from the WS-frame hot path so even a small saving
+    // adds up. Read once at first call; users don't toggle the dump dir
+    // mid-process.
+    static const std::string cachedDir = [] {
+        const char *d = std::getenv("TIKTOK_DUMP_DIR");
+        return d != nullptr ? std::string(d) : std::string();
+    }();
+    if (cachedDir.empty())
     {
         return;
     }
+    static std::atomic<int> counter{0};
+    const char *dir = cachedDir.c_str();
     const int n = counter.fetch_add(1);
     if (n >= kMaxDumpedFrames)
     {

@@ -64,6 +64,12 @@ QJsonObject makeYoutubeClientContext(const QString &clientVersion)
 const QString YOUTUBE_BOOTSTRAP_URL = "https://www.youtube.com/embed/jNQXAC9IVRw";
 const QColor YOUTUBE_PLATFORM_ACCENT(255, 48, 64, 60);
 constexpr int YOUTUBE_RECONNECT_DELAY_MS = 3000;
+// Cadence for polling resolveVideoId on a channel that's currently offline.
+// Was using YOUTUBE_RECONNECT_DELAY_MS (3s) which spams the YouTube /next
+// endpoint and the log file every few seconds for every offline channel
+// in the user's layout. 30s catches a stream coming online fast enough
+// while cutting steady-state HTTP and logging by 10x.
+constexpr int YOUTUBE_OFFLINE_POLL_DELAY_MS = 30000;
 constexpr int YOUTUBE_BLOCKED_RETRY_DELAY_MS = 60000;
 constexpr int YOUTUBE_SESSION_REFRESH_MS = 10 * 60 * 1000;
 constexpr int YOUTUBE_HEALTH_CHECK_INTERVAL_MS = 10000;
@@ -974,7 +980,7 @@ void YouTubeLiveChat::resolveVideoId()
 
                 if (this->videoIdRecentlyFailed(videoId))
                 {
-                    qCWarning(chatterinoYouTube).nospace()
+                    qCDebug(chatterinoYouTube).nospace()
                         << "[" << this->streamUrl_
                         << "] resolveVideoId skipping recently-failed videoId="
                         << videoId << " - treating as offline";
@@ -2123,7 +2129,10 @@ void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs)
 
 void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
 {
-    qCWarning(chatterinoYouTube).nospace()
+    // Demoted from WARN to DEBUG: this fires on every poll cycle for every
+    // offline channel (steady-state, not exceptional). Was producing tens
+    // of WARN lines/minute for normal "channel is offline" state.
+    qCDebug(chatterinoYouTube).nospace()
         << "[" << this->streamUrl_ << "] waitForNextLive videoId="
         << this->videoId_ << " text=\"" << text << "\"";
     this->setLive(false);
@@ -2140,7 +2149,11 @@ void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
     this->liveChatSessionRefreshTimer_.invalidate();
     this->liveChatProgressTimer_.invalidate();
     this->setStatusText(std::move(text));
-    this->scheduleResolve(retryDelayMs);
+    // Always slow-poll while waiting for next live, regardless of the
+    // caller-supplied retryDelayMs (which is typically 3s, intended for
+    // mid-session reconnects).
+    this->scheduleResolve(
+        std::max(retryDelayMs, YOUTUBE_OFFLINE_POLL_DELAY_MS));
 }
 
 void YouTubeLiveChat::resetInnertubeContext()

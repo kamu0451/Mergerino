@@ -225,15 +225,43 @@ void requestSharedEnvironment(
             // flow (we never disable JS, scripts, cookies, or storage).
             {
                 ComPtr<WebView2EnvOptions> options;
+                // Conservative arg set after observing a regression with
+                // --renderer-process-limit=4: it packed all 3 TikTok tabs
+                // into one shared renderer, concentrating each tab's
+                // WebGL/animation/decode work into a single process pegging
+                // ~270% CPU. Letting WebView2 spawn one renderer per tab
+                // (its default) distributes that work across cores.
+                //
+                // CalculateNativeWinOcclusion was also dropped: it pauses
+                // renderers when their host window is occluded, which IS
+                // what we want for hidden 1x1 hosts (the page-visibility
+                // spoof keeps chat subscribed independently).
+                //
+                // What stays: feature disables that don't affect rendering
+                // throughput - translate UI, federated identity, media
+                // routing, optimization hints, live caption, privacy
+                // sandbox negotiation - plus background-networking, sync,
+                // component-update, default-app/extension/first-run.
                 Microsoft::WRL::MakeAndInitialize<WebView2EnvOptions>(
                     &options,
-                    L"--disable-features="
+                    // GPU offload: explicit GPU raster + canvas-OOP raster
+                    // + zero-copy texture upload + ignore the blocklist.
+                    // The user has a 4090 sitting at ~30% during games and
+                    // is CPU-bound; pushing raster/canvas to GPU is a clear
+                    // win even if WebView2 might already enable some of
+                    // these by default - being explicit catches cases
+                    // where Chromium's heuristics flip them off (older
+                    // driver, virtual GPU, etc.).
+                    L"--enable-features=CanvasOopRasterization"
+                        L" --enable-zero-copy"
+                        L" --enable-gpu-rasterization"
+                        L" --ignore-gpu-blocklist"
+                        L" --disable-features="
                         L"Translate,InterestCohort,FedCm,OptimizationHints,"
                         L"MediaRouter,DialMediaRouteProvider,"
                         L"GlobalMediaControls,MediaSessionService,WebOTP,"
                         L"LensStandalone,PrivacySandboxSettings4,"
-                        L"AcceptCHFrame,LiveCaption,CalculateNativeWinOcclusion"
-                        L" --renderer-process-limit=4"
+                        L"AcceptCHFrame,LiveCaption"
                         L" --disable-background-networking"
                         L" --disable-default-apps"
                         L" --disable-extensions"
@@ -870,6 +898,25 @@ void TikTokLiveChat::launchControllerCreate()
                                 this->impl_->webview->AddWebResourceRequestedFilter(
                                     L"*",
                                     COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FONT);
+                                // Also block CDN-hosted video segments fetched
+                                // via Fetch/XHR (TikTok delivers live HLS
+                                // through MSE, which bypasses the MEDIA
+                                // resource type). Each segment we drop is
+                                // ~50-200KB of video data we'd otherwise
+                                // CPU-decode for nothing - the host is
+                                // hidden 1x1, no human ever sees it.
+                                this->impl_->webview->AddWebResourceRequestedFilter(
+                                    L"*tiktokcdn*",
+                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH);
+                                this->impl_->webview->AddWebResourceRequestedFilter(
+                                    L"*tiktokcdn*",
+                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST);
+                                this->impl_->webview->AddWebResourceRequestedFilter(
+                                    L"*tiktokv.com/aweme*",
+                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH);
+                                this->impl_->webview->AddWebResourceRequestedFilter(
+                                    L"*tiktokv.com/aweme*",
+                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST);
                                 this->impl_->webview->add_WebResourceRequested(
                                     Callback<
                                         ICoreWebView2WebResourceRequestedEventHandler>(

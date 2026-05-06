@@ -132,6 +132,14 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
         root.value("kickActivityMinimumKicks").toInt(100));
     descriptor.tiktokActivityMinimumDiamonds_ = static_cast<uint32_t>(
         root.value("tiktokActivityMinimumDiamonds").toInt(0));
+    descriptor.tiktokActivityShowJoins_ =
+        root.value("tiktokActivityShowJoins").toBool(false);
+    descriptor.tiktokActivityShowLikes_ =
+        root.value("tiktokActivityShowLikes").toBool(false);
+    descriptor.tiktokActivityShowFollows_ =
+        root.value("tiktokActivityShowFollows").toBool(false);
+    descriptor.tiktokActivityShowShares_ =
+        root.value("tiktokActivityShowShares").toBool(false);
     if (auto platformIndicatorMode = root["platformIndicatorMode"];
         platformIndicatorMode.isString())
     {

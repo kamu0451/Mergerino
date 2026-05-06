@@ -759,6 +759,14 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
             obj.insert("tiktokActivityMinimumDiamonds",
                        static_cast<qint64>(
                            node->getSplit()->tiktokActivityMinimumDiamonds()));
+            obj.insert("tiktokActivityShowJoins",
+                       node->getSplit()->tiktokActivityShowJoins());
+            obj.insert("tiktokActivityShowLikes",
+                       node->getSplit()->tiktokActivityShowLikes());
+            obj.insert("tiktokActivityShowFollows",
+                       node->getSplit()->tiktokActivityShowFollows());
+            obj.insert("tiktokActivityShowShares",
+                       node->getSplit()->tiktokActivityShowShares());
             obj.insert("platformIndicatorMode",
                        qmagicenum::enumNameString(
                            node->getSplit()->platformIndicatorMode())

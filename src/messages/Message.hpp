@@ -141,6 +141,20 @@ struct Message {
     /// non-gift messages.
     uint32_t tiktokGiftDiamondCount{0};
 
+    enum class TikTokActivityKind : std::uint8_t {
+        None = 0,
+        Join,
+        Like,
+        Follow,
+        Share,
+        Gift,
+    };
+
+    /// Classification of a TikTok activity event for per-kind UI filtering.
+    /// Set by TikTokLiveChat when emitting member/social/like/gift activity
+    /// messages; None for chat or non-TikTok messages.
+    TikTokActivityKind tiktokActivityKind{TikTokActivityKind::None};
+
     /**
      * Clones this message.
      *

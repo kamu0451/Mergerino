@@ -483,6 +483,11 @@ void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
         const auto activityMessageScale = activitySplit->activityMessageScale();
         const auto tiktokActivityMinimumDiamonds =
             activitySplit->tiktokActivityMinimumDiamonds();
+        const auto tiktokShowJoins = activitySplit->tiktokActivityShowJoins();
+        const auto tiktokShowLikes = activitySplit->tiktokActivityShowLikes();
+        const auto tiktokShowFollows =
+            activitySplit->tiktokActivityShowFollows();
+        const auto tiktokShowShares = activitySplit->tiktokActivityShowShares();
         const auto twitchActivityMinimumBits =
             activitySplit->twitchActivityMinimumBits();
         const auto kickActivityMinimumKicks =
@@ -498,11 +503,19 @@ void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
         activitySplit->setKickActivityMinimumKicks(kickActivityMinimumKicks);
         activitySplit->setTikTokActivityMinimumDiamonds(
             tiktokActivityMinimumDiamonds);
+        activitySplit->setTikTokActivityShowJoins(tiktokShowJoins);
+        activitySplit->setTikTokActivityShowLikes(tiktokShowLikes);
+        activitySplit->setTikTokActivityShowFollows(tiktokShowFollows);
+        activitySplit->setTikTokActivityShowShares(tiktokShowShares);
         activitySplit->setPlatformIndicatorMode(activityPlatformIndicatorMode);
         ownerSplit->setTwitchActivityMinimumBits(twitchActivityMinimumBits);
         ownerSplit->setKickActivityMinimumKicks(kickActivityMinimumKicks);
         ownerSplit->setTikTokActivityMinimumDiamonds(
             tiktokActivityMinimumDiamonds);
+        ownerSplit->setTikTokActivityShowJoins(tiktokShowJoins);
+        ownerSplit->setTikTokActivityShowLikes(tiktokShowLikes);
+        ownerSplit->setTikTokActivityShowFollows(tiktokShowFollows);
+        ownerSplit->setTikTokActivityShowShares(tiktokShowShares);
         ownerSplit->setFilterActivity(true);
         refreshActivityIcons(container);
         return;
@@ -1312,6 +1325,26 @@ uint32_t Split::tiktokActivityMinimumDiamonds() const
     return this->tiktokActivityMinimumDiamonds_;
 }
 
+bool Split::tiktokActivityShowJoins() const
+{
+    return this->tiktokActivityShowJoins_;
+}
+
+bool Split::tiktokActivityShowLikes() const
+{
+    return this->tiktokActivityShowLikes_;
+}
+
+bool Split::tiktokActivityShowFollows() const
+{
+    return this->tiktokActivityShowFollows_;
+}
+
+bool Split::tiktokActivityShowShares() const
+{
+    return this->tiktokActivityShowShares_;
+}
+
 bool Split::eventFilter(QObject *watched, QEvent *event)
 {
     if (watched == this->view_)
@@ -1454,6 +1487,50 @@ void Split::setTikTokActivityMinimumDiamonds(uint32_t value)
     }
 
     this->tiktokActivityMinimumDiamonds_ = value;
+    this->view_->refreshMessages();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setTikTokActivityShowJoins(bool value)
+{
+    if (this->tiktokActivityShowJoins_ == value)
+    {
+        return;
+    }
+    this->tiktokActivityShowJoins_ = value;
+    this->view_->refreshMessages();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setTikTokActivityShowLikes(bool value)
+{
+    if (this->tiktokActivityShowLikes_ == value)
+    {
+        return;
+    }
+    this->tiktokActivityShowLikes_ = value;
+    this->view_->refreshMessages();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setTikTokActivityShowFollows(bool value)
+{
+    if (this->tiktokActivityShowFollows_ == value)
+    {
+        return;
+    }
+    this->tiktokActivityShowFollows_ = value;
+    this->view_->refreshMessages();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setTikTokActivityShowShares(bool value)
+{
+    if (this->tiktokActivityShowShares_ == value)
+    {
+        return;
+    }
+    this->tiktokActivityShowShares_ = value;
     this->view_->refreshMessages();
     getApp()->getWindows()->queueSave();
 }
@@ -1866,6 +1943,10 @@ void Split::showSettingsDialog()
     dialog->setKickActivityMinimumKicks(this->kickActivityMinimumKicks());
     dialog->setTikTokActivityMinimumDiamonds(
         this->tiktokActivityMinimumDiamonds());
+    dialog->setTikTokActivityShowJoins(this->tiktokActivityShowJoins());
+    dialog->setTikTokActivityShowLikes(this->tiktokActivityShowLikes());
+    dialog->setTikTokActivityShowFollows(this->tiktokActivityShowFollows());
+    dialog->setTikTokActivityShowShares(this->tiktokActivityShowShares());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(this->isActivityPane() ? this->activityPaneTitle()
                                                   : "Split settings");
@@ -1884,6 +1965,14 @@ void Split::showSettingsDialog()
                     dialog->kickActivityMinimumKicks());
                 this->setTikTokActivityMinimumDiamonds(
                     dialog->tiktokActivityMinimumDiamonds());
+                this->setTikTokActivityShowJoins(
+                    dialog->tiktokActivityShowJoins());
+                this->setTikTokActivityShowLikes(
+                    dialog->tiktokActivityShowLikes());
+                this->setTikTokActivityShowFollows(
+                    dialog->tiktokActivityShowFollows());
+                this->setTikTokActivityShowShares(
+                    dialog->tiktokActivityShowShares());
                 if (auto *ownerSplit = findActivityOwnerSplit(this))
                 {
                     ownerSplit->setTwitchActivityMinimumBits(
@@ -1892,6 +1981,14 @@ void Split::showSettingsDialog()
                         dialog->kickActivityMinimumKicks());
                     ownerSplit->setTikTokActivityMinimumDiamonds(
                         dialog->tiktokActivityMinimumDiamonds());
+                    ownerSplit->setTikTokActivityShowJoins(
+                        dialog->tiktokActivityShowJoins());
+                    ownerSplit->setTikTokActivityShowLikes(
+                        dialog->tiktokActivityShowLikes());
+                    ownerSplit->setTikTokActivityShowFollows(
+                        dialog->tiktokActivityShowFollows());
+                    ownerSplit->setTikTokActivityShowShares(
+                        dialog->tiktokActivityShowShares());
                 }
             }
             else

@@ -1302,11 +1302,21 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         return std::nullopt;
     }
 
+    TikTokActivityFilterOptions tiktokOpts;
+    if (this->split_)
+    {
+        tiktokOpts.minimumDiamonds =
+            this->split_->tiktokActivityMinimumDiamonds();
+        tiktokOpts.showJoins = this->split_->tiktokActivityShowJoins();
+        tiktokOpts.showLikes = this->split_->tiktokActivityShowLikes();
+        tiktokOpts.showFollows = this->split_->tiktokActivityShowFollows();
+        tiktokOpts.showShares = this->split_->tiktokActivityShowShares();
+    }
     if (!shouldShowMessageInActivityPane(
             *message,
             this->split_ ? this->split_->twitchActivityMinimumBits() : 100,
             this->split_ ? this->split_->kickActivityMinimumKicks() : 100,
-            this->split_ ? this->split_->tiktokActivityMinimumDiamonds() : 0))
+            tiktokOpts))
     {
         return std::nullopt;
     }
@@ -1980,11 +1990,7 @@ bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
     {
         if (isActivityTikTokGiftMessage(*m))
         {
-            if (shouldShowTikTokGiftInActivityPane(
-                    *m, this->split_->tiktokActivityMinimumDiamonds()))
-            {
-                return false;
-            }
+            return false;
         }
         else if (isActivityTwitchBitsMessage(*m))
         {
@@ -2001,6 +2007,13 @@ bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
             {
                 return false;
             }
+        }
+        else if (isActivityTikTokJoinMessage(*m) ||
+                 isActivityTikTokLikeMessage(*m) ||
+                 isActivityTikTokFollowMessage(*m) ||
+                 isActivityTikTokShareMessage(*m))
+        {
+            return false;
         }
         else if (isActivityAlertMessage(*m))
         {
@@ -4646,6 +4659,14 @@ void ChannelView::updateID()
     boost::hash_combine(seed, this->split_ != nullptr
                                   ? this->split_->tiktokActivityMinimumDiamonds()
                                   : 0U);
+    boost::hash_combine(seed, this->split_ != nullptr &&
+                                  this->split_->tiktokActivityShowJoins());
+    boost::hash_combine(seed, this->split_ != nullptr &&
+                                  this->split_->tiktokActivityShowLikes());
+    boost::hash_combine(seed, this->split_ != nullptr &&
+                                  this->split_->tiktokActivityShowFollows());
+    boost::hash_combine(seed, this->split_ != nullptr &&
+                                  this->split_->tiktokActivityShowShares());
     boost::hash_combine(seed, this->split_ != nullptr
                                   ? this->split_->twitchActivityMinimumBits()
                                   : 100U);

@@ -51,6 +51,14 @@ public:
     uint32_t kickActivityMinimumKicks() const;
     void setTikTokActivityMinimumDiamonds(uint32_t value);
     uint32_t tiktokActivityMinimumDiamonds() const;
+    void setTikTokActivityShowJoins(bool value);
+    bool tiktokActivityShowJoins() const;
+    void setTikTokActivityShowLikes(bool value);
+    bool tiktokActivityShowLikes() const;
+    void setTikTokActivityShowFollows(bool value);
+    bool tiktokActivityShowFollows() const;
+    void setTikTokActivityShowShares(bool value);
+    bool tiktokActivityShowShares() const;
 
     bool hasAcceptedChanges() const;
 
@@ -72,6 +80,10 @@ private:
         QSpinBox *twitchBitsMinimum{};
         QSpinBox *kickKicksMinimum{};
         QSpinBox *tiktokGiftMinimum{};
+        QCheckBox *tiktokShowJoins{};
+        QCheckBox *tiktokShowLikes{};
+        QCheckBox *tiktokShowFollows{};
+        QCheckBox *tiktokShowShares{};
         QWidget *slowerChatRateLabel{};
         QWidget *slowerChatRateField{};
         QWidget *messageAnimationsRow{};

@@ -152,6 +152,30 @@ bool shouldShowTikTokGiftInActivityPane(const Message &message,
            message.tiktokGiftDiamondCount >= minimumDiamondCount;
 }
 
+bool isActivityTikTokJoinMessage(const Message &message)
+{
+    return message.platform == MessagePlatform::TikTok &&
+           message.tiktokActivityKind == Message::TikTokActivityKind::Join;
+}
+
+bool isActivityTikTokLikeMessage(const Message &message)
+{
+    return message.platform == MessagePlatform::TikTok &&
+           message.tiktokActivityKind == Message::TikTokActivityKind::Like;
+}
+
+bool isActivityTikTokFollowMessage(const Message &message)
+{
+    return message.platform == MessagePlatform::TikTok &&
+           message.tiktokActivityKind == Message::TikTokActivityKind::Follow;
+}
+
+bool isActivityTikTokShareMessage(const Message &message)
+{
+    return message.platform == MessagePlatform::TikTok &&
+           message.tiktokActivityKind == Message::TikTokActivityKind::Share;
+}
+
 std::optional<int> getActivityGiftBombRecipientCount(const Message &message)
 {
     if (!message.flags.has(MessageFlag::Subscription))
@@ -202,10 +226,10 @@ QString compactActivityGiftBombText(const Message &message)
         .arg(name, QString::number(count), unit);
 }
 
-bool shouldShowMessageInActivityPane(const Message &message,
-                                     uint32_t twitchMinimumBits,
-                                     uint32_t kickMinimumKicks,
-                                     uint32_t tiktokGiftMinimumDiamonds)
+bool shouldShowMessageInActivityPane(
+    const Message &message, uint32_t twitchMinimumBits,
+    uint32_t kickMinimumKicks,
+    const TikTokActivityFilterOptions &tiktokOptions)
 {
     if (isActivityBotMessage(message))
     {
@@ -240,7 +264,24 @@ bool shouldShowMessageInActivityPane(const Message &message,
     if (isActivityTikTokGiftMessage(message))
     {
         return shouldShowTikTokGiftInActivityPane(
-            message, tiktokGiftMinimumDiamonds);
+            message, tiktokOptions.minimumDiamonds);
+    }
+
+    if (isActivityTikTokJoinMessage(message))
+    {
+        return tiktokOptions.showJoins;
+    }
+    if (isActivityTikTokLikeMessage(message))
+    {
+        return tiktokOptions.showLikes;
+    }
+    if (isActivityTikTokFollowMessage(message))
+    {
+        return tiktokOptions.showFollows;
+    }
+    if (isActivityTikTokShareMessage(message))
+    {
+        return tiktokOptions.showShares;
     }
 
     return isActivityAlertMessage(message);

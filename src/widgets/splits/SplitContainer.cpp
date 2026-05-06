@@ -352,6 +352,10 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
     clone->setKickActivityMinimumKicks(source->kickActivityMinimumKicks());
     clone->setTikTokActivityMinimumDiamonds(
         source->tiktokActivityMinimumDiamonds());
+    clone->setTikTokActivityShowJoins(source->tiktokActivityShowJoins());
+    clone->setTikTokActivityShowLikes(source->tiktokActivityShowLikes());
+    clone->setTikTokActivityShowFollows(source->tiktokActivityShowFollows());
+    clone->setTikTokActivityShowShares(source->tiktokActivityShowShares());
     clone->setCheckSpellingOverride(source->checkSpellingOverride());
     clone->setChannel(source->getIndirectChannel());
     clone->setPlatformIndicatorMode(source->platformIndicatorMode());
@@ -1165,6 +1169,14 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
             currentNode->split_->kickActivityMinimumKicks();
         result.tiktokActivityMinimumDiamonds_ =
             currentNode->split_->tiktokActivityMinimumDiamonds();
+        result.tiktokActivityShowJoins_ =
+            currentNode->split_->tiktokActivityShowJoins();
+        result.tiktokActivityShowLikes_ =
+            currentNode->split_->tiktokActivityShowLikes();
+        result.tiktokActivityShowFollows_ =
+            currentNode->split_->tiktokActivityShowFollows();
+        result.tiktokActivityShowShares_ =
+            currentNode->split_->tiktokActivityShowShares();
         result.platformIndicatorMode_ =
             currentNode->split_->platformIndicatorMode();
         return result;
@@ -1225,6 +1237,14 @@ void SplitContainer::applyFromDescriptorRecursively(
         split->setKickActivityMinimumKicks(splitNode.kickActivityMinimumKicks_);
         split->setTikTokActivityMinimumDiamonds(
             splitNode.tiktokActivityMinimumDiamonds_);
+        split->setTikTokActivityShowJoins(
+            splitNode.tiktokActivityShowJoins_);
+        split->setTikTokActivityShowLikes(
+            splitNode.tiktokActivityShowLikes_);
+        split->setTikTokActivityShowFollows(
+            splitNode.tiktokActivityShowFollows_);
+        split->setTikTokActivityShowShares(
+            splitNode.tiktokActivityShowShares_);
         if (splitNode.platformIndicatorMode_)
         {
             split->setPlatformIndicatorMode(*splitNode.platformIndicatorMode_);
@@ -1295,6 +1315,14 @@ void SplitContainer::applyFromDescriptorRecursively(
                     splitNode.kickActivityMinimumKicks_);
                 split->setTikTokActivityMinimumDiamonds(
                     splitNode.tiktokActivityMinimumDiamonds_);
+                split->setTikTokActivityShowJoins(
+                    splitNode.tiktokActivityShowJoins_);
+                split->setTikTokActivityShowLikes(
+                    splitNode.tiktokActivityShowLikes_);
+                split->setTikTokActivityShowFollows(
+                    splitNode.tiktokActivityShowFollows_);
+                split->setTikTokActivityShowShares(
+                    splitNode.tiktokActivityShowShares_);
                 if (splitNode.platformIndicatorMode_)
                 {
                     split->setPlatformIndicatorMode(

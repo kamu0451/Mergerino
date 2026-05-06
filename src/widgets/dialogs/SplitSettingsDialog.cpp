@@ -205,9 +205,30 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
             this->ui_.tiktokGiftMinimum->setRange(0, 1000000);
             this->ui_.tiktokGiftMinimum->setSingleStep(1);
             this->ui_.tiktokGiftMinimum->setToolTip(
-                "Only show TikTok gifts at or above this diamond count.");
-            appearanceLayout->addRow("TikTok min diamonds",
+                "Only show TikTok gifts at or above this coin value "
+                "(1 coin = 0.5 diamonds for the streamer).");
+            appearanceLayout->addRow("TikTok min coins",
                                      this->ui_.tiktokGiftMinimum);
+
+            this->ui_.tiktokShowJoins = new QCheckBox("Show TikTok joins");
+            this->ui_.tiktokShowJoins->setToolTip(
+                "Show 'X joined' / 'N viewers joined' TikTok activity events.");
+            appearanceLayout->addRow(this->ui_.tiktokShowJoins);
+
+            this->ui_.tiktokShowShares = new QCheckBox("Show TikTok shares");
+            this->ui_.tiktokShowShares->setToolTip(
+                "Show 'X shared the stream' TikTok activity events.");
+            appearanceLayout->addRow(this->ui_.tiktokShowShares);
+
+            this->ui_.tiktokShowFollows = new QCheckBox("Show TikTok follows");
+            this->ui_.tiktokShowFollows->setToolTip(
+                "Show 'X followed the streamer' TikTok activity events.");
+            appearanceLayout->addRow(this->ui_.tiktokShowFollows);
+
+            this->ui_.tiktokShowLikes = new QCheckBox("Show TikTok likes");
+            this->ui_.tiktokShowLikes->setToolTip(
+                "Show TikTok 'liked the stream' activity events.");
+            appearanceLayout->addRow(this->ui_.tiktokShowLikes);
         }
     }
 
@@ -439,6 +460,62 @@ uint32_t SplitSettingsDialog::tiktokActivityMinimumDiamonds() const
     }
 
     return static_cast<uint32_t>(this->ui_.tiktokGiftMinimum->value());
+}
+
+void SplitSettingsDialog::setTikTokActivityShowJoins(bool value)
+{
+    if (this->ui_.tiktokShowJoins)
+    {
+        this->ui_.tiktokShowJoins->setChecked(value);
+    }
+}
+
+bool SplitSettingsDialog::tiktokActivityShowJoins() const
+{
+    return this->ui_.tiktokShowJoins != nullptr &&
+           this->ui_.tiktokShowJoins->isChecked();
+}
+
+void SplitSettingsDialog::setTikTokActivityShowLikes(bool value)
+{
+    if (this->ui_.tiktokShowLikes)
+    {
+        this->ui_.tiktokShowLikes->setChecked(value);
+    }
+}
+
+bool SplitSettingsDialog::tiktokActivityShowLikes() const
+{
+    return this->ui_.tiktokShowLikes != nullptr &&
+           this->ui_.tiktokShowLikes->isChecked();
+}
+
+void SplitSettingsDialog::setTikTokActivityShowFollows(bool value)
+{
+    if (this->ui_.tiktokShowFollows)
+    {
+        this->ui_.tiktokShowFollows->setChecked(value);
+    }
+}
+
+bool SplitSettingsDialog::tiktokActivityShowFollows() const
+{
+    return this->ui_.tiktokShowFollows != nullptr &&
+           this->ui_.tiktokShowFollows->isChecked();
+}
+
+void SplitSettingsDialog::setTikTokActivityShowShares(bool value)
+{
+    if (this->ui_.tiktokShowShares)
+    {
+        this->ui_.tiktokShowShares->setChecked(value);
+    }
+}
+
+bool SplitSettingsDialog::tiktokActivityShowShares() const
+{
+    return this->ui_.tiktokShowShares != nullptr &&
+           this->ui_.tiktokShowShares->isChecked();
 }
 
 bool SplitSettingsDialog::hasAcceptedChanges() const

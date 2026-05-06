@@ -281,6 +281,19 @@ struct TikTokLiveChat::Impl {
     // "Joined TikTok live chat" announce.
     bool checkAliveSeen{false};
 
+    // Login-mode auto-hide latch. When TIKTOK_LOGIN_MODE=1, the host
+    // window is created visible so the user can sign in. Once chat
+    // frames start flowing, we shrink it to 1x1, hide it, and flip the
+    // controller invisible -- the UX becomes "show browser, log in,
+    // browser disappears" with no manual close. Latch ensures the
+    // transition runs once per Impl.
+    bool loginVisible{false};
+    bool loginAutoHidden{false};
+
+    // Helper: shrink + hide the host once we've confirmed the page is past
+    // the TikTok login wall. Idempotent.
+    void autoHideLoginHost(const QString &username);
+
     // Dedicated single-thread pool for offloading protobuf decode off the UI
     // thread. Single-threaded on purpose: preserves frame ordering so chat
     // messages don't show up reordered under bursty traffic.
@@ -362,6 +375,70 @@ std::shared_ptr<TikTokLiveChat> TikTokLiveChat::getOrCreateShared(
     g_tiktokRegistry.emplace(key, shared);
     shared->start();
     return shared;
+}
+
+void TikTokLiveChat::Impl::autoHideLoginHost(const QString &username)
+{
+    if (!this->loginVisible || this->loginAutoHidden)
+    {
+        return;
+    }
+    this->loginAutoHidden = true;
+    if (this->host != nullptr)
+    {
+        ShowWindow(this->host, SW_HIDE);
+        SetWindowPos(this->host, nullptr, 0, 0, 1, 1,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+    if (this->controller != nullptr)
+    {
+        this->controller->put_IsVisible(FALSE);
+        RECT bounds{0, 0, 1, 1};
+        this->controller->put_Bounds(bounds);
+    }
+    qCDebug(chatterinoTikTok).nospace()
+        << "[" << username << "] login-mode auto-hide engaged";
+
+    // First-tab-confirms-login broadcast: hide every other login-mode
+    // host process-wide. Offline streamers / login-walled tabs never see
+    // real chat or pin a roomId on their own, so without this they'd
+    // sit visible forever even though the login is already done.
+    std::vector<std::shared_ptr<TikTokLiveChat>> others;
+    {
+        std::lock_guard<std::mutex> lock(g_tiktokRegistryMutex);
+        others.reserve(g_tiktokRegistry.size());
+        for (const auto &[_, ref] : g_tiktokRegistry)
+        {
+            others.push_back(ref);
+        }
+    }
+    for (const auto &other : others)
+    {
+        if (!other || other->impl_.get() == this)
+        {
+            continue;
+        }
+        if (!other->impl_->loginVisible || other->impl_->loginAutoHidden)
+        {
+            continue;
+        }
+        other->impl_->loginAutoHidden = true;
+        if (other->impl_->host != nullptr)
+        {
+            ShowWindow(other->impl_->host, SW_HIDE);
+            SetWindowPos(other->impl_->host, nullptr, 0, 0, 1, 1,
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        if (other->impl_->controller != nullptr)
+        {
+            other->impl_->controller->put_IsVisible(FALSE);
+            RECT bounds{0, 0, 1, 1};
+            other->impl_->controller->put_Bounds(bounds);
+        }
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << other->username_
+            << "] login-mode auto-hide propagated";
+    }
 }
 
 void TikTokLiveChat::releaseSharedEnvironment()
@@ -486,9 +563,30 @@ void TikTokLiveChat::start()
             QStringLiteral("TikTok live chat ended (no activity)"), true);
         this->setLive(false);
     });
-    this->impl_->host = CreateWindowExW(
-        0, kWindowClass, L"mergerino-tiktok-host", WS_POPUP, 0, 0, 1, 1,
-        nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    // TIKTOK_LOGIN_MODE=1 in env: open a visible WebView so the user can
+    // sign in to TikTok. Cookies persist in the user-data-dir, so a
+    // single one-time login carries over to subsequent hidden runs.
+    const bool loginMode =
+        qEnvironmentVariableIsSet("TIKTOK_LOGIN_MODE") &&
+        qEnvironmentVariable("TIKTOK_LOGIN_MODE") != QStringLiteral("0");
+    if (loginMode)
+    {
+        this->impl_->host = CreateWindowExW(
+            0, kWindowClass, L"mergerino-tiktok-host",
+            WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800,
+            nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+        if (this->impl_->host != nullptr)
+        {
+            ShowWindow(this->impl_->host, SW_SHOW);
+            this->impl_->loginVisible = true;
+        }
+    }
+    else
+    {
+        this->impl_->host = CreateWindowExW(
+            0, kWindowClass, L"mergerino-tiktok-host", WS_POPUP, 0, 0, 1, 1,
+            nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+    }
     if (this->impl_->host == nullptr)
     {
         this->setStatusText(QStringLiteral("TikTok: CreateWindow failed"), true);
@@ -608,14 +706,24 @@ void TikTokLiveChat::launchControllerCreate()
                                 return;
                             }
 
-                            // We never display this WebView (host is a hidden
-                            // 1x1 popup) and only need the chat WebSocket and
-                            // /webcast/room/* fetches. Disable visible
-                            // compositing, mute audio, and block image / media
-                            // / font network requests at the resource layer so
-                            // TikTok's HLS live-video player never decodes a
-                            // frame. Drops idle CPU from ~14% per tab to <1%.
-                            controller->put_IsVisible(FALSE);
+                            // In login mode we want a normal visible WebView
+                            // for the user to sign in. Otherwise, hidden 1x1
+                            // host with image/media/font blocking to drop
+                            // idle CPU from ~14% per tab to <1%.
+                            const bool loginModeRuntime =
+                                qEnvironmentVariableIsSet("TIKTOK_LOGIN_MODE") &&
+                                qEnvironmentVariable("TIKTOK_LOGIN_MODE") !=
+                                    QStringLiteral("0");
+                            if (loginModeRuntime)
+                            {
+                                controller->put_IsVisible(TRUE);
+                                RECT rb{0, 0, 1280, 800};
+                                controller->put_Bounds(rb);
+                            }
+                            else
+                            {
+                                controller->put_IsVisible(FALSE);
+                            }
                             ComPtr<ICoreWebView2_8> webview8;
                             if (SUCCEEDED(this->impl_->webview.As(&webview8)) &&
                                 webview8)
@@ -623,41 +731,46 @@ void TikTokLiveChat::launchControllerCreate()
                                 webview8->put_IsMuted(TRUE);
                             }
 
-                            this->impl_->webview->AddWebResourceRequestedFilter(
-                                L"*",
-                                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE);
-                            this->impl_->webview->AddWebResourceRequestedFilter(
-                                L"*",
-                                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MEDIA);
-                            this->impl_->webview->AddWebResourceRequestedFilter(
-                                L"*",
-                                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FONT);
-                            this->impl_->webview->add_WebResourceRequested(
-                                Callback<
-                                    ICoreWebView2WebResourceRequestedEventHandler>(
-                                    [this, guard](
-                                        ICoreWebView2 *,
-                                        ICoreWebView2WebResourceRequestedEventArgs
-                                            *args) -> HRESULT {
-                                        if (guard.expired() || !this->impl_ ||
-                                            !this->impl_->env)
-                                        {
+                            // In login mode, don't block image/media/font so
+                            // the login UI renders properly.
+                            if (!loginModeRuntime)
+                            {
+                                this->impl_->webview->AddWebResourceRequestedFilter(
+                                    L"*",
+                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE);
+                                this->impl_->webview->AddWebResourceRequestedFilter(
+                                    L"*",
+                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MEDIA);
+                                this->impl_->webview->AddWebResourceRequestedFilter(
+                                    L"*",
+                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FONT);
+                                this->impl_->webview->add_WebResourceRequested(
+                                    Callback<
+                                        ICoreWebView2WebResourceRequestedEventHandler>(
+                                        [this, guard](
+                                            ICoreWebView2 *,
+                                            ICoreWebView2WebResourceRequestedEventArgs
+                                                *args) -> HRESULT {
+                                            if (guard.expired() || !this->impl_ ||
+                                                !this->impl_->env)
+                                            {
+                                                return S_OK;
+                                            }
+                                            ComPtr<ICoreWebView2WebResourceResponse>
+                                                resp;
+                                            this->impl_->env
+                                                ->CreateWebResourceResponse(
+                                                    nullptr, 403, L"Blocked", L"",
+                                                    &resp);
+                                            if (resp)
+                                            {
+                                                args->put_Response(resp.Get());
+                                            }
                                             return S_OK;
-                                        }
-                                        ComPtr<ICoreWebView2WebResourceResponse>
-                                            resp;
-                                        this->impl_->env
-                                            ->CreateWebResourceResponse(
-                                                nullptr, 403, L"Blocked", L"",
-                                                &resp);
-                                        if (resp)
-                                        {
-                                            args->put_Response(resp.Get());
-                                        }
-                                        return S_OK;
-                                    })
-                                    .Get(),
-                                &this->impl_->resReqToken);
+                                        })
+                                        .Get(),
+                                    &this->impl_->resReqToken);
+                            }
 
                             // NavigationCompleted: detect page load state
                             this->impl_->webview->add_NavigationCompleted(
@@ -931,6 +1044,29 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         roomEntries = dataObj.value(QStringLiteral("data")).toArray();
     }
 
+    // Login wall: for some streamers (typically high-viewer ones) TikTok
+    // refuses to serve room info to anonymous WebView2 sessions and
+    // returns { data: { prompts: [..login UI..] } } with no room and no
+    // id_str. The WebSocket still opens, but it only carries heartbeat
+    // frames - no chat. Surface a clear "sign-in required" status instead
+    // of falling back to "is not live" 60s later.
+    if (this->roomId_.isEmpty() && roomEntries.isEmpty() &&
+        dataObj.contains(QStringLiteral("prompts")) &&
+        !dataObj.contains(QStringLiteral("room")) &&
+        !dataObj.contains(QStringLiteral("id_str")))
+    {
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.stop();
+        }
+        this->setStatusText(
+            QStringLiteral("TikTok: sign-in required to view %1")
+                .arg(this->username_),
+            true);
+        this->setLive(false);
+        return;
+    }
+
     unsigned count = 0;
     const auto extract = [&count](const QJsonValue &v) {
         if (count > 0)
@@ -1103,6 +1239,10 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
             qCDebug(chatterinoTikTok).nospace()
                 << "[" << this->username_ << "] pinned roomId from object-form="
                 << this->roomId_;
+            if (this->impl_)
+            {
+                this->impl_->autoHideLoginHost(this->username_);
+            }
         }
         else
         {
@@ -1169,6 +1309,87 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
     const auto obj = doc.object();
     const QString kind = obj.value(QStringLiteral("kind")).toString();
 
+    if (kind == QStringLiteral("ws-detect"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] ws-detect url="
+            << obj.value(QStringLiteral("url")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("http-detect"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] http-detect url="
+            << obj.value(QStringLiteral("url")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("xhr-detect"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] xhr-detect "
+            << obj.value(QStringLiteral("method")).toString() << " "
+            << obj.value(QStringLiteral("url")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("sse-detect"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] sse-detect url="
+            << obj.value(QStringLiteral("url")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("event-feed-response") ||
+        kind == QStringLiteral("generic-response") ||
+        kind == QStringLiteral("xhr-response"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] " << kind << " url="
+            << obj.value(QStringLiteral("url")).toString().left(120)
+            << " len="
+            << obj.value(QStringLiteral("length")).toInt()
+            << " head=" << obj.value(QStringLiteral("head")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("mcs-response"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] mcs-response len="
+            << obj.value(QStringLiteral("length")).toInt()
+            << " head=" << obj.value(QStringLiteral("head")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("feed-response"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] feed-response len="
+            << obj.value(QStringLiteral("length")).toInt()
+            << " head=" << obj.value(QStringLiteral("head")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("worker-detect"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] worker-detect url="
+            << obj.value(QStringLiteral("url")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("shared-worker-detect"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] shared-worker-detect url="
+            << obj.value(QStringLiteral("url")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("service-worker-status"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_
+            << "] service-worker-status hasController="
+            << obj.value(QStringLiteral("hasController")).toBool()
+            << " url="
+            << obj.value(QStringLiteral("controllerUrl")).toString();
+        return;
+    }
     if (kind == QStringLiteral("ws-open"))
     {
         // A WebSocket opening tells us nothing about whether this user is
@@ -1215,6 +1436,94 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         this->setStatusText(QStringLiteral("TikTok live chat error"), true);
         return;
     }
+    if (kind == QStringLiteral("dom-chat"))
+    {
+        // DOM-scraped chat path. The webcast WebSocket only sends
+        // heartbeat/state-poll frames to our hidden host (verified via
+        // 1680-byte uniform-size dumps with no chat methods), so the
+        // actual user-visible chat is read from the rendered DOM by
+        // a MutationObserver in TikTokInjectScript.hpp.
+        const QString user = obj.value(QStringLiteral("user")).toString();
+        const QString text = obj.value(QStringLiteral("text")).toString();
+        if (user.isEmpty() || text.isEmpty())
+        {
+            return;
+        }
+        tiktok::DecodedChatMessage chat;
+        chat.user.nickname = user;
+        chat.user.uniqueId = user;
+        chat.content = text;
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.stop();
+            if (this->live_)
+            {
+                this->impl_->lastLiveEvidenceMs =
+                    QDateTime::currentMSecsSinceEpoch();
+            }
+        }
+        if (this->impl_ && !this->impl_->checkAliveSeen && !this->live_ &&
+            !this->roomId_.isEmpty())
+        {
+            this->setStatusText(QStringLiteral("Connected to TikTok"));
+            this->setLive(true);
+        }
+        this->messageReceived.invoke(this->buildChatMessage(chat));
+        return;
+    }
+    if (kind == QStringLiteral("dom-chat-attached"))
+    {
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_
+            << "] dom-chat observer attached, existing rows="
+            << obj.value(QStringLiteral("count")).toInt();
+        return;
+    }
+    if (kind == QStringLiteral("dom-snapshot"))
+    {
+        const auto e2e = obj.value(QStringLiteral("e2eValues")).toArray();
+        QStringList e2eNames;
+        e2eNames.reserve(e2e.size());
+        for (const auto &v : e2e)
+        {
+            e2eNames.append(v.toString());
+        }
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] dom-snapshot t="
+            << obj.value(QStringLiteral("tick")).toInt()
+            << " elements="
+            << obj.value(QStringLiteral("elementCount")).toInt()
+            << " focus=" << obj.value(QStringLiteral("hasFocus")).toBool()
+            << " containerKids="
+            << obj.value(QStringLiteral("containerChildren")).toInt()
+            << " containerDesc="
+            << obj.value(QStringLiteral("containerDescendants")).toInt()
+            << " e2e={" << e2eNames.join(QStringLiteral(",")) << "}"
+            << " containerHTML="
+            << obj.value(QStringLiteral("containerHtml")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("dom-snapshot-error"))
+    {
+        qCWarning(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] dom-snapshot-error: "
+            << obj.value(QStringLiteral("message")).toString();
+        return;
+    }
+    if (kind == QStringLiteral("dom-survey"))
+    {
+        const auto arr = obj.value(QStringLiteral("candidates")).toArray();
+        QStringList names;
+        names.reserve(arr.size());
+        for (const auto &v : arr)
+        {
+            names.append(v.toString());
+        }
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_
+            << "] dom-survey: " << names.join(QStringLiteral(" | "));
+        return;
+    }
     if (kind == QStringLiteral("ws-binary"))
     {
         const QString base64 = obj.value(QStringLiteral("base64")).toString();
@@ -1239,6 +1548,26 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
 
 void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
 {
+    if (!frame.fetchResultFields.empty() || !frame.allMethods.empty())
+    {
+        QStringList frFields;
+        frFields.reserve(static_cast<int>(frame.fetchResultFields.size()));
+        for (const auto &s : frame.fetchResultFields)
+        {
+            frFields.append(s);
+        }
+        QStringList methods;
+        methods.reserve(static_cast<int>(frame.allMethods.size()));
+        for (const auto &s : frame.allMethods)
+        {
+            methods.append(s);
+        }
+        qCDebug(chatterinoTikTok).nospace()
+            << "[" << this->username_
+            << "] frame inflated=" << frame.inflatedSize
+            << " fetchResultFields=[" << frFields.join(QStringLiteral(","))
+            << "] allMethods=[" << methods.join(QStringLiteral(",")) << "]";
+    }
     // WebcastRoomUserSeqMessage frames carry the current online viewer
     // count; the HTTP room-info endpoints on the current TikTok page
     // (check_alive) no longer include it, so this is the authoritative
@@ -1257,6 +1586,23 @@ void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
     if (hasLiveContent && this->impl_)
     {
         this->impl_->stuckConnectionTimer.stop();
+    }
+
+    // Login-mode auto-hide: any frame with a real method (chat, gift,
+    // member, social, like, room-user-seq, ...) means we're past the
+    // login wall and the visible browser has done its job.
+    bool sawRealMethod = false;
+    for (const auto &m : frame.allMethods)
+    {
+        if (!m.isEmpty() && m != QStringLiteral("<empty>"))
+        {
+            sawRealMethod = true;
+            break;
+        }
+    }
+    if (sawRealMethod && this->impl_)
+    {
+        this->impl_->autoHideLoginHost(this->username_);
     }
     // Liveness watchdog evidence. Only count signals that are unambiguous
     // proof of an active broadcast: chat and gift frames. Viewer-count,
@@ -1308,9 +1654,9 @@ void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
     }
 }
 
-MessagePtr TikTokLiveChat::buildActivityMessage(const QString &text,
-                                                const QString &loginName,
-                                                uint32_t diamondCount) const
+MessagePtr TikTokLiveChat::buildActivityMessage(
+    const QString &text, const QString &loginName,
+    Message::TikTokActivityKind kind, uint32_t diamondCount) const
 {
     MessageBuilder b;
     b->platform = MessagePlatform::TikTok;
@@ -1328,10 +1674,42 @@ MessagePtr TikTokLiveChat::buildActivityMessage(const QString &text,
     b->searchText = text;
     b->serverReceivedTime = QDateTime::currentDateTime();
     b->tiktokGiftDiamondCount = diamondCount;
+    b->tiktokActivityKind = kind;
     b.emplace<TimestampElement>(b->serverReceivedTime.toLocalTime().time());
     b.emplace<TextElement>(text, MessageElementFlag::Text, MessageColor::System);
     return b.release();
 }
+
+namespace {
+
+// TikTok lets people set nicknames to invisible-only characters (zero-width
+// joiners, variation selectors, lone combining marks). isEmpty() returns
+// false for those, which leaves "" in the activity log. Fall back to the
+// uniqueId handle when the nickname has no character that would render.
+QString pickDisplayName(const tiktok::DecodedUser &user)
+{
+    const auto hasRenderable = [](const QString &s) {
+        for (const QChar c : s)
+        {
+            if (c.isLetterOrNumber() || c.isPunct() || c.isSymbol())
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!user.nickname.isEmpty() && hasRenderable(user.nickname))
+    {
+        return user.nickname;
+    }
+    if (!user.uniqueId.isEmpty())
+    {
+        return user.uniqueId;
+    }
+    return user.nickname;  // last-resort, may still be invisible
+}
+
+}  // namespace
 
 void TikTokLiveChat::handleLike(const tiktok::DecodedLikeEvent &ev)
 {
@@ -1345,8 +1723,7 @@ void TikTokLiveChat::handleLike(const tiktok::DecodedLikeEvent &ev)
     {
         this->impl_->pendingLikeTotal = ev.total;
     }
-    const QString name = !ev.user.nickname.isEmpty() ? ev.user.nickname
-                                                     : ev.user.uniqueId;
+    const QString name = pickDisplayName(ev.user);
     if (!name.isEmpty())
     {
         this->impl_->pendingLikeUser = name;
@@ -1370,8 +1747,7 @@ void TikTokLiveChat::handleMember(const tiktok::DecodedMemberEvent &ev)
         return;
     }
     this->impl_->pendingJoinCount++;
-    const QString name = !ev.user.nickname.isEmpty() ? ev.user.nickname
-                                                     : ev.user.uniqueId;
+    const QString name = pickDisplayName(ev.user);
     if (!name.isEmpty())
     {
         this->impl_->pendingJoinUser = name;
@@ -1384,25 +1760,27 @@ void TikTokLiveChat::handleMember(const tiktok::DecodedMemberEvent &ev)
 
 void TikTokLiveChat::handleSocial(const tiktok::DecodedSocialEvent &ev)
 {
-    const QString name = !ev.user.nickname.isEmpty() ? ev.user.nickname
-                                                     : ev.user.uniqueId;
+    const QString name = pickDisplayName(ev.user);
     if (name.isEmpty())
     {
         return;
     }
     QString text;
+    auto kind = Message::TikTokActivityKind::None;
     switch (ev.action)
     {
         case 1:
             text = QStringLiteral("%1 followed the streamer").arg(name);
+            kind = Message::TikTokActivityKind::Follow;
             break;
         case 3:
             text = QStringLiteral("%1 shared the stream").arg(name);
+            kind = Message::TikTokActivityKind::Share;
             break;
         default:
             return;  // unknown social actions are dropped
     }
-    this->messageReceived.invoke(this->buildActivityMessage(text, name));
+    this->messageReceived.invoke(this->buildActivityMessage(text, name, kind));
 }
 
 void TikTokLiveChat::handleGift(const tiktok::DecodedGiftEvent &ev)
@@ -1412,33 +1790,35 @@ void TikTokLiveChat::handleGift(const tiktok::DecodedGiftEvent &ev)
     {
         return;
     }
-    const QString name = !ev.fromUser.nickname.isEmpty()
-                             ? ev.fromUser.nickname
-                             : ev.fromUser.uniqueId;
+    const QString name = pickDisplayName(ev.fromUser);
     if (name.isEmpty())
     {
         return;
     }
     const int count = std::max(1, static_cast<int>(ev.repeatCount));
-    const qint64 totalDiamonds =
-        static_cast<qint64>(std::max(0, ev.diamondCount)) * count;
+    const qint64 totalCoins =
+        static_cast<qint64>(std::max(0, ev.coinValue)) * count;
+    const QString gift =
+        ev.giftName.isEmpty() ? QStringLiteral("a gift") : ev.giftName;
     QString text;
     if (count > 1)
     {
-        text = QStringLiteral("%1 sent a gift x%2").arg(name).arg(count);
+        text = QStringLiteral("%1 sent %2 x%3").arg(name, gift).arg(count);
     }
     else
     {
-        text = QStringLiteral("%1 sent a gift").arg(name);
+        text = QStringLiteral("%1 sent %2").arg(name, gift);
     }
-    if (totalDiamonds > 0)
+    if (totalCoins > 0)
     {
-        text += QStringLiteral(" (%1 diamonds)").arg(totalDiamonds);
+        const QString unit = totalCoins == 1 ? QStringLiteral("coin")
+                                             : QStringLiteral("coins");
+        text += QStringLiteral(" (%1 %2)").arg(totalCoins).arg(unit);
     }
-    const auto clampedDiamonds =
-        static_cast<uint32_t>(std::min<qint64>(totalDiamonds, UINT32_MAX));
-    this->messageReceived.invoke(
-        this->buildActivityMessage(text, name, clampedDiamonds));
+    const auto clampedCoins =
+        static_cast<uint32_t>(std::min<qint64>(totalCoins, UINT32_MAX));
+    this->messageReceived.invoke(this->buildActivityMessage(
+        text, name, Message::TikTokActivityKind::Gift, clampedCoins));
 }
 
 void TikTokLiveChat::flushPendingLikes()
@@ -1468,7 +1848,8 @@ void TikTokLiveChat::flushPendingLikes()
     {
         text = QStringLiteral("%1 likes").arg(QString::number(count));
     }
-    this->messageReceived.invoke(this->buildActivityMessage(text, user));
+    this->messageReceived.invoke(this->buildActivityMessage(
+        text, user, Message::TikTokActivityKind::Like));
 }
 
 void TikTokLiveChat::flushPendingJoins()
@@ -1491,7 +1872,8 @@ void TikTokLiveChat::flushPendingJoins()
     {
         text = QStringLiteral("%1 viewers joined").arg(QString::number(count));
     }
-    this->messageReceived.invoke(this->buildActivityMessage(text, user));
+    this->messageReceived.invoke(this->buildActivityMessage(
+        text, user, Message::TikTokActivityKind::Join));
 }
 
 }  // namespace chatterino

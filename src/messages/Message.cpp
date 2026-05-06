@@ -329,6 +329,7 @@ std::shared_ptr<Message> Message::clone() const
     cloned->bits = this->bits;
     cloned->kickGiftKicks = this->kickGiftKicks;
     cloned->tiktokGiftDiamondCount = this->tiktokGiftDiamondCount;
+    cloned->tiktokActivityKind = this->tiktokActivityKind;
     std::ranges::transform(this->elements, std::back_inserter(cloned->elements),
                            [](const auto &element) {
                                return element->clone();

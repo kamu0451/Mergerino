@@ -58,10 +58,13 @@ struct DecodedGiftEvent {
     DecodedUser fromUser;
     qint32 repeatCount{0};
     qint32 repeatEnd{0};  // 1 = final frame of a gift combo; earlier frames = still comboing
-    // Diamond value of a single gift unit (multiply by repeatCount for total).
-    // 0 when the wire payload does not include diamond_count or the nested
-    // GiftStruct field number is not what we probed for.
-    qint32 diamondCount{0};
+    // Per-unit coin price of the gift (multiply by repeatCount for total).
+    // Decoded from GiftStruct.field4, which carries coins * 1000 on the wire.
+    // 0 when the field is missing or the schema rotates.
+    qint32 coinValue{0};
+    // Display name of the gift (GiftStruct.field16), e.g. "Rose", "Heart Me".
+    // Empty if the field is missing.
+    QString giftName;
 };
 
 struct DecodedFrame {
@@ -85,9 +88,17 @@ struct DecodedFrame {
     // observed in the outer envelope, encoded as "fN/wW/lL". Helps
     // identify schema drift at the push-frame level.
     std::vector<QString> envelopeFields;
+    // Diagnostic: same shape as envelopeFields, but for the inflated
+    // ProtoMessageFetchResult bytes. Lets us verify whether messages
+    // really live at field 1 (v3 canonical) vs another field, and what
+    // wire types the other fields carry.
+    std::vector<QString> fetchResultFields;
     // envelope field 6 = payload_encoding (e.g. "gzip"). Empty means
     // no encoding / raw.
     QString payloadEncoding;
+    // Size of the inflated payload (after gzip), in bytes. 0 when the
+    // payload was not gzipped or inflate failed.
+    qint64 inflatedSize{0};
 };
 
 DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes);

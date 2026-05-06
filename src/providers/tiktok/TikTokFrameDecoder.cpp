@@ -5,8 +5,15 @@
 
 #include "providers/tiktok/ProtobufReader.hpp"
 
+#include <QByteArray>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QString>
 #include <zlib.h>
 
+#include <atomic>
+#include <cstdlib>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -239,11 +246,12 @@ bool decodeSocialMessage(std::span<const std::uint8_t> bytes,
     return true;
 }
 
-// Pulls diamond_count from a nested WebcastGiftMessage.GiftStruct payload.
-// In observed TikTok protos the diamond value lives at field 4 of GiftStruct,
-// but the layout has shifted across versions, so we tolerate the field being
-// absent and leave the count at zero rather than failing the whole frame.
-bool decodeGiftStruct(std::span<const std::uint8_t> bytes, qint32 &diamondCount)
+// Pulls the per-unit coin value from a WebcastGiftMessage.GiftStruct.
+// Field 4 of GiftStruct carries coins encoded as coins * 1000 (Rose = 1000,
+// Heart Me = 3000, etc.); divide to get the visible coin price the gifter
+// actually paid. Field 5 is gift_id, not the value.
+bool decodeGiftStruct(std::span<const std::uint8_t> bytes, qint32 &coinValue,
+                      QString &giftName)
 {
     Reader r = Reader::fromSpan(bytes);
     std::uint32_t field{};
@@ -261,7 +269,16 @@ bool decodeGiftStruct(std::span<const std::uint8_t> bytes, qint32 &diamondCount)
             {
                 return false;
             }
-            diamondCount = static_cast<qint32>(v);
+            coinValue = static_cast<qint32>(v / 1000);
+        }
+        else if (field == 16 && wire == WireType::LengthDelimited)
+        {
+            std::string_view s;
+            if (!r.readString(s))
+            {
+                return false;
+            }
+            giftName = toQString(s);
         }
         else if (!r.skip(wire))
         {
@@ -321,10 +338,12 @@ bool decodeGiftMessage(std::span<const std::uint8_t> bytes,
                 {
                     return false;
                 }
-                qint32 diamond = 0;
-                if (decodeGiftStruct(sub, diamond))
+                qint32 coins = 0;
+                QString giftName;
+                if (decodeGiftStruct(sub, coins, giftName))
                 {
-                    out.diamondCount = diamond;
+                    out.coinValue = coins;
+                    out.giftName = std::move(giftName);
                 }
                 break;
             }
@@ -487,14 +506,10 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
     }
     else if (method == QStringLiteral("WebcastRoomUserSeqMessage"))
     {
-        // Schema (best-effort, from public RE): fields 3, 5, 7 commonly
-        // carry total/online viewer counts across TikTok versions. But
-        // room_id / anchor_id are ALSO int64 in the same range and hold
-        // huge values (10^18), so taking the raw max picks the id. Cap
-        // at 10 million - more than any live concurrent count - to
-        // filter IDs out. Take the max of remaining values.
-        constexpr qint64 VIEWER_COUNT_MAX_PLAUSIBLE = 10'000'000;
-        qint64 best = 0;
+        // Field 3 is the concurrent online viewer count (matches what
+        // TikTok shows on the live page). Field 7 is the cumulative
+        // ever-online count and is much larger - using the wrong field
+        // shows wildly inflated numbers (~20x). Read field 3 specifically.
         Reader r = Reader::fromSpan(payload);
         std::uint32_t fld{};
         WireType wt{};
@@ -504,27 +519,20 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
             {
                 break;
             }
-            if (wt == WireType::Varint && fld >= 3 && fld <= 10)
+            if (fld == 3 && wt == WireType::Varint)
             {
                 std::uint64_t v{};
                 if (!r.readVarint(v))
                 {
                     break;
                 }
-                const auto signedV = static_cast<qint64>(v);
-                if (signedV > best && signedV <= VIEWER_COUNT_MAX_PLAUSIBLE)
-                {
-                    best = signedV;
-                }
+                out.roomViewerCount = static_cast<qint64>(v);
+                break;
             }
-            else if (!r.skip(wt))
+            if (!r.skip(wt))
             {
                 break;
             }
-        }
-        if (best > out.roomViewerCount)
-        {
-            out.roomViewerCount = best;
         }
     }
     else
@@ -537,6 +545,19 @@ bool decodeBaseMessage(std::span<const std::uint8_t> bytes, DecodedFrame &out)
 
 bool decodeFetchResult(std::span<const std::uint8_t> bytes, DecodedFrame &out)
 {
+    // ProtoMessageFetchResult v3 canonical layout (from
+    // isaackogan/TikTok-Webcast-Protobuf src/slim/v3/webcast/shared/message.proto):
+    //   1: repeated BaseProtoMessage messages
+    //   2: string cursor
+    //   3: int64 fetch_interval
+    //   4: int64 now
+    //   5: string internal_ext
+    //   6: int32 fetch_type
+    //   7: map<string,string> route_params
+    //   8: int64 heartbeat_duration
+    //   9: bool need_ack
+    //  10: string push_server
+    //  11: bool is_first
     Reader r = Reader::fromSpan(bytes);
     std::uint32_t field{};
     WireType wire{};
@@ -553,24 +574,93 @@ bool decodeFetchResult(std::span<const std::uint8_t> bytes, DecodedFrame &out)
             {
                 return false;
             }
-            // TikTok's webcast envelope historically put the repeated
-            // BaseProtoMessage messages at field 1. As of mid-2026 the
-            // wire format moved them to field 2 (with field 1 now carrying
-            // a small response-metadata sub-message: response_code, cursor,
-            // server time). Try both: decodeBaseMessage returns harmlessly
-            // when the sub-bytes don't match the BaseMessage shape, so
-            // probing both costs nothing.
-            if (field == 1 || field == 2)
+            out.fetchResultFields.push_back(QStringLiteral("f%1/w2/l%2")
+                                                .arg(field)
+                                                .arg(sub.size()));
+            if (field == 1)
             {
                 decodeBaseMessage(sub, out);
             }
         }
-        else if (!r.skip(wire))
+        else
         {
-            return false;
+            const auto wireTag = static_cast<int>(wire);
+            if (wire == WireType::Varint)
+            {
+                std::uint64_t v{};
+                if (!r.readVarint(v))
+                {
+                    return false;
+                }
+                out.fetchResultFields.push_back(
+                    QStringLiteral("f%1/w%2/v%3")
+                        .arg(field)
+                        .arg(wireTag)
+                        .arg(static_cast<qulonglong>(v)));
+            }
+            else if (!r.skip(wire))
+            {
+                return false;
+            }
+            else
+            {
+                out.fetchResultFields.push_back(
+                    QStringLiteral("f%1/w%2").arg(field).arg(wireTag));
+            }
         }
     }
     return true;
+}
+
+// Optional one-shot frame dump for diagnostics. Set TIKTOK_DUMP_DIR to a
+// writable directory (e.g. C:\Users\Repe\tiktok-frames). The first
+// kMaxDumpedFrames push frames received process-wide get written as paired
+// raw_<N>.bin (pre-inflate WS payload) and inflated_<N>.bin (gunzipped
+// FetchResult bytes) for hand-decoding against the v3 schema.
+constexpr int kMaxDumpedFrames = 600;
+
+void maybeDumpFrame(std::span<const std::uint8_t> raw,
+                    std::span<const std::uint8_t> inflated)
+{
+    static std::atomic<int> counter{0};
+    const char *dir = std::getenv("TIKTOK_DUMP_DIR");
+    if (dir == nullptr || *dir == '\0')
+    {
+        return;
+    }
+    const int n = counter.fetch_add(1);
+    if (n >= kMaxDumpedFrames)
+    {
+        return;
+    }
+    QDir dumpDir(QString::fromLocal8Bit(dir));
+    if (!dumpDir.exists())
+    {
+        dumpDir.mkpath(QStringLiteral("."));
+    }
+    const auto stamp =
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss"));
+    {
+        QFile f(dumpDir.filePath(QStringLiteral("raw_%1_%2.bin")
+                                     .arg(stamp)
+                                     .arg(n, 3, 10, QChar('0'))));
+        if (f.open(QIODevice::WriteOnly))
+        {
+            f.write(reinterpret_cast<const char *>(raw.data()),
+                    static_cast<qint64>(raw.size()));
+        }
+    }
+    if (!inflated.empty())
+    {
+        QFile f(dumpDir.filePath(QStringLiteral("inflated_%1_%2.bin")
+                                     .arg(stamp)
+                                     .arg(n, 3, 10, QChar('0'))));
+        if (f.open(QIODevice::WriteOnly))
+        {
+            f.write(reinterpret_cast<const char *>(inflated.data()),
+                    static_cast<qint64>(inflated.size()));
+        }
+    }
 }
 
 }  // namespace
@@ -663,12 +753,14 @@ DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes)
     const bool tryDecode = payloadTypeKnown || out.payloadType.isEmpty();
     if (tryDecode && !innerPayload.empty())
     {
-        // TikTok wraps most chat-bearing payloads in gzip (envelope field
-        // 6 == "gzip"). Without this decompression the FetchResult decoder
-        // sees raw deflate bytes and silently returns no events, which is
-        // why "TikTok says they're live but no chat shows" was the typical
-        // symptom. Run zlib's gzip-aware inflate and decode the result.
-        if (out.payloadEncoding == QStringLiteral("gzip"))
+        // TikTok wraps most chat-bearing payloads in gzip. Some envelopes
+        // declare it via field 6 == "gzip", but many large frames omit
+        // payloadEncoding entirely while still sending gzip-magic bytes.
+        // Detect by magic ({0x1f, 0x8b}) so those frames are inflated too.
+        const bool gzipMagic = innerPayload.size() >= 2 &&
+                               innerPayload[0] == 0x1f &&
+                               innerPayload[1] == 0x8b;
+        if (out.payloadEncoding == QStringLiteral("gzip") || gzipMagic)
         {
             std::vector<std::uint8_t> inflated;
             // 32 KiB initial; grow up to 4 MiB. Real frames top out at
@@ -715,15 +807,17 @@ DecodedFrame decodeWebcastPushFrame(QByteArrayView bytes)
                 if (rc == Z_STREAM_END && produced > 0)
                 {
                     inflated.resize(produced);
-                    decodeFetchResult(
-                        std::span<const std::uint8_t>(inflated.data(),
-                                                      inflated.size()),
-                        out);
+                    out.inflatedSize = static_cast<qint64>(inflated.size());
+                    std::span<const std::uint8_t> inflatedSpan(
+                        inflated.data(), inflated.size());
+                    maybeDumpFrame(innerPayload, inflatedSpan);
+                    decodeFetchResult(inflatedSpan, out);
                 }
             }
         }
         else
         {
+            maybeDumpFrame(innerPayload, innerPayload);
             decodeFetchResult(innerPayload, out);
         }
     }

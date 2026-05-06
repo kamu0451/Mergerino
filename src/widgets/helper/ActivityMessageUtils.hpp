@@ -26,12 +26,24 @@ bool shouldShowKickKicksGiftInActivityPane(const Message &message,
 bool isActivityTikTokGiftMessage(const Message &message);
 bool shouldShowTikTokGiftInActivityPane(const Message &message,
                                         uint32_t minimumDiamondCount);
+bool isActivityTikTokJoinMessage(const Message &message);
+bool isActivityTikTokLikeMessage(const Message &message);
+bool isActivityTikTokFollowMessage(const Message &message);
+bool isActivityTikTokShareMessage(const Message &message);
+
+struct TikTokActivityFilterOptions {
+    uint32_t minimumDiamonds{0};
+    bool showJoins{false};
+    bool showLikes{false};
+    bool showFollows{false};
+    bool showShares{false};
+};
 std::optional<int> getActivityGiftBombRecipientCount(const Message &message);
 bool isActivityGiftRecipientMessage(const Message &message);
 QString compactActivityGiftBombText(const Message &message);
-bool shouldShowMessageInActivityPane(const Message &message,
-                                     uint32_t twitchMinimumBits = 100,
-                                     uint32_t kickMinimumKicks = 100,
-                                     uint32_t tiktokGiftMinimumDiamonds = 0);
+bool shouldShowMessageInActivityPane(
+    const Message &message, uint32_t twitchMinimumBits = 100,
+    uint32_t kickMinimumKicks = 100,
+    const TikTokActivityFilterOptions &tiktokOptions = {});
 
 }  // namespace chatterino

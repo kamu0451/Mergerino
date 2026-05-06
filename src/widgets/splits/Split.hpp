@@ -71,6 +71,10 @@ public:
     uint32_t twitchActivityMinimumBits() const;
     uint32_t kickActivityMinimumKicks() const;
     uint32_t tiktokActivityMinimumDiamonds() const;
+    bool tiktokActivityShowJoins() const;
+    bool tiktokActivityShowLikes() const;
+    bool tiktokActivityShowFollows() const;
+    bool tiktokActivityShowShares() const;
     bool filterActivity() const;
     bool filterActivityExplicit() const;
 
@@ -92,6 +96,10 @@ public:
     void setTwitchActivityMinimumBits(uint32_t value);
     void setKickActivityMinimumKicks(uint32_t value);
     void setTikTokActivityMinimumDiamonds(uint32_t value);
+    void setTikTokActivityShowJoins(bool value);
+    void setTikTokActivityShowLikes(bool value);
+    void setTikTokActivityShowFollows(bool value);
+    void setTikTokActivityShowShares(bool value);
     void setFilterActivity(bool value, bool explicitPreference = false);
 
     std::optional<bool> checkSpellingOverride() const;
@@ -200,6 +208,10 @@ private:
     uint32_t twitchActivityMinimumBits_{100};
     uint32_t kickActivityMinimumKicks_{100};
     uint32_t tiktokActivityMinimumDiamonds_{0};
+    bool tiktokActivityShowJoins_{false};
+    bool tiktokActivityShowLikes_{false};
+    bool tiktokActivityShowFollows_{false};
+    bool tiktokActivityShowShares_{false};
     PlatformIndicatorMode platformIndicatorMode_;
 
     bool isMouseOver_{};

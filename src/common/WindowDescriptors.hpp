@@ -59,6 +59,10 @@ struct SplitDescriptor {
     uint32_t twitchActivityMinimumBits_{100};
     uint32_t kickActivityMinimumKicks_{100};
     uint32_t tiktokActivityMinimumDiamonds_{0};
+    bool tiktokActivityShowJoins_{false};
+    bool tiktokActivityShowLikes_{false};
+    bool tiktokActivityShowFollows_{false};
+    bool tiktokActivityShowShares_{false};
     std::optional<PlatformIndicatorMode> platformIndicatorMode_;
 
     std::optional<bool> spellCheckOverride;

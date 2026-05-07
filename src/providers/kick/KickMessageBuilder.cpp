@@ -771,6 +771,10 @@ MessagePtrMut KickMessageBuilder::makeGiftedSubscriptionMessage(
     KickMessageBuilder builder(systemMessage, channel,
                                QDateTime::currentDateTime());
     builder->flags.set(MessageFlag::Subscription);
+    if (gifted.size() > 1)
+    {
+        builder->flags.set(MessageFlag::Collapsed);
+    }
 
     QString text;
     builder.appendMentionedUser(gifter, text);

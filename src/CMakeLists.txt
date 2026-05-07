@@ -925,6 +925,8 @@ set(SOURCE_FILES
         widgets/splits/SplitInput.hpp
         widgets/splits/SplitOverlay.cpp
         widgets/splits/SplitOverlay.hpp
+        widgets/splits/TwitchPollsAndPredictionsBar.cpp
+        widgets/splits/TwitchPollsAndPredictionsBar.hpp
         )
 
 # Generate source groups for use in IDEs

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <QString>
+
 #include <cassert>
 #include <memory>
 
@@ -265,6 +267,7 @@ private:
 
     std::unique_ptr<NativeMessagingServer> nmServer;
     Updates &updates;
+    QString previousVersionForPatchNotes_;
 
     bool initialized{false};
 };

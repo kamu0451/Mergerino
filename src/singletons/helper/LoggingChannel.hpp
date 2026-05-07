@@ -7,6 +7,8 @@
 #include <QFile>
 #include <QString>
 
+#include <pajlada/signals/signalholder.hpp>
+
 #include <memory>
 
 namespace chatterino {
@@ -36,11 +38,13 @@ private:
 
     const QString channelName;
     const QString platform;
+    QString fileBaseName;
     QString baseDirectory;
     QString subDirectory;
 
     QFile fileHandle;
     QFile currentStreamFileHandle;
+    pajlada::Signals::SignalHolder settingConnections_;
     QString currentStreamID;
 
     QString dateString;

@@ -61,6 +61,8 @@ constexpr int YOUTUBE_BLOCKED_RETRY_DELAY_MS = 60000;
 constexpr int YOUTUBE_SESSION_REFRESH_MS = 10 * 60 * 1000;
 constexpr int YOUTUBE_HEALTH_CHECK_INTERVAL_MS = 10000;
 constexpr int YOUTUBE_STALL_TIMEOUT_MS = 30000;
+constexpr int YOUTUBE_POLL_REFRESH_FALLBACK_DELAY_MS = 1000;
+constexpr int YOUTUBE_POLL_REFRESH_FALLBACK_LIMIT = 2;
 
 std::vector<std::pair<QByteArray, QByteArray>> youtubeHeaders()
 {
@@ -355,6 +357,31 @@ QString formatYouTubeUptime(const QDateTime &startedAt)
            QString::number(seconds % 3600 / 60) % u"m";
 }
 
+QJsonObject extractLiveBroadcastDetails(const QJsonObject &nextResponse)
+{
+    return nextResponse["microformat"]
+        .toObject()["playerMicroformatRenderer"]
+        .toObject()["liveBroadcastDetails"]
+        .toObject();
+}
+
+bool isEndedOrOfflineLiveBroadcast(const QJsonObject &nextResponse)
+{
+    const auto liveBroadcastDetails = extractLiveBroadcastDetails(nextResponse);
+    if (liveBroadcastDetails.isEmpty())
+    {
+        return false;
+    }
+
+    if (!liveBroadcastDetails["endTimestamp"].toString().trimmed().isEmpty())
+    {
+        return true;
+    }
+
+    const auto isLiveNow = liveBroadcastDetails["isLiveNow"];
+    return isLiveNow.isBool() && !isLiveNow.toBool();
+}
+
 QString extractLiveLockupVideoId(const QString &html)
 {
     static const QString lockupMarker =
@@ -387,12 +414,14 @@ QString extractLiveLockupVideoId(const QString &html)
             continue;
         }
 
-        const bool hasLiveBadge = block.contains(
-                                      QStringLiteral(
-                                          "THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
-                                  block.contains(QStringLiteral(R"("text":"LIVE")"));
+        const bool hasLiveBadge =
+            block.contains(
+                QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
+            block.contains(
+                QStringLiteral("THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE"));
         const bool hasWatchingMetadata =
-            block.contains(QStringLiteral(" watching"), Qt::CaseInsensitive);
+            block.contains(QStringLiteral(" watching now"),
+                           Qt::CaseInsensitive);
         if (!hasLiveBadge && !hasWatchingMetadata)
         {
             continue;
@@ -435,10 +464,13 @@ QString extractLiveVideoRendererVideoId(const QString &html)
 
         const bool hasLiveBadge =
             block.contains(QStringLiteral(R"("style":"LIVE")")) ||
-            block.contains(QStringLiteral(R"("text":"LIVE")")) ||
-            block.contains(QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE"));
+            block.contains(
+                QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
+            block.contains(
+                QStringLiteral("THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE"));
         const bool hasWatchingMetadata =
-            block.contains(QStringLiteral(" watching"), Qt::CaseInsensitive);
+            block.contains(QStringLiteral(" watching now"),
+                           Qt::CaseInsensitive);
         if (!hasLiveBadge && !hasWatchingMetadata)
         {
             continue;
@@ -469,10 +501,13 @@ QString extractLiveWatchEndpointVideoId(const QString &html)
         const auto block = html.sliced(start, end - start);
 
         const bool hasLiveBadge =
-            block.contains(QStringLiteral(R"("text":"LIVE")")) ||
-            block.contains(QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE"));
+            block.contains(
+                QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
+            block.contains(
+                QStringLiteral("THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE"));
         const bool hasWatchingMetadata =
-            block.contains(QStringLiteral(" watching"), Qt::CaseInsensitive);
+            block.contains(QStringLiteral(" watching now"),
+                           Qt::CaseInsensitive);
         if (hasLiveBadge || hasWatchingMetadata)
         {
             return match.captured(1);
@@ -495,11 +530,12 @@ bool jsonContainsLiveMarker(const QJsonValue &value)
     if (value.isString())
     {
         const auto text = value.toString();
-        return text.contains(QStringLiteral("LIVE")) ||
-            text.contains(QStringLiteral("watching"), Qt::CaseInsensitive) ||
-            text.contains(QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
-            text.contains(
-                QStringLiteral("THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE"));
+        return text.contains(QStringLiteral(" watching now"),
+                             Qt::CaseInsensitive) ||
+               text.contains(
+                   QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
+               text.contains(QStringLiteral(
+                   "THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE"));
     }
 
     if (value.isArray())
@@ -711,6 +747,7 @@ void YouTubeLiveChat::start()
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
     this->activePollStreak_ = 0;
+    this->pollRefreshFallbackCount_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
     this->liveChatProgressTimer_.invalidate();
     this->setLive(false);
@@ -722,6 +759,7 @@ void YouTubeLiveChat::stop()
 {
     this->running_ = false;
     this->activePollStreak_ = 0;
+    this->pollRefreshFallbackCount_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
     this->liveChatProgressTimer_.invalidate();
     this->lifetimeGuard_.reset();
@@ -913,6 +951,30 @@ void YouTubeLiveChat::resolveChannelIdFromSource(
         return;
     }
 
+    static const QRegularExpression handleLikeSourceRegex("^[A-Za-z0-9._-]+$");
+    if (handleLikeSourceRegex.match(trimmed).hasMatch())
+    {
+        this->resolveChannelIdFromSearch(
+            trimmed,
+            [this, trimmed, onResolved = std::move(onResolved)](
+                QString channelId) mutable {
+                if (!this->running_)
+                {
+                    return;
+                }
+
+                if (!channelId.isEmpty())
+                {
+                    onResolved(std::move(channelId));
+                    return;
+                }
+
+                this->resolveChannelIdFromHandle(QString("@%1").arg(trimmed),
+                                                 std::move(onResolved));
+            });
+        return;
+    }
+
     this->resolveChannelIdFromSearch(trimmed, std::move(onResolved));
 }
 
@@ -1093,39 +1155,15 @@ void YouTubeLiveChat::probeLiveVideoIdFromSource(
         });
     };
 
-    auto tryLivePath = [this, livePath, tryStreams, callback] {
-        if (livePath.isEmpty())
-        {
-            tryStreams();
-            return;
-        }
-
-        this->probeLiveVideoIdFromPath(livePath, [this, tryStreams, callback](
-                                                     QString videoId) {
-            if (!this->running_)
-            {
-                return;
-            }
-
-            if (!videoId.isEmpty())
-            {
-                (*callback)(std::move(videoId));
-                return;
-            }
-
-            tryStreams();
-        });
-    };
-
-    auto tryEmbed = [this, source, tryLivePath, callback] {
+    auto tryEmbed = [this, source, tryStreams, callback] {
         if (!isLikelyChannelId(source))
         {
-            tryLivePath();
+            tryStreams();
             return;
         }
 
         this->probeLiveVideoIdFromEmbed(
-            source, [this, tryLivePath, callback](QString videoId) {
+            source, [this, tryStreams, callback](QString videoId) {
                 if (!this->running_)
                 {
                     return;
@@ -1137,18 +1175,50 @@ void YouTubeLiveChat::probeLiveVideoIdFromSource(
                     return;
                 }
 
-                tryLivePath();
+                tryStreams();
             });
     };
 
-    if (!isLikelyChannelId(source))
-    {
-        tryLivePath();
-        return;
-    }
+    auto tryBrowse = [this, source, tryEmbed, callback] {
+        if (!isLikelyChannelId(source))
+        {
+            tryEmbed();
+            return;
+        }
 
-    this->probeLiveVideoIdFromBrowse(
-        source, [this, tryEmbed, callback](QString videoId) {
+        this->probeLiveVideoIdFromBrowse(
+            source, [this, tryEmbed, callback](QString videoId) {
+                    if (!this->running_)
+                    {
+                        return;
+                    }
+
+                    if (!videoId.isEmpty())
+                    {
+                        (*callback)(std::move(videoId));
+                        return;
+                    }
+
+                    tryEmbed();
+                });
+    };
+
+    auto tryLivePath = [this, source, livePath, tryStreams, tryBrowse, callback] {
+        if (livePath.isEmpty())
+        {
+            if (isLikelyChannelId(source))
+            {
+                tryBrowse();
+                return;
+            }
+
+            tryStreams();
+            return;
+        }
+
+        this->probeLiveVideoIdFromPath(
+            livePath, [this, source, tryStreams, tryBrowse, callback](
+                          QString videoId) {
                 if (!this->running_)
                 {
                     return;
@@ -1160,8 +1230,17 @@ void YouTubeLiveChat::probeLiveVideoIdFromSource(
                     return;
                 }
 
-                tryEmbed();
+                if (isLikelyChannelId(source))
+                {
+                    tryBrowse();
+                    return;
+                }
+
+                tryStreams();
             });
+    };
+
+    tryLivePath();
 }
 
 void YouTubeLiveChat::probeLiveVideoIdFromEmbed(
@@ -1500,6 +1579,13 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             }
 
             const auto json = result.parseJson();
+            if (isEndedOrOfflineLiveBroadcast(json))
+            {
+                this->waitForNextLive("Waiting for a live YouTube stream.",
+                                      YOUTUBE_RECONNECT_DELAY_MS);
+                return;
+            }
+
             const auto liveChatRenderer =
                 json["contents"]
                     .toObject()["twoColumnWatchNextResults"]
@@ -1529,6 +1615,17 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
                 }
                 else
                 {
+                    if (activeLiveRefresh)
+                    {
+                        // Fixed video sources do not have a live channel page
+                        // to fall back to. After the retry path has already
+                        // failed, a missing continuation means this live chat
+                        // is no longer active.
+                        this->setLive(false);
+                        this->liveTitle_.clear();
+                        this->liveStartedAt_ = {};
+                        this->liveViewerCount_ = 0;
+                    }
                     this->setStatusText(
                         "Couldn't find the YouTube live chat continuation "
                         "data.",
@@ -1654,9 +1751,9 @@ void YouTubeLiveChat::poll()
             this->liveChatProgressTimer_.restart();
             if (continuation.isEmpty())
             {
-                this->recoverLiveChat(
-                    "YouTube live chat continuation expired. Reconnecting.",
-                    YOUTUBE_RECONNECT_DELAY_MS);
+                this->refreshLiveChatContinuation(
+                    "YouTube live chat continuation expired. Refreshing.",
+                    YOUTUBE_POLL_REFRESH_FALLBACK_DELAY_MS);
                 return;
             }
 
@@ -1757,13 +1854,14 @@ void YouTubeLiveChat::poll()
 
             if (!updatedContinuation)
             {
-                this->recoverLiveChat(
-                    "YouTube live chat continuation expired. Reconnecting.",
-                    YOUTUBE_RECONNECT_DELAY_MS);
+                this->refreshLiveChatContinuation(
+                    "YouTube live chat continuation expired. Refreshing.",
+                    YOUTUBE_POLL_REFRESH_FALLBACK_DELAY_MS);
                 return;
             }
 
             this->failureReported_ = false;
+            this->pollRefreshFallbackCount_ = 0;
             this->setLive(true);
             if (this->liveChatSessionRefreshTimer_.isValid() &&
                 this->liveChatSessionRefreshTimer_.elapsed() >=
@@ -1780,11 +1878,44 @@ void YouTubeLiveChat::poll()
                 return;
             }
 
-            this->recoverLiveChat("YouTube live chat polling failed. "
-                                  "Reconnecting.",
-                                  YOUTUBE_RECONNECT_DELAY_MS);
+            this->refreshLiveChatContinuation(
+                "YouTube live chat polling failed. Refreshing continuation.",
+                YOUTUBE_POLL_REFRESH_FALLBACK_DELAY_MS);
         })
         .execute();
+}
+
+void YouTubeLiveChat::refreshLiveChatContinuation(QString text, int retryDelayMs)
+{
+    this->activePollStreak_ = 0;
+    this->liveChatProgressTimer_.restart();
+
+    if (++this->pollRefreshFallbackCount_ >
+        YOUTUBE_POLL_REFRESH_FALLBACK_LIMIT)
+    {
+        this->recoverLiveChat(
+            "YouTube live chat polling fallback failed. Reconnecting.",
+            YOUTUBE_RECONNECT_DELAY_MS, false);
+        return;
+    }
+
+    this->setStatusText(std::move(text));
+
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    QTimer::singleShot(retryDelayMs, [this, weak] {
+        if (!weak.lock() || !this->running_)
+        {
+            return;
+        }
+
+        if (this->live_ && !this->videoId_.isEmpty())
+        {
+            this->fetchLiveChatPage(false);
+            return;
+        }
+
+        this->resolveVideoId();
+    });
 }
 
 void YouTubeLiveChat::schedulePoll(int delayMs)
@@ -1834,14 +1965,17 @@ void YouTubeLiveChat::scheduleResolve(int delayMs)
     });
 }
 
-void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs)
+void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs,
+                                      bool notifyAsSystemMessage)
 {
     this->continuation_.clear();
     this->activePollStreak_ = 0;
+    this->pollRefreshFallbackCount_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
     this->liveChatProgressTimer_.invalidate();
     this->resetInnertubeContext();
-    this->setStatusText(std::move(text), !this->failureReported_);
+    this->setStatusText(std::move(text),
+                        notifyAsSystemMessage && !this->failureReported_);
     this->failureReported_ = true;
 
     auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
@@ -1873,6 +2007,7 @@ void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
     this->activePollStreak_ = 0;
+    this->pollRefreshFallbackCount_ = 0;
     this->liveChatSessionRefreshTimer_.invalidate();
     this->liveChatProgressTimer_.invalidate();
     this->setStatusText(std::move(text));
@@ -2152,9 +2287,13 @@ QString YouTubeLiveChat::extractLiveChatContinuation(
 QString YouTubeLiveChat::extractVideoChannelId(const QString &html)
 {
     return extractFirstMatch(
-        html, {R"yt("channelId":"(UC[A-Za-z0-9_-]{22})")yt",
-               R"yt("browseId":"(UC[A-Za-z0-9_-]{22})")yt",
-               R"yt(itemprop="channelId" content="(UC[A-Za-z0-9_-]{22})")yt"});
+        html,
+        {R"yt(<meta itemprop="identifier" content="(UC[A-Za-z0-9_-]{22})")yt",
+         R"yt("channelMetadataRenderer":\{[^}]*"externalId":"(UC[A-Za-z0-9_-]{22})")yt",
+         R"yt("externalId":"(UC[A-Za-z0-9_-]{22})")yt",
+         R"yt("browseId":"(UC[A-Za-z0-9_-]{22})")yt",
+         R"yt("channelId":"(UC[A-Za-z0-9_-]{22})")yt",
+         R"yt(itemprop="channelId" content="(UC[A-Za-z0-9_-]{22})")yt"});
 }
 
 QString YouTubeLiveChat::extractEmbedLiveVideoId(const QString &html)
@@ -2237,11 +2376,7 @@ QString YouTubeLiveChat::extractLiveStreamTitle(const QJsonObject &nextResponse)
 
 QDateTime YouTubeLiveChat::extractLiveStartTime(const QJsonObject &nextResponse)
 {
-    const auto liveBroadcastDetails =
-        nextResponse["microformat"]
-            .toObject()["playerMicroformatRenderer"]
-            .toObject()["liveBroadcastDetails"]
-            .toObject();
+    const auto liveBroadcastDetails = extractLiveBroadcastDetails(nextResponse);
     return parseYouTubeIsoDateTime(
         liveBroadcastDetails["startTimestamp"].toString());
 }

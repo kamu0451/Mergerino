@@ -74,6 +74,18 @@ std::optional<QColor> Button::mouseEffectColor() const
 void Button::setMouseEffectColor(std::optional<QColor> color)
 {
     this->mouseEffectColor_ = color;
+    this->update();
+}
+
+void Button::setPaintOffset(QPoint offset)
+{
+    if (this->paintOffset_ == offset)
+    {
+        return;
+    }
+
+    this->paintOffset_ = offset;
+    this->update();
 }
 
 QMenu *Button::menu() const
@@ -131,6 +143,12 @@ void Button::dragEnterEvent(QDragEnterEvent *event)
 void Button::paintEvent(QPaintEvent * /*event*/)
 {
     QPainter painter(this);
+    if (!this->paintOffset_.isNull())
+    {
+        const auto scale = this->scale();
+        painter.translate(this->paintOffset_.x() * scale,
+                          this->paintOffset_.y() * scale);
+    }
     this->paintButton(painter);
 }
 

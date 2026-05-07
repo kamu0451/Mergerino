@@ -553,10 +553,15 @@ bool BaseWindow::event(QEvent *event)
         // parent to restore it.
         if (event->type() == QEvent::ParentWindowChange)
         {
-            assert(this->windowHandle() != nullptr);
-            if (this->windowHandle()->parent() != nullptr)
+            auto *handle = this->windowHandle();
+            if (handle == nullptr)
             {
-                this->windowHandle()->setParent(nullptr);
+                return QWidget::event(event);
+            }
+
+            if (handle->parent() != nullptr)
+            {
+                handle->setParent(nullptr);
             }
         }
     }

@@ -14,6 +14,7 @@
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/highlights/HighlightBlacklistUser.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
+#include "controllers/logging/LoggedUsers.hpp"
 #include "controllers/userdata/UserDataController.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageBuilder.hpp"
@@ -52,7 +53,10 @@
 #include "widgets/Window.hpp"
 
 #include <QCheckBox>
+#include <QApplication>
+#include <QCloseEvent>
 #include <QDesktopServices>
+#include <QEvent>
 #include <QFile>
 #include <QMessageBox>
 #include <QMetaEnum>
@@ -61,6 +65,7 @@
 #include <QNetworkReply>
 #include <QPointer>
 #include <QStringBuilder>
+#include <QTimer>
 
 namespace {
 constexpr QStringView TEXT_FOLLOWERS = u"Followers: %1";
@@ -129,22 +134,20 @@ ChannelPtr filterMessages(const QString &userName, ChannelPtr channel)
 {
     std::vector<MessagePtr> snapshot = channel->getMessageSnapshot();
 
-    ChannelPtr channelPtr;
-    if (channel->isTwitchChannel())
-    {
-        channelPtr = std::make_shared<TwitchChannel>(channel->getName());
-    }
-    else
-    {
-        channelPtr =
-            std::make_shared<Channel>(channel->getName(), Channel::Type::None);
-    }
+    // Usercard message history is a virtual view. It must not create a real
+    // platform channel or participate in logging/close-channel side effects.
+    auto channelPtr =
+        std::make_shared<Channel>(channel->getName(), Channel::Type::None);
 
     for (const auto &message : snapshot)
     {
         if (checkMessageUserName(userName, message))
         {
-            channelPtr->addMessage(message, MessageContext::Repost);
+            auto overrideFlags = std::optional<MessageFlags>(message->flags);
+            overrideFlags->set(MessageFlag::DoNotLog);
+
+            channelPtr->addMessage(message, MessageContext::Repost,
+                                   overrideFlags);
         }
     }
 
@@ -187,10 +190,12 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
     assert(split != nullptr &&
            "split being nullptr causes lots of bugs down the road");
     this->setWindowTitle("Usercard");
+    this->setAttribute(Qt::WA_QuitOnClose, false);
 
     HotkeyController::HotkeyMap actions{
         {"delete",
          [this](std::vector<QString>) -> QString {
+             this->prepareForClose();
              this->deleteLater();
              return "";
          }},
@@ -501,6 +506,7 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
         user.emplace<QCheckBox>("Block").assign(&this->ui_.block);
         user.emplace<QCheckBox>("Ignore highlights")
             .assign(&this->ui_.ignoreHighlights);
+        user.emplace<QCheckBox>("Log user").assign(&this->ui_.logUser);
         // visibility of this is updated in setData
 
         user.emplace<LabelButton>("Add notes", this)
@@ -526,6 +532,31 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
             QDesktopServices::openUrl("https://www.twitch.tv/popout/" +
                                       this->underlyingChannel_->getName() +
                                       "/viewercard/" + this->userName_);
+        });
+
+        QObject::connect(this->ui_.logUser, &QCheckBox::clicked, this,
+                         [this](bool checked) {
+            if (this->preparedForClose_)
+            {
+                return;
+            }
+
+            bool changed = false;
+            if (checked)
+            {
+                changed = logging::addLoggedUser(this->userName_);
+            }
+            else
+            {
+                changed = logging::removeLoggedUser(this->userName_);
+            }
+
+            if (changed)
+            {
+                getSettings()->requestSave();
+            }
+
+            this->updateLogUserButton();
         });
 
         QObject::connect(mod.getElement(), &Button::leftClicked, [this] {
@@ -646,6 +677,58 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
     this->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Policy::Ignored);
 }
 
+void UserInfoPopup::prepareForClose()
+{
+    if (this->preparedForClose_)
+    {
+        return;
+    }
+    this->preparedForClose_ = true;
+
+    this->refreshConnection_.reset();
+    this->userDataUpdatedConnection_.reset();
+
+    // The view is owned by this popup and will be destroyed with it. Only clear
+    // the source channel here; rebuilding the embedded view during focus-loss
+    // teardown can re-enter layout/message code while the popup is closing.
+    if (this->ui_.latestMessages != nullptr)
+    {
+        this->ui_.latestMessages->setSourceChannel(nullptr);
+    }
+    if (this->ui_.logUser != nullptr)
+    {
+        this->ui_.logUser->blockSignals(true);
+    }
+
+    this->channel_ = Channel::getEmpty();
+    this->underlyingChannel_ = Channel::getEmpty();
+    this->lifetimeHack_.reset();
+
+    if (this->seventvAvatar_ != nullptr)
+    {
+        QObject::disconnect(this->seventvAvatar_, nullptr, this, nullptr);
+        this->seventvAvatar_->stop();
+        this->seventvAvatar_->deleteLater();
+        this->seventvAvatar_ = nullptr;
+    }
+}
+
+bool UserInfoPopup::event(QEvent *event)
+{
+    if (event->type() == QEvent::DeferredDelete)
+    {
+        this->prepareForClose();
+    }
+
+    return BaseWindow::event(event);
+}
+
+void UserInfoPopup::closeEvent(QCloseEvent *event)
+{
+    this->prepareForClose();
+    BaseWindow::closeEvent(event);
+}
+
 void UserInfoPopup::themeChangedEvent()
 {
     BaseWindow::themeChangedEvent();
@@ -672,11 +755,26 @@ void UserInfoPopup::scaleChangedEvent(float /*scale*/)
 
 void UserInfoPopup::windowDeactivationEvent()
 {
-    if (this->editUserNotesDialog_.isNull() ||
-        !this->editUserNotesDialog_->isVisible())
+    if (!this->editUserNotesDialog_.isNull() &&
+        this->editUserNotesDialog_->isVisible())
     {
-        BaseWindow::windowDeactivationEvent();
+        return;
     }
+
+    if (auto *popup = QApplication::activePopupWidget();
+        popup != nullptr && (popup == this || this->isAncestorOf(popup)))
+    {
+        return;
+    }
+
+    if (this->windowDeactivateAction == WindowDeactivateAction::Delete)
+    {
+        this->windowDeactivateAction = WindowDeactivateAction::Nothing;
+        this->hide();
+        return;
+    }
+
+    BaseWindow::windowDeactivationEvent();
 }
 
 void UserInfoPopup::installEvents()
@@ -685,7 +783,7 @@ void UserInfoPopup::installEvents()
 
     // block
     QObject::connect(
-        this->ui_.block, &QCheckBox::stateChanged,
+        this->ui_.block, &QCheckBox::stateChanged, this,
         [this](int newState) mutable {
             if (this->isKick_ || this->isGenericPlatform_)
             {
@@ -774,7 +872,7 @@ void UserInfoPopup::installEvents()
 
     // ignore highlights
     QObject::connect(
-        this->ui_.ignoreHighlights, &QCheckBox::clicked,
+        this->ui_.ignoreHighlights, &QCheckBox::clicked, this,
         [this](bool checked) mutable {
             this->ui_.ignoreHighlights->setEnabled(false);
 
@@ -811,7 +909,7 @@ void UserInfoPopup::installEvents()
 
     // user notes
     QObject::connect(
-        this->ui_.notesAdd, &LabelButton::clicked, [this]() mutable {
+        this->ui_.notesAdd, &LabelButton::clicked, this, [this]() mutable {
             if (this->editUserNotesDialog_.isNull())
             {
                 this->editUserNotesDialog_ = new EditUserNotesDialog(this);
@@ -834,8 +932,14 @@ void UserInfoPopup::installEvents()
     // user data updated
     this->userDataUpdatedConnection_ =
         std::make_unique<pajlada::Signals::ScopedConnection>(
-            getApp()->getUserData()->userDataUpdated().connect([this]() {
-                this->updateNotes();
+            getApp()->getUserData()->userDataUpdated().connect([self =
+                                                                     QPointer(
+                                                                         this)]() {
+                if (self == nullptr || self->preparedForClose_)
+                {
+                    return;
+                }
+                self->updateNotes();
             }));
 }
 
@@ -902,6 +1006,7 @@ void UserInfoPopup::setData(const QString &name,
 
     this->ui_.nameLabel->setText(name);
     this->ui_.nameLabel->setProperty("copy-text", name);
+    this->updateLogUserButton();
 
     if (this->isGenericPlatform_)
     {
@@ -1033,6 +1138,14 @@ void UserInfoPopup::updateGenericPlatformUserData(
 
 void UserInfoPopup::updateLatestMessages()
 {
+    if (this->preparedForClose_ || this->ui_.latestMessages == nullptr ||
+        !this->underlyingChannel_)
+    {
+        return;
+    }
+
+    this->refreshConnection_.reset();
+
     auto filteredChannel =
         filterMessages(this->userName_, this->underlyingChannel_);
     this->ui_.latestMessages->setChannel(filteredChannel);
@@ -1044,29 +1157,6 @@ void UserInfoPopup::updateLatestMessages()
 
     // shrink dialog in case ChannelView goes from visible to hidden
     this->adjustSize();
-
-    this->refreshConnection_ =
-        std::make_unique<pajlada::Signals::ScopedConnection>(
-            this->underlyingChannel_->messageAppended.connect(
-                [this, hasMessages](auto message, auto) {
-                    if (!checkMessageUserName(this->userName_, message))
-                    {
-                        return;
-                    }
-
-                    if (hasMessages)
-                    {
-                        // display message in ChannelView
-                        this->ui_.latestMessages->channel()->addMessage(
-                            message, MessageContext::Repost);
-                    }
-                    else
-                    {
-                        // The ChannelView is currently hidden, so manually refresh
-                        // and display the latest messages
-                        this->updateLatestMessages();
-                    }
-                }));
 }
 
 bool UserInfoPopup::isCurrentPlatformUser() const
@@ -1178,6 +1268,7 @@ void UserInfoPopup::updateUserData()
         {
             this->userName_ = user.login;
             this->ui_.nameLabel->setText(user.login);
+            this->updateLogUserButton();
 
             // Ensure recent messages are shown
             this->updateLatestMessages();
@@ -1424,21 +1515,28 @@ void UserInfoPopup::loadAvatar(const QString &userID, const QString &pictureURL,
         static auto *manager = new QNetworkAccessManager();
         auto *reply = manager->get(req);
 
+        QObject::connect(reply, &QNetworkReply::finished, reply,
+                         &QObject::deleteLater);
         QObject::connect(reply, &QNetworkReply::finished, this,
-                         [this, reply, filename] {
+                         [self = QPointer(this), reply, filename] {
+                             if (self == nullptr || self->preparedForClose_)
+                             {
+                                 return;
+                             }
+
                              if (reply->error() == QNetworkReply::NoError)
                              {
                                  const auto data = reply->readAll();
 
                                  QPixmap avatar;
                                  avatar.loadFromData(data);
-                                 this->ui_.avatarButton->setPixmap(avatar);
-                                 this->saveCacheAvatar(data, filename);
-                                 this->avatarPixmap_ = std::move(avatar);
+                                 self->ui_.avatarButton->setPixmap(avatar);
+                                 self->saveCacheAvatar(data, filename);
+                                 self->avatarPixmap_ = std::move(avatar);
                              }
                              else
                              {
-                                 this->ui_.avatarButton->setPixmap(QPixmap());
+                                 self->ui_.avatarButton->setPixmap(QPixmap());
                              }
                          });
     }
@@ -1457,7 +1555,8 @@ void UserInfoPopup::loadSevenTVAvatar(const QString &userID, bool isKick)
     auto fmt = isKick ? SEVENTV_KICK_USER_API : SEVENTV_TWITCH_USER_API;
     NetworkRequest(fmt.arg(userID))
         .timeout(20000)
-        .onSuccess([this, hack = std::weak_ptr<bool>(this->lifetimeHack_)](
+        .onSuccess([self = QPointer(this),
+                    hack = std::weak_ptr<bool>(this->lifetimeHack_)](
                        const NetworkResult &result) {
             if (!hack.lock())
             {
@@ -1466,7 +1565,7 @@ void UserInfoPopup::loadSevenTVAvatar(const QString &userID, bool isKick)
 
             const auto root = result.parseJson();
             const auto userObj = root["user"].toObject();
-            this->seventvUserID_ = userObj["id"].toString();
+            const auto seventvUserID = userObj["id"].toString();
             auto url = userObj["avatar_url"].toString();
 
             if (url.isEmpty())
@@ -1476,11 +1575,6 @@ void UserInfoPopup::loadSevenTVAvatar(const QString &userID, bool isKick)
             if (!url.startsWith(u"https:"))
             {
                 url.prepend(u"https:");
-            }
-            this->seventvAvatarUrl_ = url;
-            if (this->helixAvatarUrl_ == this->seventvAvatarUrl_)
-            {
-                return;
             }
 
             auto dotIdx = url.lastIndexOf('.') + 1;
@@ -1499,37 +1593,61 @@ void UserInfoPopup::loadSevenTVAvatar(const QString &userID, bool isKick)
             // We're implementing custom caching here,
             // because we need the cached file path.
             auto hash = hashUrl(url);
-            auto filename = getApp()->getPaths().cacheDirectory() + "/" + hash;
 
-            QFile cacheFile(filename);
-            if (cacheFile.exists())
-            {
-                this->setSevenTVAvatar(filename, format);
-                return;
-            }
+            runInGuiThread([self, hack, seventvUserID, url, hash, format] {
+                if (self == nullptr || !hack.lock() || self->preparedForClose_)
+                {
+                    return;
+                }
 
-            QNetworkRequest req(url);
+                self->seventvUserID_ = seventvUserID;
+                self->seventvAvatarUrl_ = url;
+                if (self->helixAvatarUrl_ == self->seventvAvatarUrl_)
+                {
+                    return;
+                }
 
-            // We're using this manager instead of the one provided
-            // in NetworkManager, because we're on a different thread.
-            static auto *manager = new QNetworkAccessManager();
-            auto *reply = manager->get(req);
+                const auto filename =
+                    getApp()->getPaths().cacheDirectory() + "/" + hash;
+                QFile cacheFile(filename);
+                if (cacheFile.exists())
+                {
+                    self->setSevenTVAvatar(filename, format);
+                    return;
+                }
 
-            QObject::connect(reply, &QNetworkReply::finished, this,
-                             [this, reply, url, filename, format] {
-                                 if (reply->error() == QNetworkReply::NoError)
-                                 {
-                                     this->saveCacheAvatar(reply->readAll(),
-                                                           filename);
-                                     this->setSevenTVAvatar(filename, format);
-                                 }
-                                 else
-                                 {
-                                     qCWarning(chatterinoSeventv)
-                                         << "Error fetching Profile Picture:"
-                                         << reply->error();
-                                 }
-                             });
+                QNetworkRequest req(url);
+
+                static auto *manager = new QNetworkAccessManager();
+                auto *reply = manager->get(req);
+
+                QObject::connect(reply, &QNetworkReply::finished, reply,
+                                 &QObject::deleteLater);
+                QObject::connect(reply, &QNetworkReply::finished, self,
+                                 [self, reply, filename, format] {
+                                     if (self == nullptr ||
+                                         self->preparedForClose_)
+                                     {
+                                         return;
+                                     }
+
+                                     if (reply->error() ==
+                                         QNetworkReply::NoError)
+                                     {
+                                         self->saveCacheAvatar(reply->readAll(),
+                                                               filename);
+                                         self->setSevenTVAvatar(filename,
+                                                                format);
+                                     }
+                                     else
+                                     {
+                                         qCWarning(chatterinoSeventv)
+                                             << "Error fetching Profile "
+                                                "Picture:"
+                                             << reply->error();
+                                     }
+                                 });
+            });
 
             return;
         })
@@ -1539,6 +1657,18 @@ void UserInfoPopup::loadSevenTVAvatar(const QString &userID, bool isKick)
 void UserInfoPopup::setSevenTVAvatar(const QString &filename,
                                      const QByteArray &format)
 {
+    if (this->preparedForClose_)
+    {
+        return;
+    }
+    if (this->seventvAvatar_ != nullptr)
+    {
+        QObject::disconnect(this->seventvAvatar_, nullptr, this, nullptr);
+        this->seventvAvatar_->stop();
+        this->seventvAvatar_->deleteLater();
+        this->seventvAvatar_ = nullptr;
+    }
+
     auto *movie = new QMovie(filename, format, this);
     if (!movie->isValid())
     {
@@ -1547,9 +1677,15 @@ void UserInfoPopup::setSevenTVAvatar(const QString &filename,
         return;
     }
 
-    QObject::connect(movie, &QMovie::frameChanged, this, [this, movie] {
-        this->ui_.avatarButton->setPixmap(movie->currentPixmap());
-    });
+    QObject::connect(movie, &QMovie::frameChanged, this,
+                     [self = QPointer(this), movie] {
+                         if (self == nullptr || self->preparedForClose_)
+                         {
+                             return;
+                         }
+                         self->ui_.avatarButton->setPixmap(
+                             movie->currentPixmap());
+                     });
 
     movie->start();
     this->seventvAvatar_ = movie;
@@ -1595,6 +1731,25 @@ void UserInfoPopup::updateNotes()
     this->ui_.notesPreview->setVisible(true);
 }
 
+void UserInfoPopup::updateLogUserButton()
+{
+    if (this->ui_.logUser == nullptr)
+    {
+        return;
+    }
+
+    const auto canLogUser =
+        getSettings()->enableLogging && !this->userName_.trimmed().isEmpty();
+    this->ui_.logUser->setVisible(canLogUser);
+    if (!canLogUser)
+    {
+        return;
+    }
+
+    QSignalBlocker blocker(this->ui_.logUser);
+    this->ui_.logUser->setChecked(logging::isLoggedUser(this->userName_));
+}
+
 void UserInfoPopup::updateKickUserData()
 {
     assert(this->isKick_);
@@ -1619,6 +1774,7 @@ void UserInfoPopup::updateKickUserData()
             self->userName_ = channel.user.username;
             self->kickUserSlug_ = channel.slug;
             self->ui_.nameLabel->setText(channel.user.username);
+            self->updateLogUserButton();
 
             // Ensure recent messages are shown
             self->updateLatestMessages();
@@ -1843,6 +1999,36 @@ QStringView UserInfoPopup::platformName() const
 
 void UserInfoPopup::appendCommonProfileActions(QMenu *menu)
 {
+    if (getSettings()->enableLogging && !this->userName_.isEmpty())
+    {
+        const auto userName = this->userName_;
+        const auto userLogged = logging::isLoggedUser(userName);
+        QPointer<UserInfoPopup> self(this);
+
+        menu->addAction(userLogged ? "Stop logging user" : "Log user", this,
+                        [self, userName, userLogged] {
+                            bool changed = false;
+                            if (userLogged)
+                            {
+                                changed = logging::removeLoggedUser(userName);
+                            }
+                            else
+                            {
+                                changed = logging::addLoggedUser(userName);
+                            }
+
+                            if (changed)
+                            {
+                                getSettings()->requestSave();
+                            }
+
+                            if (self != nullptr)
+                            {
+                                self->updateLogUserButton();
+                            }
+                        });
+    }
+
     if (!this->seventvUserID_.isEmpty())
     {
         menu->addAction(

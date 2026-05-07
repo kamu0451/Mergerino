@@ -9,6 +9,7 @@
 #include "singletons/Fonts.hpp"
 #include "singletons/WindowManager.hpp"
 
+#include <QCoreApplication>
 #include <QPainter>
 
 #include <utility>
@@ -59,7 +60,16 @@ TooltipWidget::TooltipWidget(BaseWidget *parent)
                  tooltipParentFor(parent))
 {
     assert(parent != nullptr);
-    QObject::connect(parent, &QObject::destroyed, this, &QObject::deleteLater);
+    QObject::connect(parent, &QObject::destroyed, this, [this] {
+        this->releaseNativeWindow();
+        this->deleteLater();
+    });
+    if (auto *app = QCoreApplication::instance())
+    {
+        QObject::connect(app, &QCoreApplication::aboutToQuit, this, [this] {
+            this->releaseNativeWindow();
+        });
+    }
 
     this->setStyleSheet("color: #fff; background: rgba(11, 11, 11, 0.8)");
     this->setAttribute(Qt::WA_TranslucentBackground);
@@ -118,6 +128,11 @@ TooltipWidget::TooltipWidget(BaseWidget *parent)
                 this->applyLastBoundsCheck();
             }
         });
+}
+
+TooltipWidget::~TooltipWidget()
+{
+    this->releaseNativeWindow();
 }
 
 void TooltipWidget::setOne(const TooltipEntry &entry, TooltipStyle style)
@@ -303,6 +318,17 @@ void TooltipWidget::initializeGLayout()
     gLayout->setHorizontalSpacing(8);
     gLayout->setVerticalSpacing(10);
     this->gLayout_ = gLayout;
+}
+
+void TooltipWidget::releaseNativeWindow()
+{
+#ifdef Q_OS_WIN
+    this->hide();
+    if (this->testAttribute(Qt::WA_WState_Created))
+    {
+        this->destroy(true, true);
+    }
+#endif
 }
 
 void TooltipWidget::themeChangedEvent()

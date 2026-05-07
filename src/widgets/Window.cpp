@@ -437,7 +437,7 @@ void Window::updateTitlebarUpdateButton()
     const auto shouldShow = getApp()->getUpdates().shouldShowUpdateButton();
     this->updateTitlebarButton_->setVisible(shouldShow);
     this->updateTitlebarButton_->setToolTip(
-        shouldShow ? "Install Mergerino update" : QString());
+        shouldShow ? "View Mergerino update" : QString());
 }
 
 void Window::updateStreamerModeIcon()

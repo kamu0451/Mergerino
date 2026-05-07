@@ -4,6 +4,7 @@
 
 #include "singletons/Logging.hpp"
 
+#include "controllers/logging/LoggedUsers.hpp"
 #include "messages/Message.hpp"
 #include "singletons/helper/LoggingChannel.hpp"
 #include "singletons/Settings.hpp"
@@ -18,20 +19,25 @@ namespace chatterino {
 
 Logging::Logging(Settings &settings)
 {
-    // We can safely ignore this signal connection since settings are only-ever destroyed
-    // on application exit
-    // NOTE: SETTINGS_LIFETIME
-    std::ignore = settings.loggedChannels.delayedItemsChanged.connect(
-        [this, &settings]() {
-            this->threadGuard.guard();
+    logging::initLoggedUsers();
 
-            this->onlyLogListedChannels.clear();
+    auto refreshLoggedChannels = [this, &settings] {
+        std::lock_guard lock(this->loggingChannelsMutex_);
+        this->onlyLogListedChannels_.clear();
 
-            for (const auto &loggedChannel :
-                 *settings.loggedChannels.readOnly())
-            {
-                this->onlyLogListedChannels.insert(loggedChannel.channelName());
-            }
+        for (const auto &loggedChannel : *settings.loggedChannels.readOnly())
+        {
+            this->onlyLogListedChannels_.insert(
+                loggedChannel.channelName().toLower());
+        }
+    };
+
+    refreshLoggedChannels();
+
+    this->settingConnections_.managedConnect(
+        settings.loggedChannels.delayedItemsChanged,
+        [this, refreshLoggedChannels]() {
+            refreshLoggedChannels();
         });
 }
 
@@ -43,21 +49,38 @@ void Logging::addMessage(const QString &channelName, MessagePtr message,
         return;
     }
 
-    this->threadGuard.guard();
-
     if (!getSettings()->enableLogging)
     {
         return;
     }
 
-    if (getSettings()->onlyLogListedChannels)
+    const auto lowerChannelName = channelName.toLower();
+    const auto lowerUserName =
+        logging::normalizeLoggedUserName(message->loginName);
+    const bool logUser = logging::isLoggedUser(lowerUserName);
+
+    std::lock_guard lock(this->loggingChannelsMutex_);
+
+    const bool logChannel = !getSettings()->onlyLogListedChannels ||
+                            this->onlyLogListedChannels_.contains(
+                                lowerChannelName);
+
+    if (logChannel)
     {
-        if (!this->onlyLogListedChannels.contains(channelName))
-        {
-            return;
-        }
+        this->addMessageToChannel(channelName, message, platformName, streamID);
     }
 
+    if (logUser)
+    {
+        this->addMessageToChannel(QStringLiteral("/users/") + lowerUserName,
+                                  message, platformName, streamID);
+    }
+}
+
+void Logging::addMessageToChannel(const QString &channelName, MessagePtr message,
+                                  const QString &platformName,
+                                  const QString &streamID)
+{
     auto platIt = this->loggingChannels_.find(platformName);
     if (platIt == this->loggingChannels_.end())
     {
@@ -89,6 +112,8 @@ void Logging::closeChannel(const QString &channelName,
     {
         return;
     }
+
+    std::lock_guard lock(this->loggingChannelsMutex_);
 
     auto platIt = this->loggingChannels_.find(platformName);
     if (platIt == this->loggingChannels_.end())

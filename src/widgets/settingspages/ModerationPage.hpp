@@ -13,11 +13,14 @@ class QPushButton;
 
 namespace chatterino {
 
+class EditableModelView;
+
 class ModerationPage : public SettingsPage
 {
 public:
     ModerationPage();
 
+    bool filterElements(const QString &query) override;
     void selectModerationActions();
 
 private:
@@ -25,6 +28,9 @@ private:
 
     QTimer itemsChangedTimer_;
     QTabWidget *tabWidget_{};
+    EditableModelView *loggedChannelsView_{};
+    EditableModelView *loggedUsersView_{};
+    EditableModelView *moderationActionsView_{};
 
     std::vector<QLineEdit *> durationInputs_;
     std::vector<QComboBox *> unitInputs_;

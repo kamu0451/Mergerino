@@ -30,6 +30,7 @@
 #include <QMessageBox>
 #include <QRadioButton>
 #include <QRegularExpression>
+#include <QSizePolicy>
 #include <QVariantAnimation>
 #include <QToolButton>
 #include <QToolTip>
@@ -240,6 +241,7 @@ QString normalizeTikTokSource(const QString &value)
 
 constexpr qreal MIN_SLOWER_CHAT_MESSAGES_PER_SECOND = 0.25;
 constexpr qreal MAX_SLOWER_CHAT_MESSAGES_PER_SECOND = 20.0;
+constexpr int ADD_TAB_DIALOG_WIDTH = 440;
 
 class InstantTooltipButton final : public QToolButton
 {
@@ -493,25 +495,28 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     auto &ui = this->ui_;
     auto *rootLayout = new QVBoxLayout(this->getLayoutContainer());
     rootLayout->setContentsMargins({});
-    rootLayout->setSpacing(6);
+    rootLayout->setSpacing(4);
 
     ui.notebook = new MicroNotebook(this->getLayoutContainer());
-    rootLayout->addWidget(ui.notebook, 1);
+    rootLayout->addWidget(ui.notebook);
 
     ui.mergedPage = new QWidget;
     auto *mergedLayout = new QVBoxLayout(ui.mergedPage);
+    mergedLayout->setContentsMargins(6, 6, 6, 0);
+    mergedLayout->setSpacing(5);
 
     auto *intro = new QLabel(
-        "By default, Twitch and Kick both use the tab name as the channel "
-        "name. Override either platform only when the names differ, and add "
-        "the streamer's YouTube @handle or any video link from the desired "
-        "channel, or a TikTok @username/live URL for read-only TikTok LIVE "
-        "chat.");
+        "By default, Twitch and Kick use the tab name as the channel name. "
+        "Override only when names differ, and add a YouTube @handle/video "
+        "link or TikTok @username/live URL for read-only chat.");
     intro->setWordWrap(true);
     mergedLayout->addWidget(intro);
 
     auto *baseGroup = new QGroupBox;
     auto *baseLayout = new QFormLayout(baseGroup);
+    baseLayout->setContentsMargins(8, 8, 8, 8);
+    baseLayout->setHorizontalSpacing(6);
+    baseLayout->setVerticalSpacing(4);
     ui.tabName = new QLineEdit();
     ui.tabName->setPlaceholderText("Streamer / tab name");
     baseLayout->addRow("Tab name", ui.tabName);
@@ -519,6 +524,9 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
 
     auto *platformGroup = new QGroupBox;
     auto *platformLayout = new QFormLayout(platformGroup);
+    platformLayout->setContentsMargins(8, 8, 8, 8);
+    platformLayout->setHorizontalSpacing(6);
+    platformLayout->setVerticalSpacing(4);
 
     ui.enableTwitch = new QCheckBox("Enable Twitch");
     ui.enableTwitch->setChecked(true);
@@ -619,10 +627,16 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     {
         ui.specialPage = new QWidget;
         auto *specialLayout = new QVBoxLayout(ui.specialPage);
+        specialLayout->setContentsMargins(6, 6, 6, 0);
+        specialLayout->setAlignment(Qt::AlignTop);
+        specialLayout->setSpacing(5);
         auto *specialIntro = new QLabel(
-            "Use this page for Twitch-wide utility channels that are not tied "
-            "to a specific streamer tab.");
+            "Utility tabs are not tied to a specific streamer tab. Mentions "
+            "include platform mentions and Twitch/Kick username keywords.");
         specialIntro->setWordWrap(true);
+        specialIntro->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+        specialIntro->setSizePolicy(QSizePolicy::Preferred,
+                                    QSizePolicy::Maximum);
         specialLayout->addWidget(specialIntro);
 
         ui.whispers = new detail::AutoCheckedRadioButton("Whispers");
@@ -637,7 +651,7 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
         specialLayout->addWidget(ui.live);
         specialLayout->addWidget(ui.automod);
 
-        ui.notebook->addPage(ui.specialPage, "Twitch Special");
+        ui.notebook->addPage(ui.specialPage, "More");
     }
     else
     {
@@ -646,7 +660,7 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
 
     auto *buttonBox =
         new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    buttonBox->setContentsMargins({10, 4, 10, 10});
+    buttonBox->setContentsMargins({6, 0, 6, 6});
     rootLayout->addWidget(buttonBox);
 
     QObject::connect(buttonBox, &QDialogButtonBox::accepted, this, [this] {
@@ -658,9 +672,13 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
 
     this->setMergedDefaults();
     this->syncMergedFieldState();
+    ui.notebook->onCurrentChanged(this, [this] {
+        this->updateDialogSize();
+    });
     this->updateSlowerChatVisibility(false);
     this->addShortcuts();
     this->themeChangedEvent();
+    this->updateDialogSize();
 }
 
 void SelectChannelDialog::ok()
@@ -913,6 +931,28 @@ bool SelectChannelDialog::hasSeletedChannel() const
     return this->hasSelectedChannel_;
 }
 
+void SelectChannelDialog::updateDialogSize()
+{
+    this->setFixedWidth(ADD_TAB_DIALOG_WIDTH);
+    this->setMinimumHeight(0);
+    this->setMaximumHeight(QWIDGETSIZE_MAX);
+
+    if (this->ui_.notebook != nullptr)
+    {
+        this->ui_.notebook->updateGeometry();
+    }
+
+    if (auto *layout = this->getLayoutContainer()->layout())
+    {
+        layout->activate();
+    }
+
+    const auto targetHeight =
+        this->sizeHint().expandedTo(this->minimumSizeHint()).height();
+    this->resize(ADD_TAB_DIALOG_WIDTH, targetHeight);
+    this->setMinimumHeight(targetHeight);
+}
+
 void SelectChannelDialog::syncMergedFieldState()
 {
     this->ui_.twitchName->setEnabled(this->ui_.enableTwitch->isChecked());
@@ -927,14 +967,9 @@ void SelectChannelDialog::applySlowerChatRateVisibilityProgress(qreal progress)
     applyAnimatedRowProgress(this->ui_.slowerChatRateLabel, progress);
     applyAnimatedRowProgress(this->ui_.slowerChatRateField, progress);
 
-    if (auto *layout = this->getLayoutContainer()->layout())
-    {
-        layout->activate();
-    }
-
     if (this->isVisible())
     {
-        this->adjustSize();
+        this->updateDialogSize();
     }
 }
 

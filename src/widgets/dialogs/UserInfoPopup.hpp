@@ -17,6 +17,7 @@
 #include <cstdint>
 
 class QCheckBox;
+class QCloseEvent;
 class QMovie;
 
 namespace chatterino {
@@ -44,6 +45,10 @@ public:
      * @param split Will be used as the popup's parent. Must not be null
      */
     UserInfoPopup(bool closeAutomatically, Split *split);
+    ~UserInfoPopup() override
+    {
+        this->prepareForClose();
+    }
 
     void setData(const QString &name, const ChannelPtr &channel);
     void setData(const QString &name, const ChannelPtr &contextChannel,
@@ -55,6 +60,8 @@ public:
 protected:
     void themeChangedEvent() override;
     void scaleChangedEvent(float scale) override;
+    bool event(QEvent *event) override;
+    void closeEvent(QCloseEvent *event) override;
     void windowDeactivationEvent() override;
 
 private:
@@ -63,6 +70,8 @@ private:
     void updateGenericPlatformUserData(const QString &platformUserID);
     void updateLatestMessages();
     void updateNotes();
+    void updateLogUserButton();
+    void prepareForClose();
     bool canModerateTargetUser() const;
     bool isCurrentPlatformUser() const;
     void sendModerationCommand(const QString &command);
@@ -137,6 +146,7 @@ private:
         QCheckBox *ignoreHighlights = nullptr;
         MarkdownLabel *notesPreview = nullptr;
         LabelButton *notesAdd = nullptr;
+        QCheckBox *logUser = nullptr;
 
         Label *noMessagesLabel = nullptr;
         ChannelView *latestMessages = nullptr;
@@ -154,6 +164,7 @@ private:
 
     bool isKick_ = false;
     bool isGenericPlatform_ = false;
+    bool preparedForClose_ = false;
     MessagePlatform platform_;
     uint64_t kickUserID_ = 0;
 

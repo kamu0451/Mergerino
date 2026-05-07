@@ -77,6 +77,16 @@ TEST(ActivityMessageUtils, CompactsGiftBombMembershipsToSubs)
               "GiftLord gifted 5 memberships");
 }
 
+TEST(ActivityMessageUtils, CompactsTwitchCommunityGiftBombs)
+{
+    Message message;
+    message.flags.set(MessageFlag::Subscription);
+    message.messageText = "GiftLord is gifting 10 Tier 1 Subs to the community!";
+
+    ASSERT_EQ(getActivityGiftBombRecipientCount(message), 10);
+    EXPECT_EQ(compactActivityGiftBombText(message), "GiftLord gifted 10 subs");
+}
+
 TEST(ActivityMessageUtils, CompactsYouTubeGiftPurchaseAnnouncements)
 {
     Message message;
@@ -97,6 +107,14 @@ TEST(ActivityMessageUtils, DetectsTwitchAndYouTubeGiftRecipients)
     twitchRecipient.messageText = "GiftLord gifted a Tier 1 sub to Viewer!";
 
     EXPECT_TRUE(isActivityGiftRecipientMessage(twitchRecipient));
+
+    Message twitchMultiMonthRecipient;
+    twitchMultiMonthRecipient.flags.set(MessageFlag::Subscription);
+    twitchMultiMonthRecipient.flags.set(MessageFlag::System);
+    twitchMultiMonthRecipient.messageText =
+        "GiftLord gifted 6 months of Tier 1 to Viewer. They've gifted 334 months in the channel!";
+
+    EXPECT_TRUE(isActivityGiftRecipientMessage(twitchMultiMonthRecipient));
 
     Message youtubeRecipient;
     youtubeRecipient.flags.set(MessageFlag::Subscription);

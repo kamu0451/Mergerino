@@ -10,6 +10,8 @@
 #include <QFrame>
 #include <QPushButton>
 #include <QStackedLayout>
+#include <QStringList>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -58,9 +60,11 @@ private:
     void addTabs();
     void addTab(std::function<SettingsPage *()> page, const QString &name,
                 const QString &iconPath, SettingsTabId id = {},
+                QStringList searchKeywords = {},
                 Qt::Alignment alignment = Qt::AlignTop);
     void selectTab(SettingsDialogTab *tab, const bool byUser = true);
     void selectTab(SettingsTabId id);
+    void scheduleFilterElements(const QString &query);
     void filterElements(const QString &query);
     void setElementFilter(const QString &query);
     bool eventFilter(QObject *object, QEvent *event) override;
@@ -81,6 +85,8 @@ private:
     std::vector<SettingsDialogTab *> tabs_;
     SettingsDialogTab *selectedTab_{};
     SettingsDialogTab *lastSelectedByUser_{};
+    QTimer searchFilterTimer_;
+    QString pendingFilterText_;
     float dpi_ = 1.0F;
 
     friend class SettingsDialogTab;

@@ -61,6 +61,8 @@ private:
     void initializeLayout();
     std::unique_ptr<QMenu> createMainMenu();
     std::unique_ptr<QMenu> createChatModeMenu();
+    void exportChat();
+    void popupMainMenu(const QPoint &globalPosition);
     void showHoverTooltip(QWidget *target, const QString &text, bool wordWrap);
     void hideHoverTooltip();
     QString mergedStreamPreviewTooltip(MergedChannel *mergedChannel);

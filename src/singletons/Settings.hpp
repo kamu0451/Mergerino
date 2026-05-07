@@ -729,6 +729,8 @@ public:
         false,
     };
     QStringSetting logPath = {"/logging/path", ""};
+    ChatterinoSetting<std::vector<ChannelLog>> loggedUsersSetting = {
+        "/logging/userLogs"};
 
     QStringSetting pathHighlightSound = {"/highlighting/highlightSoundPath",
                                          ""};
@@ -938,6 +940,7 @@ public:
     SignalVector<Nickname> nicknames;
     SignalVector<ModerationAction> moderationActions;
     SignalVector<ChannelLog> loggedChannels;
+    SignalVector<ChannelLog> loggedUsers;
 
     bool isHighlightedUser(const QString &username);
     bool isBlacklistedUser(const QString &username);

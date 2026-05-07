@@ -10,11 +10,124 @@
 #include "util/LayoutCreator.hpp"
 #include "widgets/Label.hpp"
 
+#include <QCoreApplication>
 #include <QDialogButtonBox>
+#include <QDir>
+#include <QFile>
+#include <QLabel>
 #include <QPushButton>
+#include <QStringList>
+#include <QTextEdit>
 #include <QVBoxLayout>
 
 namespace chatterino {
+namespace {
+
+QString latestPatchNotesFrom(QString text)
+{
+    const auto lines =
+        text.replace("\r\n", "\n").replace('\r', '\n').split('\n');
+
+    QStringList sectionLines;
+    bool foundSection = false;
+    bool foundContent = false;
+
+    for (const auto &line : lines)
+    {
+        const auto trimmed = line.trimmed();
+
+        if (!foundSection)
+        {
+            if (trimmed.isEmpty() ||
+                trimmed.compare(QStringLiteral("Patch Notes"),
+                                Qt::CaseInsensitive) == 0)
+            {
+                continue;
+            }
+
+            foundSection = true;
+        }
+        else if (trimmed.isEmpty() && foundContent)
+        {
+            break;
+        }
+
+        if (!trimmed.isEmpty())
+        {
+            foundContent = true;
+        }
+
+        sectionLines.append(trimmed);
+    }
+
+    const auto latestSection = sectionLines.join('\n').trimmed();
+    return latestSection.isEmpty() ? text.trimmed() : latestSection;
+}
+
+QString loadLatestPatchNotes()
+{
+    const QStringList paths = {
+        QDir(QCoreApplication::applicationDirPath()).filePath(
+            QStringLiteral("patchnotes.txt")),
+        QStringLiteral(":/patchnotes.txt"),
+    };
+
+    for (const auto &path : paths)
+    {
+        QFile file(path);
+        if (!file.open(QFile::ReadOnly | QFile::Text))
+        {
+            continue;
+        }
+
+        auto text = QString::fromUtf8(file.readAll()).trimmed();
+        if (!text.isEmpty())
+        {
+            return latestPatchNotesFrom(text);
+        }
+    }
+
+    return QStringLiteral("No patch notes were found.");
+}
+
+}  // namespace
+
+PostUpdateDialog::PostUpdateDialog(const QString &version, QWidget *parent)
+    : BaseWindow({}, parent)
+{
+    this->setWindowTitle("Mergerino updated");
+    this->setAttribute(Qt::WA_DeleteOnClose);
+
+    auto *layout = new QVBoxLayout(this->getLayoutContainer());
+    layout->setContentsMargins(10, 10, 10, 10);
+    layout->setSpacing(8);
+
+    auto *title = new QLabel(
+        QStringLiteral("Mergerino has been successfully updated to %1")
+            .arg(version),
+        this);
+    title->setWordWrap(true);
+    layout->addWidget(title);
+
+    auto *patchNotes = new QTextEdit(this);
+    patchNotes->setReadOnly(true);
+    patchNotes->setText(loadLatestPatchNotes());
+    patchNotes->setMinimumHeight(170);
+    layout->addWidget(patchNotes);
+
+    auto *link = new QLabel(
+        QStringLiteral("<a href=\"https://github.com/Fixlation/Mergerino/blob/"
+                       "main/patchnotes.txt\">View all patch notes here</a>"),
+        this);
+    link->setTextFormat(Qt::RichText);
+    link->setTextInteractionFlags(Qt::TextBrowserInteraction |
+                                  Qt::LinksAccessibleByKeyboard);
+    link->setOpenExternalLinks(true);
+    layout->addWidget(link);
+
+    this->setScaleIndependentWidth(420);
+    this->setScaleIndependentHeight(300);
+}
 
 UpdateDialog::UpdateDialog()
     : BaseWindow({BaseWindow::Frameless, BaseWindow::TopMost,
@@ -28,6 +141,11 @@ UpdateDialog::UpdateDialog()
     layout.emplace<Label>("You shouldn't be seeing this dialog.")
         .assign(&this->ui_.label)
         ->setWordWrap(true);
+
+    auto patchNotes = layout.emplace<QTextEdit>().assign(&this->ui_.patchNotes);
+    patchNotes->setReadOnly(true);
+    patchNotes->setText(loadLatestPatchNotes());
+    patchNotes->setMinimumHeight(170);
 
     auto buttons = layout.emplace<QDialogButtonBox>();
 
@@ -58,8 +176,8 @@ UpdateDialog::UpdateDialog()
                                           this->updateStatusChanged(status);
                                       });
 
-    this->setScaleIndependentHeight(150);
-    this->setScaleIndependentWidth(250);
+    this->setScaleIndependentHeight(360);
+    this->setScaleIndependentWidth(380);
 }
 
 void UpdateDialog::updateStatusChanged(Updates::Status status)

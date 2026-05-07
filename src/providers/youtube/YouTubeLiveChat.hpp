@@ -70,10 +70,12 @@ private:
                                    QString failureText);
     void fetchLiveChatPage(bool skipInitialBacklog = true);
     void poll();
+    void refreshLiveChatContinuation(QString text, int retryDelayMs);
     void schedulePoll(int delayMs);
     void scheduleHealthCheck(int delayMs);
     void scheduleResolve(int delayMs);
-    void recoverLiveChat(QString text, int retryDelayMs);
+    void recoverLiveChat(QString text, int retryDelayMs,
+                         bool notifyAsSystemMessage = true);
     void waitForNextLive(QString text, int retryDelayMs);
     void resetInnertubeContext();
     void setLive(bool live);
@@ -118,6 +120,7 @@ private:
     bool failureReported_{false};
     bool skipInitialBacklog_{false};
     int activePollStreak_{0};
+    int pollRefreshFallbackCount_{0};
     uint64_t liveViewerCount_{0};
     QElapsedTimer liveChatSessionRefreshTimer_;
     QElapsedTimer liveChatProgressTimer_;

@@ -8,12 +8,20 @@
 #include "widgets/BaseWindow.hpp"
 
 #include <pajlada/signals/signalholder.hpp>
+#include <QString>
 
 class QPushButton;
+class QTextEdit;
 
 namespace chatterino {
 
 class Label;
+
+class PostUpdateDialog : public BaseWindow
+{
+public:
+    explicit PostUpdateDialog(const QString &version, QWidget *parent = nullptr);
+};
 
 /// The UpdateDialog is what's shown to the user after they clicked the update indicator in the tab bar/title bar.
 ///
@@ -31,6 +39,7 @@ private:
 
     struct {
         Label *label = nullptr;
+        QTextEdit *patchNotes = nullptr;
         QPushButton *installButton = nullptr;
     } ui_;
 

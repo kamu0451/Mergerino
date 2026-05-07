@@ -67,7 +67,7 @@ if(BUILD_TESTS)
 endif()
 
 project(mergerino
-    VERSION 1.2.5
+    VERSION 1.2.6
     DESCRIPTION "Merged streamer chat client for Twitch, Kick, and YouTube"
 )
 

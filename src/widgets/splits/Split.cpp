@@ -44,6 +44,7 @@
 #include "widgets/splits/SplitHeader.hpp"
 #include "widgets/splits/SplitInput.hpp"
 #include "widgets/splits/SplitOverlay.hpp"
+#include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 #include "widgets/Window.hpp"
 
 #include <QApplication>
@@ -135,6 +136,21 @@ bool splitHasKickActivity(const Split *split)
 
     const auto channel = split->getChannel();
     return channel != nullptr && channel->getType() == Channel::Type::Kick;
+}
+
+const TwitchChannel *viewerListTwitchChannel(Channel *channel)
+{
+    if (auto *twitch = dynamic_cast<TwitchChannel *>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel))
+    {
+        return dynamic_cast<TwitchChannel *>(merged->twitchChannel().get());
+    }
+
+    return nullptr;
 }
 
 QStringList normalizedFilterIds(const QList<QUuid> &ids)
@@ -411,6 +427,7 @@ Split::Split(QWidget *parent)
     , platformIndicatorMode_(defaultPlatformIndicatorMode(false))
     , vbox_(new QVBoxLayout(this))
     , header_(new SplitHeader(this))
+    , twitchPollsAndPredictionsBar_(new TwitchPollsAndPredictionsBar(this))
     , view_(new ChannelView(this, this, ChannelView::Context::None,
                             getSettings()->scrollbackSplitLimit))
     , input_(new SplitInput(this))
@@ -426,6 +443,7 @@ Split::Split(QWidget *parent)
     this->vbox_->setContentsMargins(1, 1, 1, 1);
 
     this->vbox_->addWidget(this->header_);
+    this->vbox_->addWidget(this->twitchPollsAndPredictionsBar_);
     this->vbox_->addWidget(this->view_, 1);
     this->vbox_->addWidget(this->input_);
 
@@ -1506,6 +1524,7 @@ void Split::setChannel(IndirectChannel newChannel)
     this->channel_ = newChannel;
 
     this->view_->setChannel(newChannel.get());
+    this->twitchPollsAndPredictionsBar_->setChannel(newChannel.get());
 
     this->usermodeChangedConnection_.disconnect();
     this->roomModeChangedConnection_.disconnect();
@@ -1905,8 +1924,8 @@ void Split::changeChannel()
                 return;
             }
 
-            // After changing channel (i.e. pressing OK in the channel switcher), close all open Chatter Lists
-            // We could consider updating the chatter list with the new channel
+            // After changing channel (i.e. pressing OK in the channel switcher), close all open Viewer Lists
+            // We could consider updating the viewer list with the new channel
             for (const auto &w : this->findChildren<ChatterListWidget *>())
             {
                 w->close();
@@ -2121,19 +2140,26 @@ void Split::openWithCustomScheme()
 
 void Split::openChatterList()
 {
+    if (this->isActivityPane())
+    {
+        qCWarning(chatterinoWidget)
+            << "Viewer list opened from an activity pane";
+        return;
+    }
+
     auto channel = this->getChannel();
     if (!channel)
     {
         qCWarning(chatterinoWidget)
-            << "Chatter list opened when no channel was defined";
+            << "Viewer list opened when no channel was defined";
         return;
     }
 
-    auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get());
+    auto *twitchChannel = viewerListTwitchChannel(channel.get());
     if (twitchChannel == nullptr)
     {
         qCWarning(chatterinoWidget)
-            << "Chatter list opened in a non-Twitch channel";
+            << "Viewer list opened without a Twitch channel";
         return;
     }
 
@@ -2148,11 +2174,15 @@ void Split::openChatterList()
                          this->view_->showUserInfoPopup(
                              userLogin, MessagePlatform::AnyOrTwitch);
                      });
+    QObject::connect(chatterDock, &QObject::destroyed, this, [this] {
+        this->header_->updateIcons();
+    });
 
     chatterDock->resize(chatterListWidth, chatterListHeight);
     widgets::showAndMoveWindowTo(
         chatterDock, this->mapToGlobal(QPoint{0, this->header_->height()}),
         widgets::BoundsChecking::CursorPosition);
+    this->header_->updateIcons();
 }
 
 void Split::openSubPage()
@@ -2222,8 +2252,18 @@ void Split::showSearch(bool singleChannel)
     for (int i = 0; i < notebook.getPageCount(); ++i)
     {
         auto *container = dynamic_cast<SplitContainer *>(notebook.getPageAt(i));
+        if (container == nullptr)
+        {
+            continue;
+        }
+
         for (auto *split : container->getSplits())
         {
+            if (split == nullptr)
+            {
+                continue;
+            }
+
             if (split->channel_.getType() != Channel::Type::TwitchAutomod)
             {
                 popup->addChannel(split->getChannelView());

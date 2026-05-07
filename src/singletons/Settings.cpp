@@ -249,6 +249,8 @@ Settings::Settings(const Args &args, const QString &settingsDirectory,
                            this->moderationActions);
     initializeSignalVector(this->signalHolder, this->loggedChannelsSetting,
                            this->loggedChannels);
+    initializeSignalVector(this->signalHolder, this->loggedUsersSetting,
+                           this->loggedUsers);
 
     instance_ = this;
 

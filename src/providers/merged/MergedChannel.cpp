@@ -6,6 +6,8 @@
 
 #include "Application.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/highlights/HighlightController.hpp"
+#include "controllers/highlights/HighlightResult.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
 #include "messages/MessageBuilder.hpp"
@@ -14,8 +16,10 @@
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/tiktok/TikTokLiveChat.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "providers/twitch/TwitchBadge.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/youtube/YouTubeLiveChat.hpp"
+#include "singletons/Settings.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/QStringHash.hpp"
 
@@ -84,6 +88,57 @@ QPixmap renderPlatformBadge(MessagePlatform platform)
     QSvgRenderer renderer(platformIconPath(platform));
     renderer.render(&painter);
     return pixmap;
+}
+
+HighlightAlert processMergedPlatformHighlights(Message &message)
+{
+    if (getSettings()->isBlacklistedUser(message.loginName))
+    {
+        return {};
+    }
+
+    const MessageParseArgs args;
+    auto [highlighted, highlightResult] = getApp()->getHighlights()->check(
+        args, {}, message.loginName, message.messageText, message.flags,
+        message.platform);
+
+    if (!highlighted)
+    {
+        return {};
+    }
+
+    message.flags.set(MessageFlag::Highlighted);
+    message.highlightColor = highlightResult.color;
+
+    if (highlightResult.showInMentions)
+    {
+        message.flags.set(MessageFlag::ShowInMentions);
+    }
+
+    return {
+        .customSound = highlightResult.customSoundUrl.value_or(QUrl{}),
+        .playSound = highlightResult.playSound,
+        .windowAlert = highlightResult.alert,
+    };
+}
+
+void triggerHighlightsAndAddMention(Channel *channel,
+                                    const std::shared_ptr<Message> &message,
+                                    const HighlightAlert &alert)
+{
+    if (!channel || !message)
+    {
+        return;
+    }
+
+    MessageBuilder::triggerHighlights(channel, alert);
+
+    if (message->flags.has(MessageFlag::Highlighted) &&
+        message->flags.has(MessageFlag::ShowInMentions))
+    {
+        getApp()->getTwitch()->getMentionsChannel()->addMessage(
+            message, MessageContext::Original);
+    }
 }
 
 }  // namespace
@@ -382,6 +437,64 @@ QString MergedChannel::statusSuffix() const
 QString MergedChannel::tooltipText() const
 {
     return this->tooltipText_;
+}
+
+std::vector<MergedChannel::LiveStreamBrowserUrl>
+    MergedChannel::liveStreamBrowserUrls() const
+{
+    std::vector<LiveStreamBrowserUrl> urls;
+
+    if (this->config_.twitchEnabled && this->twitchLive_ &&
+        this->twitchChannel_)
+    {
+        const auto channelName = this->config_.effectiveTwitchChannelName();
+        if (!channelName.isEmpty())
+        {
+            urls.push_back(
+                {"Twitch",
+                 QUrl(QString("https://www.twitch.tv/%1").arg(channelName))});
+        }
+    }
+
+    if (this->config_.kickEnabled && this->kickLive_ && this->kickChannel_)
+    {
+        auto slug = this->config_.effectiveKickChannelName();
+        if (auto *kick = dynamic_cast<KickChannel *>(this->kickChannel_.get()))
+        {
+            slug = kick->slug();
+        }
+        if (!slug.isEmpty())
+        {
+            urls.push_back(
+                {"Kick", QUrl(QString("https://kick.com/%1").arg(slug))});
+        }
+    }
+
+    if (this->config_.youtubeEnabled && this->youtubeLive_ &&
+        this->youtubeLiveChat_ && !this->youtubeLiveChat_->videoId().isEmpty())
+    {
+        urls.push_back({"YouTube",
+                        QUrl(QString("https://www.youtube.com/watch?v=%1")
+                                 .arg(this->youtubeLiveChat_->videoId()))});
+    }
+
+    if (this->config_.tiktokEnabled && this->tiktokLive_ &&
+        this->tiktokLiveChat_)
+    {
+        auto source = this->tiktokLiveChat_->resolvedSource();
+        if (source.isEmpty())
+        {
+            source = TikTokLiveChat::normalizeSource(this->config_.tiktokSource);
+        }
+        if (!source.isEmpty())
+        {
+            urls.push_back({"TikTok",
+                            QUrl(QString("https://www.tiktok.com/%1/live")
+                                     .arg(source))});
+        }
+    }
+
+    return urls;
 }
 
 ChannelPtr MergedChannel::twitchChannel() const
@@ -810,6 +923,9 @@ void MergedChannel::addYouTubeMessage(const MessagePtr &message)
         this->addRecentChatter(chatterName);
     }
 
+    const auto highlight = processMergedPlatformHighlights(*merged);
+    triggerHighlightsAndAddMention(this, merged, highlight);
+
     this->addMessage(merged, MessageContext::Repost);
 }
 
@@ -838,6 +954,9 @@ void MergedChannel::addTikTokMessage(const MessagePtr &message)
     {
         this->addRecentChatter(chatterName);
     }
+
+    const auto highlight = processMergedPlatformHighlights(*merged);
+    triggerHighlightsAndAddMention(this, merged, highlight);
 
     this->addMessage(merged, MessageContext::Repost);
 }

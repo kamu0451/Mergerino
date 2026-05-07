@@ -32,6 +32,7 @@
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/PixmapButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
+#include "widgets/ChatterListWidget.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/helper/CommonTexts.hpp"
 #include "widgets/helper/ChannelView.hpp"
@@ -41,17 +42,29 @@
 #include "widgets/TooltipWidget.hpp"
 
 #include <QDrag>
+#include <QDateTime>
+#include <QDesktopServices>
+#include <QEvent>
+#include <QFileDialog>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPointer>
+#include <QRegularExpression>
+#include <QSaveFile>
+#include <QTextStream>
 #include <QTimer>
+#include <QUrl>
 
 #include <cmath>
+#include <functional>
 #include <limits>
+#include <utility>
 
 namespace {
 
@@ -378,6 +391,69 @@ QPixmap tintPixmap(const QPixmap &source, const QColor &color)
     return tinted;
 }
 
+void openUrlInBrowser(const QUrl &url)
+{
+    if (url.isValid())
+    {
+        QDesktopServices::openUrl(url);
+    }
+}
+
+const TwitchChannel *viewerListTwitchChannel(Channel *channel)
+{
+    if (auto *twitch = dynamic_cast<TwitchChannel *>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel))
+    {
+        return dynamic_cast<TwitchChannel *>(merged->twitchChannel().get());
+    }
+
+    return nullptr;
+}
+
+class ClickableSubmenuActionFilter final : public QObject
+{
+public:
+    ClickableSubmenuActionFilter(QMenu *menu, QAction *action,
+                                 std::function<void()> onClick)
+        : QObject(menu)
+        , menu_(menu)
+        , action_(action)
+        , onClick_(std::move(onClick))
+    {
+    }
+
+    bool eventFilter(QObject *watched, QEvent *event) override
+    {
+        if (watched != this->menu_ ||
+            event->type() != QEvent::MouseButtonRelease ||
+            this->menu_->activeAction() != this->action_)
+        {
+            return QObject::eventFilter(watched, event);
+        }
+
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() != Qt::LeftButton ||
+            !this->menu_->actionGeometry(this->action_).contains(
+                mouseEvent->pos()))
+        {
+            return QObject::eventFilter(watched, event);
+        }
+
+        this->onClick_();
+        this->menu_->close();
+        return true;
+    }
+
+private:
+    QMenu *menu_{};
+    QAction *action_{};
+    std::function<void()> onClick_;
+};
+
 }  // namespace
 
 namespace chatterino {
@@ -523,7 +599,7 @@ void SplitHeader::initializeLayout()
         this->alertsButton_,
         // moderator
         this->moderationButton_,
-        // chatter list
+        // viewer list
         this->chattersButton_,
         // activity clear
         this->clearActivityButton_,
@@ -612,6 +688,19 @@ bool SplitHeader::eventFilter(QObject *watched, QEvent *event)
 
     if (target != nullptr)
     {
+        if (watched == this->titleLabel_ &&
+            eventType == QEvent::MouseButtonPress)
+        {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::RightButton)
+            {
+                this->hideHoverTooltip();
+                this->popupMainMenu(
+                    target->mapToGlobal(mouseEvent->pos() + QPoint(0, 4)));
+                return true;
+            }
+        }
+
         if (eventType == QEvent::Enter)
         {
             if (watched == this->titleLabel_)
@@ -632,7 +721,7 @@ bool SplitHeader::eventFilter(QObject *watched, QEvent *event)
             else if (watched == this->alertsButton_ &&
                      this->alertsButton_->isVisible())
             {
-                this->showHoverTooltip(target, "Toggle the linked activity tab.",
+                this->showHoverTooltip(target, "Toggle the activity tab.",
                                        false);
             }
             else if (watched == this->moderationButton_ &&
@@ -818,6 +907,7 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
                     this->split_, [this] {
                         this->split_->showSearch(true);
                     });
+    menu->addAction("Export chat", this, &SplitHeader::exportChat);
     if (this->split_->isActivityPane())
     {
         menu->addAction("Settings", this->split_, &Split::showSettingsDialog);
@@ -896,6 +986,34 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
         }
 
         menu->addSeparator();
+    }
+
+    if (auto *mergedChannel =
+            dynamic_cast<MergedChannel *>(this->split_->getChannel().get()))
+    {
+        const auto streamUrls = mergedChannel->liveStreamBrowserUrls();
+        if (!streamUrls.empty())
+        {
+            auto *streamMenu = new QMenu("Open stream in browser", menu.get());
+            for (const auto &streamUrl : streamUrls)
+            {
+                streamMenu->addAction(streamUrl.platformName, this,
+                                      [url = streamUrl.url] {
+                                          openUrlInBrowser(url);
+                                      });
+            }
+
+            auto *streamAction = menu->addMenu(streamMenu);
+            const auto defaultUrl = streamUrls.front().url;
+            auto openDefault = [defaultUrl] {
+                openUrlInBrowser(defaultUrl);
+            };
+            QObject::connect(streamAction, &QAction::triggered, this,
+                             openDefault);
+            menu->installEventFilter(new ClickableSubmenuActionFilter(
+                menu.get(), streamAction, std::move(openDefault)));
+            menu->addSeparator();
+        }
     }
 
     if (this->split_->getChannel()->getType() == Channel::Type::TwitchWhispers)
@@ -981,16 +1099,19 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
         moreMenu->addAction(action);
     }
 
+    if (auto *viewerListChannel =
+            viewerListTwitchChannel(this->split_->getChannel().get());
+        !this->split_->isActivityPane() && viewerListChannel &&
+        viewerListChannel->hasModRights())
+    {
+        moreMenu->addAction(
+            "Show viewer list",
+            h->getDisplaySequence(HotkeyCategory::Split, "openViewerList"),
+            this->split_, &Split::openChatterList);
+    }
+
     if (twitchChannel)
     {
-        if (twitchChannel->hasModRights())
-        {
-            moreMenu->addAction(
-                "Show chatter list",
-                h->getDisplaySequence(HotkeyCategory::Split, "openViewerList"),
-                this->split_, &Split::openChatterList);
-        }
-
         moreMenu->addAction("Subscribe",
                             h->getDisplaySequence(HotkeyCategory::Split,
                                                   "openSubscriptionPage"),
@@ -1067,6 +1188,102 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
     menu->addMenu(moreMenu);
 
     return menu;
+}
+
+void SplitHeader::exportChat()
+{
+    const auto channel = this->split_->getChannel();
+    if (!channel || channel->isEmpty())
+    {
+        return;
+    }
+
+    auto fileNameBase = channel->getDisplayName().trimmed();
+    if (fileNameBase.isEmpty())
+    {
+        fileNameBase = QStringLiteral("chat");
+    }
+    static const QRegularExpression invalidFileChars(
+        QStringLiteral(R"([\\/:*?"<>|])"));
+    fileNameBase.replace(invalidFileChars, QStringLiteral("_"));
+
+    const auto defaultFileName =
+        QStringLiteral("%1-%2.txt")
+            .arg(fileNameBase,
+                 QDateTime::currentDateTime().toString(
+                     QStringLiteral("yyyyMMdd-HHmmss")));
+
+    const auto path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Export chat"), defaultFileName,
+        QStringLiteral("Text files (*.txt);;All files (*)"));
+    if (path.isEmpty())
+    {
+        return;
+    }
+
+    QSaveFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+    {
+        QMessageBox::warning(
+            this, QStringLiteral("Export chat"),
+            QStringLiteral("Couldn't write the chat export file."));
+        return;
+    }
+
+    QTextStream stream(&file);
+    stream.setEncoding(QStringConverter::Utf8);
+
+    const auto snapshot = channel->getMessageSnapshot();
+    for (const auto &message : snapshot)
+    {
+        if (!message)
+        {
+            continue;
+        }
+
+        const auto timestamp =
+            message->serverReceivedTime.isValid()
+                ? message->serverReceivedTime.toString(
+                      QStringLiteral("yyyy-MM-dd HH:mm:ss"))
+                : message->parseTime.toString(QStringLiteral("HH:mm:ss"));
+        auto author = message->displayName.trimmed();
+        if (author.isEmpty())
+        {
+            author = message->loginName.trimmed();
+        }
+
+        QString platformCode;
+        switch (message->platform)
+        {
+            case MessagePlatform::Kick:
+                platformCode = QStringLiteral("K");
+                break;
+            case MessagePlatform::YouTube:
+                platformCode = QStringLiteral("YT");
+                break;
+            case MessagePlatform::TikTok:
+                platformCode = QStringLiteral("TT");
+                break;
+            case MessagePlatform::AnyOrTwitch:
+            default:
+                platformCode = QStringLiteral("T");
+                break;
+        }
+
+        stream << '[' << platformCode << '-' << timestamp << "] ";
+        if (!author.isEmpty())
+        {
+            stream << author << ": ";
+        }
+        stream << message->messageText << '\n';
+    }
+
+    if (!file.commit())
+    {
+        QMessageBox::warning(
+            this, QStringLiteral("Export chat"),
+            QStringLiteral("Couldn't finish writing the chat export file."));
+    }
 }
 
 std::unique_ptr<QMenu> SplitHeader::createChatModeMenu()
@@ -1163,6 +1380,13 @@ std::unique_ptr<QMenu> SplitHeader::createChatModeMenu()
                      });
 
     return menu;
+}
+
+void SplitHeader::popupMainMenu(const QPoint &globalPosition)
+{
+    auto *menu = this->createMainMenu().release();
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    menu->popup(globalPosition);
 }
 
 void SplitHeader::updateRoomModes()
@@ -1402,40 +1626,25 @@ void SplitHeader::updateIcons()
         this->queuedSlowChatCountLabel_->setText(QString());
         this->alertsButton_->hide();
         this->moderationButton_->hide();
+        this->chattersButton_->hide();
         this->clearActivityButton_->show();
-
-        if (channel->hasModRights() && channel->isTwitchChannel())
-        {
-            this->chattersButton_->show();
-        }
-        else
-        {
-            this->chattersButton_->hide();
-        }
 
         return;
     }
     this->clearActivityButton_->hide();
 
+    QString queuedSlowChatText;
     if (this->slowChatQueueIndicatorReady_)
     {
         const int queuedSlowChatMessages =
             this->split_->getChannelView().pendingSlowChatMessageCount();
         if (this->split_->slowerChatEnabled() && queuedSlowChatMessages > 0)
         {
-            this->queuedSlowChatCountLabel_->setText(
-                localizeNumbers(queuedSlowChatMessages));
-        }
-        else
-        {
-            this->queuedSlowChatCountLabel_->setText(QString());
+            queuedSlowChatText = localizeNumbers(queuedSlowChatMessages);
         }
     }
-    else
-    {
-        this->queuedSlowChatCountLabel_->setText(QString());
-    }
-    this->queuedSlowChatCountLabel_->show();
+    this->queuedSlowChatCountLabel_->setText(queuedSlowChatText);
+    this->queuedSlowChatCountLabel_->setVisible(!queuedSlowChatText.isEmpty());
 
     this->alertsButton_->show();
     this->alertsButton_->setColor(this->split_->hasLinkedActivityPane()
@@ -1471,18 +1680,27 @@ void SplitHeader::updateIcons()
             this->moderationButton_->hide();
         }
 
-        if (channel->hasModRights() && channel->isTwitchChannel())
+        if (auto *viewerListChannel = viewerListTwitchChannel(channel.get());
+            viewerListChannel && viewerListChannel->hasModRights())
         {
+            const auto viewerListOpen =
+                !this->split_->findChildren<ChatterListWidget *>().isEmpty();
+            this->chattersButton_->setColor(
+                viewerListOpen ? std::optional<QColor>(activityActive)
+                               : std::optional<QColor>(activityInactive));
             this->chattersButton_->show();
         }
         else
         {
+            this->chattersButton_->setColor(
+                std::optional<QColor>(activityInactive));
             this->chattersButton_->hide();
         }
     }
     else
     {
         this->moderationButton_->hide();
+        this->chattersButton_->setColor(std::optional<QColor>(activityInactive));
         this->chattersButton_->hide();
     }
 }
@@ -1520,9 +1738,7 @@ void SplitHeader::mousePressEvent(QMouseEvent *event)
         break;
 
         case Qt::RightButton: {
-            auto *menu = this->createMainMenu().release();
-            menu->setAttribute(Qt::WA_DeleteOnClose);
-            menu->popup(this->mapToGlobal(event->pos() + QPoint(0, 4)));
+            this->popupMainMenu(this->mapToGlobal(event->pos() + QPoint(0, 4)));
         }
         break;
 

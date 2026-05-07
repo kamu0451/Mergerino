@@ -15,12 +15,14 @@ namespace chatterino {
 SettingsDialogTab::SettingsDialogTab(SettingsDialog *_dialog,
                                      std::function<SettingsPage *()> _lazyPage,
                                      const QString &name, QString imageFileName,
-                                     SettingsTabId id)
+                                     SettingsTabId id,
+                                     QStringList searchKeywords)
     : BaseWidget(_dialog)
     , dialog_(_dialog)
     , lazyPage_(std::move(_lazyPage))
     , id_(id)
     , name_(name)
+    , searchKeywords_(std::move(searchKeywords))
 {
     this->ui_.labelText = name;
     this->ui_.icon.addFile(imageFileName);
@@ -53,6 +55,34 @@ SettingsPage *SettingsDialogTab::page()
     this->page_ = this->lazyPage_();
     this->page_->setTab(this);
     return this->page_;
+}
+
+SettingsPage *SettingsDialogTab::createdPage() const
+{
+    return this->page_;
+}
+
+bool SettingsDialogTab::matchesSearch(const QString &query) const
+{
+    if (query.isEmpty())
+    {
+        return true;
+    }
+
+    if (this->name_.contains(query, Qt::CaseInsensitive))
+    {
+        return true;
+    }
+
+    for (const auto &keyword : this->searchKeywords_)
+    {
+        if (keyword.contains(query, Qt::CaseInsensitive))
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 void SettingsDialogTab::paintEvent(QPaintEvent *)

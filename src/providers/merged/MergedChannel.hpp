@@ -14,6 +14,7 @@
 #include <pajlada/signals/signalholder.hpp>
 #include <QColor>
 #include <QString>
+#include <QUrl>
 
 #include <memory>
 #include <unordered_map>
@@ -45,6 +46,11 @@ struct MergedChannelConfig {
 class MergedChannel final : public Channel, public ChannelChatters
 {
 public:
+    struct LiveStreamBrowserUrl {
+        QString platformName;
+        QUrl url;
+    };
+
     explicit MergedChannel(MergedChannelConfig config);
     ~MergedChannel() override;
 
@@ -67,6 +73,7 @@ public:
 
     QString statusSuffix() const;
     QString tooltipText() const;
+    std::vector<LiveStreamBrowserUrl> liveStreamBrowserUrls() const;
 
     ChannelPtr twitchChannel() const;
     ChannelPtr kickChannel() const;

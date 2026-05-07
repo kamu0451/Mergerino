@@ -1,5 +1,15 @@
 Patch Notes
 
+07/05/2026
+- Added Export Chat setting
+- Added patch notes popup after updating
+- Added log user setting
+- Added viewerlist for Moderators
+- Added Twitch predictions and polls (read only)
+- Added multi-search function to logs and viewerlist
+- Fixed a bug causing YouTube streams to show as live after ending
+- Improved YouTube chat performance
+
 29/04/2026
 - Added recent message history
 - Added uptime to stream info preview

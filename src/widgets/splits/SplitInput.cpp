@@ -501,6 +501,7 @@ void SplitInput::initLayout()
         buttonHbox->setSpacing(0);
 
         this->ui_.platformButton = new PlatformSwitchButton();
+        this->ui_.platformButton->setPaintOffset(QPoint{0, -2});
         buttonHbox->addWidget(this->ui_.platformButton);
 
         this->ui_.emoteButton = new SvgButton(
@@ -510,6 +511,7 @@ void SplitInput::initLayout()
             },
             nullptr, QSize{4, 1});
         this->ui_.emoteButton->setContentSize(QSize{16, 16});
+        this->ui_.emoteButton->setPaintOffset(QPoint{0, -2});
         buttonHbox->addWidget(this->ui_.emoteButton);
         buttonHbox->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     }

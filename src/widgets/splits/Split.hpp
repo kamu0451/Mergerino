@@ -24,6 +24,7 @@ namespace chatterino {
 class ChannelView;
 class SplitHeader;
 class SplitInput;
+class TwitchPollsAndPredictionsBar;
 class SplitContainer;
 class SplitOverlay;
 class SelectChannelDialog;
@@ -207,6 +208,7 @@ private:
 
     QVBoxLayout *const vbox_;
     SplitHeader *const header_;
+    TwitchPollsAndPredictionsBar *const twitchPollsAndPredictionsBar_;
     ChannelView *const view_;
     SplitInput *const input_;
     SplitOverlay *const overlay_;

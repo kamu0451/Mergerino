@@ -67,6 +67,8 @@
 #include "util/Helpers.hpp"
 #include "util/ObsBrowserDockServer.hpp"
 #include "util/PostToThread.hpp"
+#include "util/WidgetHelpers.hpp"
+#include "widgets/dialogs/UpdateDialog.hpp"
 #include "widgets/Notebook.hpp"
 #include "widgets/splits/Split.hpp"
 #include "widgets/Window.hpp"
@@ -269,7 +271,13 @@ void Application::initialize(Settings &settings, const Paths &paths)
 
     if (!this->args_.isFramelessEmbed)
     {
-        getSettings()->currentVersion.setValue(CHATTERINO_VERSION);
+        const auto previousVersion = settings.currentVersion.getValue();
+        if (!previousVersion.isEmpty() &&
+            previousVersion != CHATTERINO_VERSION)
+        {
+            this->previousVersionForPatchNotes_ = previousVersion;
+        }
+        settings.currentVersion.setValue(CHATTERINO_VERSION);
     }
     this->emotes->initialize();
 
@@ -340,17 +348,38 @@ int Application::run()
 {
     assert(this->initialized);
 
-    this->twitch->connect();
-
     if (!this->args_.isFramelessEmbed)
     {
         auto &mainWindow = this->windows->getMainWindow();
         mainWindow.show();
 
+        const auto showPostUpdateDialog = [&mainWindow] {
+            auto *dialog =
+                new PostUpdateDialog(CHATTERINO_DISPLAY_VERSION, &mainWindow);
+            const auto position = mainWindow.mapToGlobal(QPoint{
+                (mainWindow.width() - dialog->width()) / 2,
+                48,
+            });
+            widgets::showAndMoveWindowTo(
+                dialog, position, widgets::BoundsChecking::DesiredPosition);
+            dialog->raise();
+            dialog->activateWindow();
+        };
+
 #ifdef USEWINSDK
-        QTimer::singleShot(0, &mainWindow, [&mainWindow] {
+        QTimer::singleShot(0, &mainWindow, [this, &mainWindow,
+                                            showPostUpdateDialog] {
             maybePromptForStartup(&mainWindow);
+            if (!this->previousVersionForPatchNotes_.isEmpty())
+            {
+                showPostUpdateDialog();
+            }
         });
+#else
+        if (!this->previousVersionForPatchNotes_.isEmpty())
+        {
+            QTimer::singleShot(0, &mainWindow, showPostUpdateDialog);
+        }
 #endif
         QTimer::singleShot(3000, &mainWindow, [] {
             getApp()->getUpdates().checkForUpdates();
@@ -372,6 +401,10 @@ int Application::run()
             this->twitch->reloadAllSevenTVChannelEmotes();
         },
         false);
+
+    QTimer::singleShot(0, [this] {
+        this->twitch->connect();
+    });
 
     return QApplication::exec();
 }

@@ -91,6 +91,9 @@ public:
     /// Setter for #mouseEffectColor()
     void setMouseEffectColor(std::optional<QColor> color);
 
+    /// Sets a visual paint offset without moving the button hitbox.
+    void setPaintOffset(QPoint offset);
+
     /// @brief Returns the menu associated with this button.
     ///
     /// The menu is shown when pressing the left mouse button.
@@ -212,6 +215,7 @@ private:
     QTimer effectTimer_;
     std::vector<ClickEffect> clickEffects_;
     std::optional<QColor> mouseEffectColor_;
+    QPoint paintOffset_{0, 0};
 
     bool enabled_ = true;
     bool mouseOver_ = false;

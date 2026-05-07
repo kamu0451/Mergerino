@@ -110,6 +110,7 @@ private:
     void setMergedDefaults();
     void loadMergedDefaultsFromChannel(const IndirectChannel &indirectChannel);
     void syncMergedFieldState();
+    void updateDialogSize();
     void updateSlowerChatVisibility(bool animate = true);
     void applySlowerChatRateVisibilityProgress(qreal progress);
     bool buildMergedSelection();

@@ -448,6 +448,13 @@ struct TikTokLiveChat::Impl {
     // the TikTok login wall. Idempotent.
     void autoHideLoginHost(const QString &username);
 
+    // Helper: promote the hidden 1x1 host to a visible login window when
+    // TikTok's room/info response indicates auth has expired. Lifts the
+    // WebResourceRequested handler so images/fonts render, resizes the
+    // window, makes the controller visible, and reloads. Idempotent until
+    // autoHideLoginHost() runs.
+    void promoteToLoginHost(const QString &username);
+
     // Dedicated single-thread pool for offloading protobuf decode off the UI
     // thread. Single-threaded on purpose: preserves frame ordering so chat
     // messages don't show up reordered under bursty traffic.
@@ -593,6 +600,60 @@ void TikTokLiveChat::Impl::autoHideLoginHost(const QString &username)
             << "[" << other->username_
             << "] login-mode auto-hide propagated";
     }
+}
+
+void TikTokLiveChat::Impl::promoteToLoginHost(const QString &username)
+{
+    if (this->host == nullptr)
+    {
+        return;
+    }
+    if (this->loginVisible && !this->loginAutoHidden)
+    {
+        return;
+    }
+
+    // Stop the resource-block handler so the login UI can render images,
+    // fonts, and CDN assets. The filter registrations stay in place but
+    // become inert without a handler attached.
+    if (this->webview && this->resReqToken.value != 0)
+    {
+        this->webview->remove_WebResourceRequested(this->resReqToken);
+        this->resReqToken = {};
+    }
+
+    // Restyle the popup-1x1 host as a normal resizable window with a title
+    // bar so the user can interact with it and close it manually if needed.
+    LONG_PTR style = GetWindowLongPtrW(this->host, GWL_STYLE);
+    style &= ~static_cast<LONG_PTR>(WS_POPUP);
+    style |= WS_OVERLAPPEDWINDOW;
+    SetWindowLongPtrW(this->host, GWL_STYLE, style);
+    SetWindowTextW(this->host,
+                   L"TikTok sign-in required - log in to resume chat");
+    SetWindowPos(this->host, HWND_TOP, 100, 100, 1280, 800,
+                 SWP_FRAMECHANGED | SWP_NOACTIVATE);
+    ShowWindow(this->host, SW_SHOW);
+
+    if (this->controller)
+    {
+        RECT rb{0, 0, 1280, 800};
+        this->controller->put_Bounds(rb);
+        this->controller->put_IsVisible(TRUE);
+    }
+
+    this->loginVisible = true;
+    this->loginAutoHidden = false;
+
+    // Reload so the page re-renders with full assets now that the resource
+    // handler is detached; the previous load may have rendered the login
+    // prompt with broken images/fonts.
+    if (this->webview)
+    {
+        this->webview->Reload();
+    }
+
+    qCDebug(chatterinoTikTok).nospace()
+        << "[" << username << "] promoted host to login window (auth expired)";
 }
 
 void TikTokLiveChat::releaseSharedEnvironment()
@@ -1231,6 +1292,10 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         if (this->impl_)
         {
             this->impl_->stuckConnectionTimer.stop();
+            // Auto-prompt: surface the WebView2 host so the user can
+            // re-authenticate. Once chat frames start flowing,
+            // autoHideLoginHost() will hide it again automatically.
+            this->impl_->promoteToLoginHost(this->username_);
         }
         this->setStatusText(
             QStringLiteral("TikTok: sign-in required to view %1")
@@ -1777,12 +1842,19 @@ void TikTokLiveChat::processDecodedFrame(const tiktok::DecodedFrame &frame)
     {
         this->impl_->autoHideLoginHost(this->username_);
     }
-    // Liveness watchdog evidence. Only count signals that are unambiguous
-    // proof of an active broadcast: chat and gift frames. Viewer-count,
-    // member-join, social, and like frames continue to flow (or get
-    // replayed) for a while after a stream ends, so feeding them in here
-    // would defeat the watchdog.
-    if (hasLiveContent && this->impl_ && this->live_)
+    // Liveness watchdog evidence. Earlier this only counted chat and gift
+    // frames, on the theory that viewer/member/social/like frames may
+    // replay briefly after a stream ends. In practice that gates
+    // proof-of-life too tightly: low-chat rooms (music streams, small
+    // audiences) routinely go 3+ minutes without a chat or gift frame and
+    // the watchdog mis-fires on a still-live stream. Also accept any frame
+    // carrying a real webcast method or a positive viewer-count update.
+    // The authoritative offline signal is still check_alive reporting
+    // alive=false, which calls setLive(false) directly and trumps any
+    // watchdog evidence.
+    const bool watchdogEvidence =
+        hasLiveContent || sawRealMethod || frame.roomViewerCount > 0;
+    if (watchdogEvidence && this->impl_ && this->live_)
     {
         this->impl_->lastLiveEvidenceMs =
             QDateTime::currentMSecsSinceEpoch();

@@ -2107,8 +2107,18 @@ void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs)
     this->liveChatSessionRefreshTimer_.invalidate();
     this->liveChatProgressTimer_.invalidate();
     this->resetInnertubeContext();
-    this->setStatusText(std::move(text), !this->failureReported_);
-    this->failureReported_ = true;
+    // Stay silent on a single transient blip: a one-off poll error usually
+    // recovers on the next cycle without the user ever needing to know.
+    // Only push a chat system message once we've seen 2+ consecutive
+    // recoveries since the last successful poll. failureReported_ still
+    // dedupes within a sustained-failure streak.
+    const bool notifyAsSystemMessage =
+        this->consecutiveRecoveries_ >= 2 && !this->failureReported_;
+    this->setStatusText(std::move(text), notifyAsSystemMessage);
+    if (this->consecutiveRecoveries_ >= 2)
+    {
+        this->failureReported_ = true;
+    }
 
     QTimer::singleShot(retryDelayMs,
                        guardedCallback(this->lifetimeGuard_, [this] {

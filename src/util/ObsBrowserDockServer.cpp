@@ -1664,7 +1664,9 @@ QByteArray ObsBrowserDockServer::overlayPageHtml() const
     function trim() {
       while (order.length > maxMessages) {
         const id = order.shift();
-        seen.delete(id);
+        // Keep id in `seen` so the next poll does not re-append the same
+        // message (it is still in mergerino's snapshot, which is larger
+        // than maxMessages, and would otherwise loop append / trim forever).
         const node = feed.querySelector(`[data-id="${CSS.escape(id)}"]`);
         if (node) {
           node.remove();

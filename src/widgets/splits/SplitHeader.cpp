@@ -813,14 +813,7 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
                     this->split_, [this] {
                         this->split_->showSearch(true);
                     });
-    if (this->split_->isActivityPane())
-    {
-        menu->addAction("Settings", this->split_, &Split::showSettingsDialog);
-    }
-    else
-    {
-        menu->addAction("Settings", this->split_, &Split::changeChannel);
-    }
+    menu->addAction("Settings", this->split_, &Split::showSettingsDialog);
     menu->addSeparator();
 
     auto *twitchChannel =

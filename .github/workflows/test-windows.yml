@@ -26,7 +26,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [windows-latest]
+        # Pinned to windows-2022: windows-latest now resolves to
+        # windows-2025-vs2026, whose MSVC v15 trips Conan 2.11's
+        # `profile detect` ("Invalid setting '15' ... compiler.version").
+        os: [windows-2022]
         qt-version: [6.9.3]
       fail-fast: false
     env:

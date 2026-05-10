@@ -17,7 +17,10 @@ env:
 jobs:
   build-windows:
     name: "Build Windows x64"
-    runs-on: windows-latest
+    # Pinned to windows-2022: windows-latest now resolves to
+    # windows-2025-vs2026, whose MSVC v15 trips Conan 2.11's
+    # `profile detect` ("Invalid setting '15' ... compiler.version").
+    runs-on: windows-2022
 
     steps:
       - uses: actions/checkout@v6

@@ -1407,10 +1407,24 @@ void SplitHeader::updateChannelText()
     else if (auto *mergedChannel = dynamic_cast<MergedChannel *>(channel.get()))
     {
         this->isLive_ = mergedChannel->isLive();
-        this->tooltipText_ = this->mergedStreamPreviewTooltip(mergedChannel);
-        if (this->tooltipText_.isEmpty())
+        // Show the per-platform breakdown (Twitch/Kick/YouTube/TikTok with
+        // live/offline + viewer count) so the merged-tab tooltip explains
+        // where the combined viewer-count total comes from. When one of the
+        // platforms has a usable stream preview (thumbnail + title) prepend
+        // it above the breakdown.
+        const auto preview = this->mergedStreamPreviewTooltip(mergedChannel);
+        const auto breakdown = mergedChannel->tooltipText();
+        if (!preview.isEmpty() && !breakdown.isEmpty())
         {
-            this->tooltipText_ = mergedChannel->tooltipText();
+            this->tooltipText_ = preview + "<br>" + breakdown;
+        }
+        else if (!preview.isEmpty())
+        {
+            this->tooltipText_ = preview;
+        }
+        else
+        {
+            this->tooltipText_ = breakdown;
         }
         if (this->isLive_)
         {

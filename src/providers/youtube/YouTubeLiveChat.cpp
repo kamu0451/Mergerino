@@ -74,6 +74,10 @@ constexpr int YOUTUBE_BLOCKED_RETRY_DELAY_MS = 60000;
 constexpr int YOUTUBE_SESSION_REFRESH_MS = 10 * 60 * 1000;
 constexpr int YOUTUBE_HEALTH_CHECK_INTERVAL_MS = 10000;
 constexpr int YOUTUBE_STALL_TIMEOUT_MS = 30000;
+// /updated_metadata polling cadence. Long enough to be cheap (one extra POST
+// per video per cycle), short enough that the merged-tab viewer count tracks
+// the YouTube watch page within a reasonable window.
+constexpr int YOUTUBE_VIEWER_COUNT_REFRESH_MS = 15000;
 
 std::vector<std::pair<QByteArray, QByteArray>> youtubeHeaders()
 {
@@ -1853,13 +1857,10 @@ void YouTubeLiveChat::poll()
             }
 
             auto actions = continuation["actions"].toArray();
-            const auto viewerCount = parseViewerCount(
-                continuation["viewerCount"]);
-            if (viewerCount > 0 && viewerCount != this->liveViewerCount_)
-            {
-                this->liveViewerCount_ = viewerCount;
-                this->viewerCountChanged.invoke();
-            }
+            // YouTube no longer ships viewer count inside the live_chat
+            // continuation (the field comes back null). The count lives on
+            // the /updated_metadata endpoint instead - see
+            // fetchUpdatedMetadata(), scheduled from setLive(true).
 
             int deliveredMessageCount = 0;
             for (const auto &actionValue : actions)
@@ -2057,6 +2058,107 @@ void YouTubeLiveChat::scheduleResolve(int delayMs)
                        }));
 }
 
+void YouTubeLiveChat::scheduleUpdatedMetadata(int delayMs)
+{
+    QTimer::singleShot(delayMs,
+                       guardedCallback(this->lifetimeGuard_, [this] {
+                           if (!this->running_ || !this->live_)
+                           {
+                               return;
+                           }
+                           this->fetchUpdatedMetadata();
+                       }));
+}
+
+void YouTubeLiveChat::fetchUpdatedMetadata()
+{
+    if (!this->running_ || !this->live_ || this->videoId_.isEmpty())
+    {
+        return;
+    }
+    if (this->apiKey_.isEmpty() || this->clientVersion_.isEmpty())
+    {
+        // Bootstrap is owned by fetchLiveChatPage. Wait for the next chat
+        // poll cycle to finish bootstrapping; we'll be re-armed from setLive
+        // / fetchUpdatedMetadata's own re-schedule.
+        this->scheduleUpdatedMetadata(YOUTUBE_VIEWER_COUNT_REFRESH_MS);
+        return;
+    }
+
+    const auto requestedVideoId = this->videoId_;
+    const auto url =
+        QString("https://www.youtube.com/youtubei/v1/updated_metadata"
+                "?prettyPrint=false&key=%1")
+            .arg(this->apiKey_);
+    QJsonObject root{
+        {"context",
+         QJsonObject{{"client", makeYoutubeClientContext(this->clientVersion_)}}},
+        {"videoId", requestedVideoId},
+    };
+
+    auto request = NetworkRequest(url.toStdString())
+                       .type(NetworkRequestType::Post)
+                       .headerList(youtubeHeaders())
+                       .json(root)
+                       .timeout(15000)
+                       .header("Referer",
+                               QString("https://www.youtube.com/watch?v=%1")
+                                   .arg(requestedVideoId));
+    if (!this->visitorData_.isEmpty())
+    {
+        request = std::move(request).header("X-Goog-Visitor-Id",
+                                            this->visitorData_);
+    }
+
+    std::move(request)
+        .onSuccess(guardedCallback(
+            this->lifetimeGuard_,
+            [this, requestedVideoId](const NetworkResult &result) {
+                if (!this->running_ || this->videoId_ != requestedVideoId)
+                {
+                    return;
+                }
+                const auto json = result.parseJson();
+                uint64_t viewerCount = 0;
+                for (const auto &actionValue : json["actions"].toArray())
+                {
+                    const auto action = actionValue.toObject();
+                    const auto renderer =
+                        action["updateViewershipAction"]
+                            .toObject()["viewCount"]
+                            .toObject()["videoViewCountRenderer"]
+                            .toObject();
+                    if (renderer.isEmpty())
+                    {
+                        continue;
+                    }
+                    viewerCount = parseViewerCount(renderer["viewCount"]);
+                    if (viewerCount == 0)
+                    {
+                        viewerCount = parseViewerCount(
+                            renderer["originalViewCount"]);
+                    }
+                    if (viewerCount > 0)
+                    {
+                        break;
+                    }
+                }
+                if (viewerCount > 0 && viewerCount != this->liveViewerCount_)
+                {
+                    this->liveViewerCount_ = viewerCount;
+                    this->viewerCountChanged.invoke();
+                }
+                this->scheduleUpdatedMetadata(
+                    YOUTUBE_VIEWER_COUNT_REFRESH_MS);
+            }))
+        .onError(guardedCallback(
+            this->lifetimeGuard_, [this](const NetworkResult &) {
+                this->scheduleUpdatedMetadata(
+                    YOUTUBE_VIEWER_COUNT_REFRESH_MS);
+            }))
+        .execute();
+}
+
 void YouTubeLiveChat::recoverLiveChat(QString text, int retryDelayMs)
 {
     // Don't drop live_ on every call. recoverLiveChat fires on every
@@ -2186,6 +2288,10 @@ void YouTubeLiveChat::setLive(bool live)
         << "\")";
     this->live_ = live;
     this->liveStatusChanged.invoke();
+    if (live)
+    {
+        this->fetchUpdatedMetadata();
+    }
 }
 
 void YouTubeLiveChat::setStatusText(QString text, bool notifyAsSystemMessage)

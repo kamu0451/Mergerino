@@ -90,6 +90,8 @@ private:
     void schedulePoll(int delayMs);
     void scheduleHealthCheck(int delayMs);
     void scheduleResolve(int delayMs);
+    void fetchUpdatedMetadata();
+    void scheduleUpdatedMetadata(int delayMs);
     bool videoIdRecentlyFailed(const QString &videoId) const;
     void recoverLiveChat(QString text, int retryDelayMs);
     void waitForNextLive(QString text, int retryDelayMs);

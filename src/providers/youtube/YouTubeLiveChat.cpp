@@ -2143,6 +2143,9 @@ void YouTubeLiveChat::fetchUpdatedMetadata()
                         break;
                     }
                 }
+                qCDebug(chatterinoYouTube).nospace()
+                    << "[" << this->streamUrl_
+                    << "] updated_metadata viewerCount=" << viewerCount;
                 if (viewerCount > 0 && viewerCount != this->liveViewerCount_)
                 {
                     this->liveViewerCount_ = viewerCount;
@@ -2152,7 +2155,11 @@ void YouTubeLiveChat::fetchUpdatedMetadata()
                     YOUTUBE_VIEWER_COUNT_REFRESH_MS);
             }))
         .onError(guardedCallback(
-            this->lifetimeGuard_, [this](const NetworkResult &) {
+            this->lifetimeGuard_, [this](const NetworkResult &result) {
+                qCDebug(chatterinoYouTube).nospace()
+                    << "[" << this->streamUrl_
+                    << "] updated_metadata error status="
+                    << result.status().value_or(-1);
                 this->scheduleUpdatedMetadata(
                     YOUTUBE_VIEWER_COUNT_REFRESH_MS);
             }))

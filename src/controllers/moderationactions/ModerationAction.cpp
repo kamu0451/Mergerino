@@ -144,8 +144,7 @@ const std::optional<ImagePtr> &ModerationAction::getImage() const
     }
     else if (this->type_ == Type::Delete)
     {
-        this->image_ = Image::fromResourcePixmap(
-            QPixmap(QStringLiteral(":/buttons/trash-lightMode.svg")));
+        this->image_ = Image::fromResourcePixmap(getResources().buttons.trashCan);
     }
 
     return this->image_;

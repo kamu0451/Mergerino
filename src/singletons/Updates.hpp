@@ -23,6 +23,7 @@ class Settings;
 class Updates
 {
     const Paths &paths;
+    Settings &settings_;
 
 public:
     Updates(const Paths &paths_, Settings &settings);

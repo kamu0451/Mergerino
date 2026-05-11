@@ -232,11 +232,6 @@ UpdateDialog::UpdateDialog()
         .assign(&this->ui_.label)
         ->setWordWrap(true);
 
-    auto patchNotes = layout.emplace<QTextEdit>().assign(&this->ui_.patchNotes);
-    patchNotes->setReadOnly(true);
-    patchNotes->setText(loadLatestPatchNotes());
-    patchNotes->setMinimumHeight(170);
-
     auto buttons = layout.emplace<QDialogButtonBox>();
 
     const auto *installText = [] {
@@ -266,7 +261,7 @@ UpdateDialog::UpdateDialog()
                                           this->updateStatusChanged(status);
                                       });
 
-    this->setScaleIndependentHeight(360);
+    this->setScaleIndependentHeight(160);
     this->setScaleIndependentWidth(380);
 }
 

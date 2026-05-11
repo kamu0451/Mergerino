@@ -127,6 +127,13 @@ jobs:
               -DCHATTERINO_SPELLCHECK=Off `
               ..
           cmake --build . --parallel
+          windeployqt bin/chatterino-test.exe `
+              --release `
+              --no-compiler-runtime `
+              --no-translations `
+              --no-opengl-sw `
+              --include-plugins qminimal `
+              --dir bin
         working-directory: build-test
 
       - name: Cache Twitch PubSub Server Test
@@ -166,6 +173,7 @@ jobs:
           cd ..\pubsub-server-test
           ./server 127.0.0.1:9050 127.0.0.1:9052 &
           cd ..\build-test
+          $Env:PATH = "$((Resolve-Path .\bin).Path);$Env:PATH"
           ctest --repeat until-pass:$Env:CTEST_REPEAT_COUNT --output-on-failure
         working-directory: build-test
 

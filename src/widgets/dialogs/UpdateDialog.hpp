@@ -11,7 +11,6 @@
 #include <QString>
 
 class QPushButton;
-class QTextEdit;
 
 namespace chatterino {
 
@@ -39,7 +38,6 @@ private:
 
     struct {
         Label *label = nullptr;
-        QTextEdit *patchNotes = nullptr;
         QPushButton *installButton = nullptr;
     } ui_;
 

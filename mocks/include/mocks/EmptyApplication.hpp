@@ -292,13 +292,6 @@ public:
         return nullptr;
     }
 
-    pronouns::Pronouns *getPronouns() override
-    {
-        assert(false && "EmptyApplication::getPronouns was called without "
-                        "being initialized");
-        return nullptr;
-    }
-
     eventsub::IController *getEventSub() override
     {
         assert(false && "EmptyApplication::getEventSub was called without "

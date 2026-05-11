@@ -800,6 +800,10 @@ public:
 
     IntSetting startUpNotification = {"/misc/startUpNotification", 0};
     QStringSetting currentVersion = {"/misc/currentVersion", ""};
+    QStringSetting pendingPostUpdateVersion = {
+        "/misc/pendingPostUpdateVersion",
+        "",
+    };
     IntSetting overlayKnowledgeLevel = {"/misc/overlayKnowledgeLevel", 0};
 
     BoolSetting loadTwitchMessageHistoryOnConnect = {

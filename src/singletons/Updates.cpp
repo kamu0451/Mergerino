@@ -10,6 +10,7 @@
 #include "common/QLogging.hpp"
 #include "common/Version.hpp"
 #include "singletons/Paths.hpp"
+#include "singletons/Settings.hpp"
 #include "util/CombinePath.hpp"
 #include "util/PostToThread.hpp"
 
@@ -119,10 +120,10 @@ namespace chatterino {
 
 Updates::Updates(const Paths &paths_, Settings &settings)
     : paths(paths_)
+    , settings_(settings)
     , currentVersion_(CHATTERINO_VERSION)
 {
     qCDebug(chatterinoUpdate) << "init UpdateManager";
-    (void)settings;
 }
 
 /// Checks if the online version is newer or older than the current version.
@@ -157,6 +158,19 @@ bool Updates::isDowngradeOf(const QString &online, const QString &current)
 
 void Updates::deleteOldFiles()
 {
+    const auto updateArchivePath = combinePath(this->paths.miscDirectory,
+                                              "update.zip");
+    const auto installScriptPath = combinePath(this->paths.miscDirectory,
+                                              "install-update.ps1");
+    const bool hasUpdateArtifacts =
+        QFile::exists(updateArchivePath) || QFile::exists(installScriptPath);
+    if (hasUpdateArtifacts &&
+        this->settings_.currentVersion.getValue() != CHATTERINO_VERSION)
+    {
+        this->settings_.pendingPostUpdateVersion = CHATTERINO_VERSION;
+        std::ignore = this->settings_.requestSave();
+    }
+
     std::ignore = QtConcurrent::run([dir{this->paths.miscDirectory}] {
         {
             auto path = combinePath(dir, "Update.exe");
@@ -438,6 +452,9 @@ Start-Process -FilePath (Join-Path $AppDir $ExeName) -WorkingDirectory $AppDir
                 this->setStatus_(RunUpdaterFailed);
                 return;
             }
+
+            this->settings_.pendingPostUpdateVersion = this->onlineVersion_;
+            std::ignore = this->settings_.requestSave();
 
             QApplication::quit();
         })

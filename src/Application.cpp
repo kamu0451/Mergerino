@@ -430,10 +430,30 @@ void Application::initialize(Settings &settings, const Paths &paths)
     if (!this->args_.isFramelessEmbed)
     {
         const auto previousVersion = settings.currentVersion.getValue();
-        if (!previousVersion.isEmpty() &&
-            previousVersion != CHATTERINO_VERSION)
+        const auto pendingPostUpdateVersion =
+            settings.pendingPostUpdateVersion.getValue();
+        const bool pendingPostUpdateForThisVersion =
+            !pendingPostUpdateVersion.isEmpty() &&
+            pendingPostUpdateVersion == CHATTERINO_VERSION;
+        const bool versionChanged =
+            !previousVersion.isEmpty() &&
+            previousVersion != CHATTERINO_VERSION;
+
+        if (pendingPostUpdateForThisVersion || versionChanged)
         {
-            this->previousVersionForPatchNotes_ = previousVersion;
+            this->previousVersionForPatchNotes_ =
+                previousVersion.isEmpty() ? pendingPostUpdateVersion
+                                          : previousVersion;
+        }
+        if (versionChanged)
+        {
+            settings.pendingPostUpdateVersion = CHATTERINO_VERSION;
+        }
+        else if (!pendingPostUpdateVersion.isEmpty() &&
+                 pendingPostUpdateVersion != CHATTERINO_VERSION &&
+                 previousVersion == CHATTERINO_VERSION)
+        {
+            settings.pendingPostUpdateVersion = "";
         }
         settings.currentVersion.setValue(CHATTERINO_VERSION);
     }
@@ -526,6 +546,16 @@ int Application::run()
         const auto showPostUpdateDialog = [&mainWindow] {
             auto *dialog =
                 new PostUpdateDialog(CHATTERINO_DISPLAY_VERSION, &mainWindow);
+            QObject::connect(dialog, &QObject::destroyed, &mainWindow, [] {
+                auto *settings = getSettings();
+                if (settings->pendingPostUpdateVersion.getValue() ==
+                    CHATTERINO_VERSION)
+                {
+                    settings->pendingPostUpdateVersion = "";
+                }
+                settings->currentVersion.setValue(CHATTERINO_VERSION);
+                settings->requestSave();
+            });
             const auto position = mainWindow.mapToGlobal(QPoint{
                 (mainWindow.width() - dialog->width()) / 2,
                 48,

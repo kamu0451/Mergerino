@@ -16,14 +16,30 @@ namespace {
 
 using namespace chatterino;
 
-const QRegularExpression ACTIVITY_GIFT_BOMB_SUMMARY_REGEX(
+struct ActivityGiftBombSummary {
+    QString name;
+    int count = 0;
+    QString unit;
+};
+
+const QRegularExpression ACTIVITY_COMMUNITY_GIFT_SUMMARY_REGEX(
     QStringLiteral(
-        R"(^(?:(.+?)\s+(?:is gifting|gifted)\s+|sent\s+)(\d+)\s+.*?\b(?:gift\s+)?(subs|subscriptions|memberships)\b(?:\s+to\b.*)?(?:!|\.)?(?: .*)?$)"),
+        R"(^(.+?)\s+(?:is gifting|gifted)\s+(\d+)\s+.*?\b(?:gift\s+)?(subscriptions|memberships|subs)\b(?:\s+to\b.*)?(?:!|\.)?(?:\s+.*)?$)"),
+    QRegularExpression::CaseInsensitiveOption);
+
+const QRegularExpression ACTIVITY_SENT_GIFT_SUMMARY_REGEX(
+    QStringLiteral(
+        R"(^sent\s+(\d+)\s+.*?\b(?:gift\s+)?(subscriptions|memberships|subs)\b(?:!|\.)?(?:\s+.*)?$)"),
+    QRegularExpression::CaseInsensitiveOption);
+
+const QRegularExpression ACTIVITY_COUNTED_GIFT_SUMMARY_REGEX(
+    QStringLiteral(
+        R"(^(.+?)\s+gifted\s+(\d+)\s+(?:(?:tier)\s+\d+\s+)?(?:gift\s+)?(subscriptions?|memberships?|subs?)\b\s+to\b.*$)"),
     QRegularExpression::CaseInsensitiveOption);
 
 const QRegularExpression ACTIVITY_GIFT_RECIPIENT_REGEX(
     QStringLiteral(
-        R"((?:^.+\s+gifted\s+(?:(?:an?\s+|\d+\s+months?\s+of\s+an?\s+).*)?\b(?:sub|subscription|membership)\b\s+to\s+.+(?:!|\.)?(?: .*)?$)|(?:^.+\s+gifted\s+\d+\s+months?\s+of\s+.+\s+to\s+.+(?:!|\.)?(?: .*)?$)|(?:^(?:.+\s+)?received\s+(?:a\s+gift\s+)?membership\s+(?:from|by)\s+.+(?:!|\.)?(?: .*)?$))"),
+        R"((?:^.+\s+gifted\s+(?:(?:an?\s+|\d+\s+months?\s+of\s+an?\s+).*)?\b(?:sub|subscription|membership)\b\s+to\s+.+(?:!|\.)?(?:\s+.*)?$)|(?:^.+\s+gifted\s+\d+\s+months?\s+of\s+.+\s+to\s+.+(?:!|\.)?(?:\s+.*)?$)|(?:^(?:.+\s+)?(?:received|was gifted)\s+(?:a\s+gift\s+|an?\s+)?(?:sub|subscription|membership)\s+(?:from|by)\s+.+(?:!|\.)?(?:\s+.*)?$))"),
     QRegularExpression::CaseInsensitiveOption);
 
 const QRegularExpression ACTIVITY_TWITCH_BITS_BADGE_REGEX(
@@ -42,9 +58,47 @@ QString normalizedActivityGiftUnit(const QString &matchedUnit, int count)
     return count == 1 ? QStringLiteral("sub") : QStringLiteral("subs");
 }
 
-QRegularExpressionMatch activityGiftBombSummaryMatch(const Message &message)
+std::optional<ActivityGiftBombSummary> activityGiftBombSummary(
+    const Message &message)
 {
-    return ACTIVITY_GIFT_BOMB_SUMMARY_REGEX.match(message.messageText);
+    if (!message.flags.has(MessageFlag::Subscription))
+    {
+        return std::nullopt;
+    }
+
+    if (const auto match =
+            ACTIVITY_COUNTED_GIFT_SUMMARY_REGEX.match(message.messageText);
+        match.hasMatch())
+    {
+        return ActivityGiftBombSummary{
+            .name = match.captured(1).trimmed(),
+            .count = match.captured(2).toInt(),
+            .unit = match.captured(3),
+        };
+    }
+
+    if (const auto match =
+            ACTIVITY_COMMUNITY_GIFT_SUMMARY_REGEX.match(message.messageText);
+        match.hasMatch())
+    {
+        return ActivityGiftBombSummary{
+            .name = match.captured(1).trimmed(),
+            .count = match.captured(2).toInt(),
+            .unit = match.captured(3),
+        };
+    }
+
+    if (const auto match =
+            ACTIVITY_SENT_GIFT_SUMMARY_REGEX.match(message.messageText);
+        match.hasMatch())
+    {
+        return ActivityGiftBombSummary{
+            .count = match.captured(1).toInt(),
+            .unit = match.captured(2),
+        };
+    }
+
+    return std::nullopt;
 }
 
 }  // namespace
@@ -154,18 +208,13 @@ bool shouldShowTikTokGiftInActivityPane(const Message &message,
 
 std::optional<int> getActivityGiftBombRecipientCount(const Message &message)
 {
-    if (!message.flags.has(MessageFlag::Subscription))
+    const auto summary = activityGiftBombSummary(message);
+    if (!summary)
     {
         return std::nullopt;
     }
 
-    const auto match = activityGiftBombSummaryMatch(message);
-    if (!match.hasMatch())
-    {
-        return std::nullopt;
-    }
-
-    return match.captured(2).toInt();
+    return summary->count;
 }
 
 bool isActivityGiftRecipientMessage(const Message &message)
@@ -176,13 +225,13 @@ bool isActivityGiftRecipientMessage(const Message &message)
 
 QString compactActivityGiftBombText(const Message &message)
 {
-    const auto match = activityGiftBombSummaryMatch(message);
-    if (!match.hasMatch())
+    const auto summary = activityGiftBombSummary(message);
+    if (!summary)
     {
         return message.messageText;
     }
 
-    auto name = match.captured(1).trimmed();
+    auto name = summary->name.trimmed();
     if (name.isEmpty())
     {
         name = message.displayName.trimmed();
@@ -196,8 +245,8 @@ QString compactActivityGiftBombText(const Message &message)
         name = QStringLiteral("Someone");
     }
 
-    const int count = match.captured(2).toInt();
-    const auto unit = normalizedActivityGiftUnit(match.captured(3), count);
+    const int count = summary->count;
+    const auto unit = normalizedActivityGiftUnit(summary->unit, count);
     return QStringLiteral("%1 gifted %2 %3")
         .arg(name, QString::number(count), unit);
 }
@@ -220,8 +269,13 @@ bool shouldShowMessageInActivityPane(const Message &message,
     if (isActivityDateSeparatorMessage(message) ||
         isActivityKickRewardRedemptionMessage(message) ||
         isActivityTwitchAnnouncementHeaderMessage(message) ||
-        isActivityTwitchBitsBadgeMessage(message) ||
-        isActivityGiftRecipientMessage(message))
+        isActivityTwitchBitsBadgeMessage(message))
+    {
+        return false;
+    }
+
+    if (isActivityGiftRecipientMessage(message) &&
+        !getActivityGiftBombRecipientCount(message))
     {
         return false;
     }
@@ -241,6 +295,11 @@ bool shouldShowMessageInActivityPane(const Message &message,
     {
         return shouldShowTikTokGiftInActivityPane(
             message, tiktokGiftMinimumDiamonds);
+    }
+
+    if (message.flags.has(MessageFlag::CheerMessage))
+    {
+        return false;
     }
 
     return isActivityAlertMessage(message);

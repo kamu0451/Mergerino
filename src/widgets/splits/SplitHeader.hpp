@@ -23,7 +23,6 @@ namespace chatterino {
 class SvgButton;
 class DrawnButton;
 class LabelButton;
-class PixmapButton;
 class Label;
 class Split;
 class MergedChannel;
@@ -101,7 +100,7 @@ private:
     SvgButton *alertsButton_{};
     SvgButton *moderationButton_{};
     SvgButton *chattersButton_{};
-    PixmapButton *clearActivityButton_{};
+    SvgButton *clearActivityButton_{};
     DrawnButton *addButton_{};
 
     // states

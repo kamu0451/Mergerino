@@ -11,23 +11,61 @@
 #include "widgets/Label.hpp"
 
 #include <QCoreApplication>
+#include <QDate>
 #include <QDialogButtonBox>
 #include <QDir>
 #include <QFile>
 #include <QLabel>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QTextEdit>
 #include <QVBoxLayout>
 
+#include <optional>
+
 namespace chatterino {
 namespace {
 
-QString latestPatchNotesFrom(QString text)
+QString trimPatchNotesSection(QStringList lines)
 {
-    const auto lines =
-        text.replace("\r\n", "\n").replace('\r', '\n').split('\n');
+    while (!lines.isEmpty() && lines.first().trimmed().isEmpty())
+    {
+        lines.removeFirst();
+    }
 
+    while (!lines.isEmpty() && lines.last().trimmed().isEmpty())
+    {
+        lines.removeLast();
+    }
+
+    return lines.join('\n').trimmed();
+}
+
+std::optional<QDate> parsePatchNotesDateHeader(const QString &line)
+{
+    static const QRegularExpression dateHeader{
+        QStringLiteral(R"(^(\d{1,2})/(\d{1,2})/(\d{4})$)")};
+
+    const auto match = dateHeader.match(line.trimmed());
+    if (!match.hasMatch())
+    {
+        return std::nullopt;
+    }
+
+    const auto date =
+        QDate(match.captured(3).toInt(), match.captured(2).toInt(),
+              match.captured(1).toInt());
+    if (!date.isValid())
+    {
+        return std::nullopt;
+    }
+
+    return date;
+}
+
+QString firstPatchNotesSectionFrom(const QStringList &lines)
+{
     QStringList sectionLines;
     bool foundSection = false;
     bool foundContent = false;
@@ -61,7 +99,59 @@ QString latestPatchNotesFrom(QString text)
     }
 
     const auto latestSection = sectionLines.join('\n').trimmed();
-    return latestSection.isEmpty() ? text.trimmed() : latestSection;
+    return latestSection;
+}
+
+QString latestPatchNotesFrom(QString text)
+{
+    const auto lines =
+        text.replace("\r\n", "\n").replace('\r', '\n').split('\n');
+
+    QDate latestDate;
+    QStringList latestSectionLines;
+    QDate currentDate;
+    QStringList currentSectionLines;
+
+    const auto commitCurrentSection = [&] {
+        if (!currentDate.isValid())
+        {
+            return;
+        }
+
+        if (!latestDate.isValid() || currentDate > latestDate)
+        {
+            latestDate = currentDate;
+            latestSectionLines = currentSectionLines;
+        }
+    };
+
+    for (const auto &line : lines)
+    {
+        const auto trimmed = line.trimmed();
+
+        if (const auto date = parsePatchNotesDateHeader(trimmed))
+        {
+            commitCurrentSection();
+            currentDate = *date;
+            currentSectionLines.clear();
+            continue;
+        }
+
+        if (currentDate.isValid())
+        {
+            currentSectionLines.append(trimmed);
+        }
+    }
+    commitCurrentSection();
+
+    const auto latestSection = trimPatchNotesSection(latestSectionLines);
+    if (!latestSection.isEmpty())
+    {
+        return latestSection;
+    }
+
+    const auto firstSection = firstPatchNotesSectionFrom(lines);
+    return firstSection.isEmpty() ? text.trimmed() : firstSection;
 }
 
 QString loadLatestPatchNotes()

@@ -37,6 +37,7 @@
 #include <QUuid>
 #include <QWidget>
 
+#include <algorithm>
 #include <ranges>
 #include <utility>
 
@@ -50,6 +51,8 @@ QString providerIconPath(ProviderId provider)
     {
         case ProviderId::Kick:
             return ":/platforms/kick.svg";
+        case ProviderId::YouTube:
+            return ":/platforms/youtube.svg";
         case ProviderId::Twitch:
         default:
             return ":/platforms/twitch.svg";
@@ -177,11 +180,16 @@ NotebookTab *Notebook::addPageAt(QWidget *page, int position, QString title,
 
 void Notebook::removePage(QWidget *page)
 {
+    int removingIndex = this->indexOf(page);
+    if (removingIndex == -1)
+    {
+        return;
+    }
+
     // Queue up save because: Tab removed
     getApp()->getWindows()->queueSave();
 
-    int removingIndex = this->indexOf(page);
-    assert(removingIndex != -1);
+    this->setBulkSelectedTab(this->items_[removingIndex].tab, false);
 
     if (this->selectedPage_ == page)
     {
@@ -268,9 +276,9 @@ void Notebook::duplicatePage(QWidget *page)
 
 void Notebook::removeCurrentPage()
 {
-    if (this->selectedPage_ != nullptr)
+    if (auto *selectedPage = this->getSelectedPage())
     {
-        this->removePage(this->selectedPage_);
+        this->removePage(selectedPage);
     }
 }
 
@@ -337,31 +345,45 @@ void Notebook::select(QWidget *page, bool focusPage)
         return;
     }
 
+    auto *oldPage = this->selectedPage_;
+    auto *oldItem = oldPage ? this->findItem(oldPage) : nullptr;
+    auto *newItem = page ? this->findItem(page) : nullptr;
+
     if (page)
     {
         // A new page has been selected, mark it as selected & focus one of its splits
-        auto *item = this->findItem(page);
-        if (!item)
+        if (!newItem)
         {
             return;
         }
+    }
 
+    if (oldItem)
+    {
+        // Hide the previously selected page
+        oldPage->hide();
+        oldItem->tab->setSelected(false);
+        oldItem->selectedWidget = oldPage->focusWidget();
+    }
+
+    if (page)
+    {
         page->show();
 
-        item->tab->setSelected(true);
-        item->tab->raise();
+        newItem->tab->setSelected(true);
+        newItem->tab->raise();
 
         if (focusPage)
         {
-            if (item->selectedWidget == nullptr)
+            if (newItem->selectedWidget == nullptr)
             {
-                item->page->setFocus();
+                newItem->page->setFocus();
             }
             else
             {
-                if (containsChild(page, item->selectedWidget))
+                if (containsChild(page, newItem->selectedWidget))
                 {
-                    item->selectedWidget->setFocus(Qt::MouseFocusReason);
+                    newItem->selectedWidget->setFocus(Qt::MouseFocusReason);
                 }
                 else
                 {
@@ -370,20 +392,6 @@ void Notebook::select(QWidget *page, bool focusPage)
                 }
             }
         }
-    }
-
-    if (this->selectedPage_)
-    {
-        // Hide the previously selected page
-        this->selectedPage_->hide();
-
-        auto *item = this->findItem(this->selectedPage_);
-        if (!item)
-        {
-            return;
-        }
-        item->tab->setSelected(false);
-        item->selectedWidget = this->selectedPage_->focusWidget();
     }
 
     this->selectedPage_ = page;
@@ -463,22 +471,45 @@ void Notebook::selectVisibleIndex(int index, bool focusPage)
 void Notebook::selectNextTab(bool focusPage)
 {
     const int size = this->items_.size();
+    if (size == 0)
+    {
+        return;
+    }
+
+    const int startIndex = this->indexOf(this->selectedPage_);
 
     if (!this->tabVisibilityFilter_)
     {
-        if (size <= 1)
+        if (size == 1)
         {
+            if (startIndex == -1)
+            {
+                this->select(this->items_[0].page, focusPage);
+            }
             return;
         }
 
-        auto index = (this->indexOf(this->selectedPage_) + 1) % size;
+        auto index = startIndex == -1 ? 0 : (startIndex + 1) % size;
         this->select(this->items_[index].page, focusPage);
         return;
     }
 
-    // find next tab that is permitted by filter
-    const int startIndex = this->indexOf(this->selectedPage_);
+    if (size == 1)
+    {
+        if (startIndex == -1 && this->tabVisibilityFilter_(this->items_[0].tab))
+        {
+            this->select(this->items_[0].page, focusPage);
+        }
+        return;
+    }
 
+    if (startIndex == -1)
+    {
+        this->selectVisibleIndex(0, focusPage);
+        return;
+    }
+
+    // find next tab that is permitted by filter
     auto index = (startIndex + 1) % size;
     while (index != startIndex)
     {
@@ -494,15 +525,25 @@ void Notebook::selectNextTab(bool focusPage)
 void Notebook::selectPreviousTab(bool focusPage)
 {
     const int size = this->items_.size();
+    if (size == 0)
+    {
+        return;
+    }
+
+    const int startIndex = this->indexOf(this->selectedPage_);
 
     if (!this->tabVisibilityFilter_)
     {
-        if (size <= 1)
+        if (size == 1)
         {
+            if (startIndex == -1)
+            {
+                this->select(this->items_[0].page, focusPage);
+            }
             return;
         }
 
-        int index = this->indexOf(this->selectedPage_) - 1;
+        int index = startIndex == -1 ? size - 1 : startIndex - 1;
         if (index < 0)
         {
             index += size;
@@ -512,9 +553,22 @@ void Notebook::selectPreviousTab(bool focusPage)
         return;
     }
 
-    // find next previous tab that is permitted by filter
-    const int startIndex = this->indexOf(this->selectedPage_);
+    if (size == 1)
+    {
+        if (startIndex == -1 && this->tabVisibilityFilter_(this->items_[0].tab))
+        {
+            this->select(this->items_[0].page, focusPage);
+        }
+        return;
+    }
 
+    if (startIndex == -1)
+    {
+        this->selectLastTab(focusPage);
+        return;
+    }
+
+    // find next previous tab that is permitted by filter
     auto index = startIndex == 0 ? size - 1 : startIndex - 1;
     while (index != startIndex)
     {
@@ -570,6 +624,12 @@ int Notebook::getSelectedIndex() const
 
 QWidget *Notebook::getSelectedPage() const
 {
+    if (this->selectedPage_ == nullptr ||
+        this->indexOf(this->selectedPage_) == -1)
+    {
+        return nullptr;
+    }
+
     return this->selectedPage_;
 }
 
@@ -610,12 +670,305 @@ void Notebook::rearrangePage(QWidget *page, int index)
         return;
     }
 
+    const int currentIndex = this->indexOf(page);
+    if (currentIndex == -1 || index < 0 || index >= this->items_.size() ||
+        currentIndex == index)
+    {
+        return;
+    }
+
     // Queue up save because: Tab rearranged
     getApp()->getWindows()->queueSave();
 
-    this->items_.move(this->indexOf(page), index);
+    this->items_.move(currentIndex, index);
 
     this->performLayout(true);
+}
+
+bool Notebook::tryRearrangeBulkSelectedTabs(QWidget *draggedPage,
+                                            int targetIndex)
+{
+    if (this->isNotebookLayoutLocked())
+    {
+        return true;
+    }
+
+    const int draggedIndex = this->indexOf(draggedPage);
+    if (draggedIndex == -1 || targetIndex < 0 ||
+        targetIndex >= this->items_.size())
+    {
+        return false;
+    }
+
+    auto *draggedTab = this->items_[draggedIndex].tab;
+    if (draggedTab == nullptr || !draggedTab->isBulkSelected())
+    {
+        return false;
+    }
+
+    std::vector<int> selectedIndices;
+    selectedIndices.reserve(this->bulkSelectedTabs_.size());
+    for (int i = 0; i < this->items_.size(); ++i)
+    {
+        if (this->items_[i].tab->isBulkSelected())
+        {
+            selectedIndices.push_back(i);
+        }
+    }
+
+    if (selectedIndices.size() <= 1)
+    {
+        return false;
+    }
+
+    const int firstSelectedIndex = selectedIndices.front();
+    const int lastSelectedIndex = selectedIndices.back();
+    if (draggedIndex < firstSelectedIndex || draggedIndex > lastSelectedIndex)
+    {
+        return false;
+    }
+
+    for (size_t i = 1; i < selectedIndices.size(); ++i)
+    {
+        if (selectedIndices[i] != selectedIndices[i - 1] + 1)
+        {
+            return false;
+        }
+    }
+
+    if (targetIndex >= firstSelectedIndex && targetIndex <= lastSelectedIndex)
+    {
+        return true;
+    }
+
+    const auto blockSize = static_cast<int>(selectedIndices.size());
+    QList<Item> movedItems;
+    movedItems.reserve(blockSize);
+    for (int i = 0; i < blockSize; ++i)
+    {
+        movedItems.push_back(this->items_[firstSelectedIndex + i]);
+    }
+
+    for (int i = 0; i < blockSize; ++i)
+    {
+        this->items_.removeAt(firstSelectedIndex);
+    }
+
+    int insertionIndex = targetIndex;
+    if (targetIndex > lastSelectedIndex)
+    {
+        insertionIndex = targetIndex - blockSize + 1;
+    }
+
+    for (const auto &item : movedItems)
+    {
+        this->items_.insert(insertionIndex, item);
+        ++insertionIndex;
+    }
+
+    // Queue up save because: Tabs rearranged
+    getApp()->getWindows()->queueSave();
+
+    this->performLayout(true);
+    return true;
+}
+
+void Notebook::setBulkSelectedTab(NotebookTab *tab, bool value)
+{
+    if (tab == nullptr || this->indexOf(tab->page) == -1)
+    {
+        return;
+    }
+
+    const auto it = std::ranges::find(this->bulkSelectedTabs_, tab);
+    const auto isSelected = it != this->bulkSelectedTabs_.end();
+    if (isSelected == value)
+    {
+        return;
+    }
+
+    if (value)
+    {
+        this->bulkSelectedTabs_.push_back(tab);
+    }
+    else
+    {
+        this->bulkSelectedTabs_.erase(it);
+    }
+
+    tab->setBulkSelected(value);
+    this->bulkSelectionAnchorTab_ = tab;
+    this->updateSelectedTabVisualState();
+    this->bulkSelectionChanged.invoke();
+}
+
+void Notebook::toggleBulkSelectedTab(NotebookTab *tab)
+{
+    if (tab == nullptr)
+    {
+        return;
+    }
+
+    this->setBulkSelectedTab(tab, !tab->isBulkSelected());
+}
+
+NotebookTab *Notebook::bulkRangeAnchor()
+{
+    if (this->bulkSelectionAnchorTab_ != nullptr &&
+        this->indexOf(this->bulkSelectionAnchorTab_->page) != -1)
+    {
+        return this->bulkSelectionAnchorTab_;
+    }
+
+    if (auto *selectedPage = this->getSelectedPage())
+    {
+        if (auto *selectedTab = this->getTabFromPage(selectedPage))
+        {
+            return selectedTab;
+        }
+    }
+
+    return nullptr;
+}
+
+void Notebook::updateSelectedTabVisualState()
+{
+    if (auto *selectedPage = this->getSelectedPage())
+    {
+        if (auto *selectedTab = this->getTabFromPage(selectedPage))
+        {
+            selectedTab->updateVisualState();
+        }
+    }
+}
+
+void Notebook::selectBulkRangeTo(NotebookTab *tab, bool keepExisting)
+{
+    if (tab == nullptr || this->indexOf(tab->page) == -1)
+    {
+        return;
+    }
+
+    auto *anchor = this->bulkRangeAnchor();
+    if (anchor == nullptr || this->indexOf(anchor->page) == -1)
+    {
+        anchor = tab;
+    }
+
+    std::vector<NotebookTab *> visibleTabs;
+    visibleTabs.reserve(this->items_.size());
+    for (const auto &item : this->items_)
+    {
+        if (item.tab->isVisible())
+        {
+            visibleTabs.push_back(item.tab);
+        }
+    }
+
+    auto anchorIt = std::ranges::find(visibleTabs, anchor);
+    auto tabIt = std::ranges::find(visibleTabs, tab);
+    if (anchorIt == visibleTabs.end() || tabIt == visibleTabs.end())
+    {
+        anchor = tab;
+        anchorIt = std::ranges::find(visibleTabs, anchor);
+        tabIt = std::ranges::find(visibleTabs, tab);
+    }
+
+    if (anchorIt == visibleTabs.end() || tabIt == visibleTabs.end())
+    {
+        return;
+    }
+
+    if (!keepExisting)
+    {
+        this->clearBulkSelectedTabs();
+    }
+
+    if (tabIt < anchorIt)
+    {
+        std::swap(anchorIt, tabIt);
+    }
+
+    for (auto it = anchorIt; it <= tabIt; ++it)
+    {
+        this->setBulkSelectedTab(*it, true);
+    }
+
+    this->bulkSelectionAnchorTab_ = tab;
+}
+
+void Notebook::clearBulkSelectedTabs()
+{
+    if (this->bulkSelectedTabs_.empty())
+    {
+        return;
+    }
+
+    const auto selectedTabs = this->bulkSelectedTabs_;
+    this->bulkSelectedTabs_.clear();
+    for (auto *tab : selectedTabs)
+    {
+        if (tab)
+        {
+            tab->setBulkSelected(false);
+        }
+    }
+
+    this->bulkSelectionAnchorTab_ = nullptr;
+    this->updateSelectedTabVisualState();
+    this->bulkSelectionChanged.invoke();
+}
+
+void Notebook::removeBulkSelectedTabs()
+{
+    if (this->bulkSelectedTabs_.empty())
+    {
+        return;
+    }
+
+    std::vector<QWidget *> pages;
+    pages.reserve(this->bulkSelectedTabs_.size());
+    for (auto *tab : this->bulkSelectedTabs_)
+    {
+        if (tab != nullptr && tab->page != nullptr &&
+            this->indexOf(tab->page) != -1)
+        {
+            pages.push_back(tab->page);
+        }
+    }
+
+    if (pages.empty())
+    {
+        this->clearBulkSelectedTabs();
+        return;
+    }
+
+    const auto count = static_cast<int>(pages.size());
+    const auto reply = QMessageBox::question(
+        this, "Delete selected tabs",
+        count == 1 ? QStringLiteral("Delete 1 selected tab?")
+                   : QStringLiteral("Delete %1 selected tabs?").arg(count),
+        QMessageBox::Yes | QMessageBox::Cancel);
+    if (reply != QMessageBox::Yes)
+    {
+        return;
+    }
+
+    for (auto *page : pages)
+    {
+        if (this->indexOf(page) != -1)
+        {
+            this->removePage(page);
+        }
+    }
+
+    this->bulkSelectionAnchorTab_ = nullptr;
+    this->clearBulkSelectedTabs();
+}
+
+int Notebook::bulkSelectedTabCount() const
+{
+    return static_cast<int>(this->bulkSelectedTabs_.size());
 }
 
 bool Notebook::getAllowUserTabManagement() const
@@ -902,11 +1255,11 @@ void Notebook::performHorizontalLayout(const LayoutContext &ctx, bool animated)
         }
 
         // set page bounds
-        if (this->selectedPage_ != nullptr)
+        if (auto *selectedPage = this->getSelectedPage())
         {
-            this->selectedPage_->move(0, 0);
-            this->selectedPage_->resize(this->width(), tabsStart);
-            this->selectedPage_->raise();
+            selectedPage->move(0, 0);
+            selectedPage->resize(this->width(), tabsStart);
+            selectedPage->raise();
         }
     }
     else
@@ -923,11 +1276,11 @@ void Notebook::performHorizontalLayout(const LayoutContext &ctx, bool animated)
         y += int(2 * ctx.scale);
 
         // set page bounds
-        if (this->selectedPage_ != nullptr)
+        if (auto *selectedPage = this->getSelectedPage())
         {
-            this->selectedPage_->move(0, y);
-            this->selectedPage_->resize(this->width(), this->height() - y);
-            this->selectedPage_->raise();
+            selectedPage->move(0, y);
+            selectedPage->resize(this->width(), this->height() - y);
+            selectedPage->raise();
         }
     }
 }
@@ -1087,11 +1440,11 @@ void Notebook::performVerticalLayout(const LayoutContext &ctx, bool animated)
         }
 
         // set page bounds
-        if (this->selectedPage_ != nullptr)
+        if (auto *selectedPage = this->getSelectedPage())
         {
-            this->selectedPage_->move(0, 0);
-            this->selectedPage_->resize(tabsStart, this->height());
-            this->selectedPage_->raise();
+            selectedPage->move(0, 0);
+            selectedPage->resize(tabsStart, this->height());
+            selectedPage->raise();
         }
     }
     else
@@ -1105,11 +1458,11 @@ void Notebook::performVerticalLayout(const LayoutContext &ctx, bool animated)
         }
 
         // set page bounds
-        if (this->selectedPage_ != nullptr)
+        if (auto *selectedPage = this->getSelectedPage())
         {
-            this->selectedPage_->move(x, 0);
-            this->selectedPage_->resize(this->width() - x, this->height());
-            this->selectedPage_->raise();
+            selectedPage->move(x, 0);
+            selectedPage->resize(this->width() - x, this->height());
+            selectedPage->raise();
         }
     }
 }
@@ -1242,7 +1595,8 @@ void Notebook::setTabVisibilityFilter(TabVisibilityFilter filter)
         // Wrap tab filter to always accept selected tabs. This prevents confusion
         // when jumping to hidden tabs with the quick switcher, for example.
         filter = [originalFilter = std::move(filter)](const NotebookTab *tab) {
-            return tab->isSelected() || originalFilter(tab);
+            return tab->isSelected() || tab->isBulkSelected() ||
+                   originalFilter(tab);
         };
     }
 
@@ -1479,6 +1833,8 @@ void SplitNotebook::showEvent(QShowEvent * /*event*/)
 
 void SplitNotebook::addCustomButtons()
 {
+    this->addBulkSelectionButton();
+
     // settings
     auto *settingsBtn = this->addCustomButton<SvgButton>(SvgButton::Src{
         .dark = ":/buttons/settings-darkMode.svg",
@@ -1556,6 +1912,69 @@ void SplitNotebook::addCustomButtons()
     this->updateStreamerModeIcon();
 
     this->performLayout(false);
+}
+
+void SplitNotebook::addBulkSelectionButton()
+{
+    this->bulkClearButton_ = this->addCustomButton<SvgButton>(
+        SvgButton::Src{
+            .dark = ":/buttons/x-darkMode.svg",
+            .light = ":/buttons/x-lightMode.svg",
+        });
+    this->bulkClearButton_->setPadding({0, 0});
+    this->bulkClearButton_->setContentSize(QSize{16, 16});
+    this->bulkClearButton_->setHidden(true);
+    this->bulkClearButton_->setToolTip("Deselect selected tabs");
+
+    this->bulkDeleteButton_ = this->addCustomButton<SvgButton>(
+        SvgButton::Src{
+            .dark = ":/buttons/trash-darkMode.svg",
+            .light = ":/buttons/trash-lightMode.svg",
+        });
+    this->bulkDeleteButton_->setPadding({0, 0});
+    this->bulkDeleteButton_->setContentSize(QSize{16, 16});
+    this->bulkDeleteButton_->setHidden(true);
+    this->bulkDeleteButton_->setToolTip("Delete selected tabs");
+
+    QObject::connect(this->bulkClearButton_, &Button::leftClicked, this,
+                     [this] {
+                         this->clearBulkSelectedTabs();
+                     });
+    QObject::connect(this->bulkDeleteButton_, &Button::leftClicked, this,
+                     [this] {
+                         this->removeBulkSelectedTabs();
+                     });
+    this->signalHolder_.managedConnect(this->bulkSelectionChanged, [this] {
+        this->updateBulkSelectionButton();
+    });
+    this->updateBulkSelectionButton();
+}
+
+void SplitNotebook::updateBulkSelectionButton()
+{
+    if (this->bulkClearButton_ == nullptr || this->bulkDeleteButton_ == nullptr)
+    {
+        return;
+    }
+
+    const auto selectedCount = this->bulkSelectedTabCount();
+    const auto shouldShow = selectedCount > 0;
+    const auto wasHidden = this->bulkDeleteButton_->isHidden();
+    this->bulkClearButton_->setHidden(!shouldShow);
+    this->bulkDeleteButton_->setHidden(!shouldShow);
+    this->bulkClearButton_->setToolTip(
+        shouldShow ? QStringLiteral("Deselect selected tabs") : QString());
+    this->bulkDeleteButton_->setToolTip(
+        shouldShow ? QStringLiteral("Delete %1 selected tab%2")
+                         .arg(selectedCount)
+                         .arg(selectedCount == 1 ? QString()
+                                                 : QStringLiteral("s"))
+                   : QString());
+
+    if (wasHidden == shouldShow)
+    {
+        this->performLayout(false);
+    }
 }
 
 void SplitNotebook::updateStreamerModeIcon()

@@ -33,6 +33,7 @@ struct HelixUser;
 class LabelButton;
 class PixmapButton;
 class LiveIndicator;
+class YouTubeLiveChat;
 enum class MessagePlatform : std::uint8_t;
 
 class UserInfoPopup final : public DraggablePopup
@@ -75,6 +76,9 @@ private:
     bool canModerateTargetUser() const;
     bool isCurrentPlatformUser() const;
     void sendModerationCommand(const QString &command);
+    void sendModerationAction(const QString &action, int durationSeconds = 0);
+    void sendYouTubeModerationAction(const QString &action,
+                                     int durationSeconds);
 
     void loadAvatar(const QString &userID, const QString &pictureURL,
                     bool isKick);
@@ -91,6 +95,7 @@ private:
     void onKickProfilePictureClick(Qt::MouseButton button);
 
     QStringView platformName() const;
+    YouTubeLiveChat *youtubeLiveChat() const;
 
     void appendCommonProfileActions(QMenu *menu);
 
@@ -101,6 +106,7 @@ private:
 
     QString userName_;
     QString userId_;
+    QString platformUserID_;
     QString avatarUrl_;
     QString helixAvatarUrl_;
     QString seventvAvatarUrl_;
@@ -120,6 +126,8 @@ private:
     std::unique_ptr<pajlada::Signals::ScopedConnection> refreshConnection_;
     std::unique_ptr<pajlada::Signals::ScopedConnection>
         userDataUpdatedConnection_;
+    std::unique_ptr<pajlada::Signals::ScopedConnection>
+        youtubeModerationConnection_;
 
     // If we should close the dialog automatically if the user clicks out
     // Set based on the "Automatically close usercard when it loses focus" setting
@@ -133,7 +141,6 @@ private:
 
         Label *nameLabel = nullptr;
         Label *localizedNameLabel = nullptr;
-        Label *pronounsLabel = nullptr;
         Label *followerCountLabel = nullptr;
         Label *createdDateLabel = nullptr;
         Label *userIDLabel = nullptr;

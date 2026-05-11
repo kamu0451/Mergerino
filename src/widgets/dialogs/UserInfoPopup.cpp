@@ -22,11 +22,13 @@
 #include "providers/kick/KickAccount.hpp"
 #include "providers/kick/KickApi.hpp"
 #include "providers/kick/KickChatServer.hpp"
-#include "providers/pronouns/Pronouns.hpp"
+#include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/youtube/YouTubeAccount.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Resources.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/StreamerMode.hpp"
@@ -74,9 +76,6 @@ constexpr QStringView TEXT_TITLE = u"%1's Usercard - #%2";
 constexpr QStringView TEXT_USER_ID = u"ID: ";
 constexpr QStringView TEXT_PLATFORM = u"Platform: %1";
 constexpr QStringView TEXT_UNAVAILABLE = u"(not available)";
-constexpr QStringView TEXT_PRONOUNS = u"Pronouns: %1";
-constexpr QStringView TEXT_UNSPECIFIED = u"(unspecified)";
-constexpr QStringView TEXT_LOADING = u"(loading...)";
 
 constexpr QStringView SEVENTV_TWITCH_USER_API =
     u"https://7tv.io/v3/users/twitch/%1";
@@ -237,16 +236,16 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
                         "editor";
              }
              auto target = arguments.at(0);
-             QString msg;
-
              // these can't have /timeout/ buttons because they are not timeouts
              if (target == "ban")
              {
-                 msg = QString("/ban %1").arg(this->userName_);
+                 this->sendModerationAction(QStringLiteral("ban"));
+                 return "";
              }
              else if (target == "unban")
              {
-                 msg = QString("/unban %1").arg(this->userName_);
+                 this->sendModerationAction(QStringLiteral("unban"));
+                 return "";
              }
              else
              {
@@ -275,14 +274,11 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
                               static_cast<int>(timeoutButtons.size()) - 1);
                  }
                  const auto &button = timeoutButtons.at(buttonNum - 1);
-                 msg = QString("/timeout %1 %2")
-                           .arg(this->userName_)
-                           .arg(calculateTimeoutDuration(button));
+                 this->sendModerationAction(QStringLiteral("timeout"),
+                                            calculateTimeoutDuration(button));
+                 return "";
              }
-
-             this->sendModerationCommand(msg);
-             return "";
-         }},
+          }},
         {"pin",
          [this](std::vector<QString> /*arguments*/) -> QString {
              this->togglePinned();
@@ -481,12 +477,6 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
                 }
             }
 
-            // items on the left
-            if (getSettings()->showPronouns)
-            {
-                vbox.emplace<Label>(TEXT_PRONOUNS.arg(TEXT_LOADING))
-                    .assign(&this->ui_.pronounsLabel);
-            }
             vbox.emplace<Label>(TEXT_FOLLOWERS.arg(""))
                 .assign(&this->ui_.followerCountLabel);
             vbox.emplace<Label>(TEXT_CREATED.arg(""))
@@ -627,17 +617,15 @@ UserInfoPopup::UserInfoPopup(bool closeAutomatically, Split *split)
             switch (action)
             {
                 case TimeoutWidget::Ban: {
-                    this->sendModerationCommand("/ban " + this->userName_);
+                    this->sendModerationAction(QStringLiteral("ban"));
                 }
                 break;
                 case TimeoutWidget::Unban: {
-                    this->sendModerationCommand("/unban " + this->userName_);
+                    this->sendModerationAction(QStringLiteral("unban"));
                 }
                 break;
                 case TimeoutWidget::Timeout: {
-                    this->sendModerationCommand(
-                        "/timeout " + this->userName_ + " " +
-                        QString::number(arg) + 's');
+                    this->sendModerationAction(QStringLiteral("timeout"), arg);
                 }
                 break;
             }
@@ -998,11 +986,30 @@ void UserInfoPopup::setData(const QString &name,
     this->setWindowTitle(
         TEXT_TITLE.arg(name, this->underlyingChannel_->getName()));
     this->platform_ = platform;
+    this->platformUserID_ = platformUserID;
     this->isKick_ = platform == MessagePlatform::Kick ||
                     this->underlyingChannel_->getType() == Channel::Type::Kick;
     this->isGenericPlatform_ = platform == MessagePlatform::YouTube ||
                                platform == MessagePlatform::TikTok;
     this->ui_.timeoutWidget->setMinTimeout(this->isKick_ ? 60 : 1);
+    this->youtubeModerationConnection_.reset();
+    if (this->platform_ == MessagePlatform::YouTube)
+    {
+        if (auto *youtube = this->youtubeLiveChat())
+        {
+            this->youtubeModerationConnection_ =
+                std::make_unique<pajlada::Signals::ScopedConnection>(
+                    youtube->moderationStatusChanged.connect(
+                        [self = QPointer(this)] {
+                            if (self == nullptr || self->preparedForClose_)
+                            {
+                                return;
+                            }
+
+                            self->userStateChanged_.invoke();
+                        }));
+        }
+    }
 
     this->ui_.nameLabel->setText(name);
     this->ui_.nameLabel->setProperty("copy-text", name);
@@ -1086,10 +1093,6 @@ void UserInfoPopup::updateGenericPlatformUserData(
     this->ui_.liveIndicator->hide();
     this->ui_.localizedNameLabel->setVisible(false);
     this->ui_.localizedNameCopyButton->setVisible(false);
-    if (this->ui_.pronounsLabel != nullptr)
-    {
-        this->ui_.pronounsLabel->setVisible(false);
-    }
 
     this->ui_.nameLabel->setText(this->userName_);
     this->ui_.nameLabel->setProperty("copy-text", this->userName_);
@@ -1177,6 +1180,12 @@ bool UserInfoPopup::isCurrentPlatformUser() const
         }
 
         case MessagePlatform::YouTube:
+            return getApp()
+                       ->getAccounts()
+                       ->youtube.current()
+                       ->channelID()
+                       .compare(this->platformUserID_, Qt::CaseInsensitive) ==
+                   0;
         case MessagePlatform::TikTok:
             return false;
     }
@@ -1187,7 +1196,8 @@ bool UserInfoPopup::isCurrentPlatformUser() const
 bool UserInfoPopup::canModerateTargetUser() const
 {
     if (!this->underlyingChannel_ || this->underlyingChannel_->isEmpty() ||
-        this->isGenericPlatform_ || this->isCurrentPlatformUser())
+        this->platform_ == MessagePlatform::TikTok ||
+        this->isCurrentPlatformUser())
     {
         return false;
     }
@@ -1214,7 +1224,21 @@ bool UserInfoPopup::canModerateTargetUser() const
             return twitchChannel->hasModRights();
         }
 
-        case MessagePlatform::YouTube:
+        case MessagePlatform::YouTube: {
+            if (this->platformUserID_.isEmpty())
+            {
+                return false;
+            }
+
+            auto *youtube = this->youtubeLiveChat();
+            if (youtube == nullptr)
+            {
+                return false;
+            }
+
+            return youtube->hasModeratorPrivileges();
+        }
+
         case MessagePlatform::TikTok:
             return false;
     }
@@ -1232,6 +1256,59 @@ void UserInfoPopup::sendModerationCommand(const QString &command)
     auto value = getApp()->getCommands()->execCommand(
         command, this->underlyingChannel_, false);
     this->underlyingChannel_->sendMessage(value);
+}
+
+void UserInfoPopup::sendModerationAction(const QString &action,
+                                         int durationSeconds)
+{
+    if (this->platform_ == MessagePlatform::YouTube)
+    {
+        this->sendYouTubeModerationAction(action, durationSeconds);
+        return;
+    }
+
+    if (action == QStringLiteral("ban"))
+    {
+        this->sendModerationCommand("/ban " + this->userName_);
+    }
+    else if (action == QStringLiteral("unban"))
+    {
+        this->sendModerationCommand("/unban " + this->userName_);
+    }
+    else if (action == QStringLiteral("timeout"))
+    {
+        this->sendModerationCommand("/timeout " + this->userName_ + " " +
+                                    QString::number(durationSeconds) + 's');
+    }
+}
+
+void UserInfoPopup::sendYouTubeModerationAction(const QString &action,
+                                                int durationSeconds)
+{
+    if (!this->canModerateTargetUser())
+    {
+        return;
+    }
+
+    auto *youtube = this->youtubeLiveChat();
+    if (youtube == nullptr)
+    {
+        return;
+    }
+
+    if (action == QStringLiteral("ban"))
+    {
+        youtube->banUser(this->platformUserID_, this->userName_);
+    }
+    else if (action == QStringLiteral("unban"))
+    {
+        youtube->unbanUser(this->platformUserID_, this->userName_);
+    }
+    else if (action == QStringLiteral("timeout"))
+    {
+        youtube->timeoutUser(this->platformUserID_, durationSeconds,
+                             this->userName_);
+    }
 }
 
 void UserInfoPopup::updateUserData()
@@ -1433,42 +1510,6 @@ void UserInfoPopup::updateUserData()
                 [] {});
         }
 
-        // get pronouns
-        if (getSettings()->showPronouns)
-        {
-            getApp()->getPronouns()->getUserPronoun(
-                user.login,
-                [this, hack](const auto userPronoun) {
-                    runInGuiThread([this, hack,
-                                    userPronoun = std::move(userPronoun)]() {
-                        if (!hack.lock() || this->ui_.pronounsLabel == nullptr)
-                        {
-                            return;
-                        }
-                        if (!userPronoun.isUnspecified())
-                        {
-                            this->ui_.pronounsLabel->setText(
-                                TEXT_PRONOUNS.arg(userPronoun.format()));
-                        }
-                        else
-                        {
-                            this->ui_.pronounsLabel->setText(
-                                TEXT_PRONOUNS.arg(TEXT_UNSPECIFIED));
-                        }
-                    });
-                },
-                [this, hack]() {
-                    runInGuiThread([this, hack]() {
-                        qCWarning(chatterinoTwitch) << "Error getting pronouns";
-                        if (!hack.lock())
-                        {
-                            return;
-                        }
-                        this->ui_.pronounsLabel->setText(
-                            TEXT_PRONOUNS.arg(TEXT_UNSPECIFIED));
-                    });
-                });
-        }
     };
 
     if (!this->userId_.isEmpty())
@@ -1995,6 +2036,22 @@ QStringView UserInfoPopup::platformName() const
     }
 
     return u"Twitch";
+}
+
+YouTubeLiveChat *UserInfoPopup::youtubeLiveChat() const
+{
+    auto *mergedChannel =
+        dynamic_cast<MergedChannel *>(this->underlyingChannel_.get());
+    if (mergedChannel == nullptr)
+    {
+        mergedChannel = dynamic_cast<MergedChannel *>(this->channel_.get());
+    }
+    if (mergedChannel == nullptr)
+    {
+        return nullptr;
+    }
+
+    return mergedChannel->youtubeLiveChat();
 }
 
 void UserInfoPopup::appendCommonProfileActions(QMenu *menu)

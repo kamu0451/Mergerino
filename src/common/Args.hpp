@@ -33,6 +33,7 @@ class Paths;
 /// -c, --channels=t:channel1;t:channel2;...
 /// -a, --activate=t:channel
 ///     --safe-mode
+///     --activate-after-import
 ///
 /// See documentation on `QGuiApplication` for documentation on Qt arguments like -platform.
 class Args
@@ -67,6 +68,7 @@ public:
     std::optional<QString> initialLogin;
     bool verbose{};
     bool safeMode{};
+    bool activateAfterImport{};
 
     bool useOldScaling = false;
 

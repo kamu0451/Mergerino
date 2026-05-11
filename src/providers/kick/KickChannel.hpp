@@ -6,7 +6,9 @@
 
 #include <pajlada/signals/signal.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <functional>
 #include <queue>
 #include <unordered_map>
 
@@ -52,6 +54,7 @@ public:
     ~KickChannel() override;
 
     void initialize(const UserInit &init);
+    void loadRecentMessages(std::function<void()> onDone = {});
 
     std::shared_ptr<KickChannel> sharedFromThis();
     std::weak_ptr<KickChannel> weakFromThis();
@@ -208,6 +211,8 @@ private:
     QTimer sendWaitTimer_;
     // Timepoint at which the user can send messages again
     std::optional<std::chrono::steady_clock::time_point> sendWaitEnd_;
+    std::atomic_bool loadedRecentMessages_ = false;
+    std::atomic_flag loadingRecentMessages_ = ATOMIC_FLAG_INIT;
 
     RoomModes roomModes_;
 

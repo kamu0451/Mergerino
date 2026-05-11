@@ -61,6 +61,49 @@ jobs:
           python-version: "3.13"
           cache: pip
 
+      - name: Prepare release auth config
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: pwsh
+        env:
+          MRAB: ${{ secrets.MRAB }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($Env:MRAB)) {
+            throw "Repository secret MRAB is required for release builds."
+          }
+
+          $secretBytes = [System.Text.Encoding]::UTF8.GetBytes($Env:MRAB.Trim())
+          $keyA = Get-Random -Minimum 1 -Maximum 256
+          $keyB = Get-Random -Minimum 1 -Maximum 256
+          $keyC = Get-Random -Minimum 1 -Maximum 256
+          $encodedSecret = [System.Collections.Generic.List[string]]::new()
+
+          for ($i = 0; $i -lt $secretBytes.Length; $i++) {
+            $mask = (($keyA + ($i * 31)) -bxor ($keyB + ($i * 17)) -bxor ($keyC + ($i * 13))) -band 0xff
+            $encodedSecret.Add([string](($secretBytes[$i] -bxor $mask) -band 0xff))
+          }
+
+          $encodedSecretText = $encodedSecret -join ", "
+          @"
+          #pragma once
+
+          #include <array>
+          #include <cstddef>
+          #include <cstdint>
+
+          #define CHATTERINO_RELEASE_AUTH_BLOB_OBFUSCATED 1
+
+          namespace chatterino::release_auth_blob {
+
+          inline constexpr std::uint8_t KEY_A = $keyA;
+          inline constexpr std::uint8_t KEY_B = $keyB;
+          inline constexpr std::uint8_t KEY_C = $keyC;
+          inline constexpr std::array<std::uint8_t, $($secretBytes.Length)> DATA = {
+              $encodedSecretText
+          };
+
+          }  // namespace chatterino::release_auth_blob
+          "@ | Set-Content -Path src/providers/youtube/YouTubeOAuthSecrets.local.hpp -Encoding ascii
+
       - name: Install and setup Conan
         shell: bash
         run: |

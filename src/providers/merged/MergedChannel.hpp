@@ -46,7 +46,7 @@ struct MergedChannelConfig {
 class MergedChannel final : public Channel, public ChannelChatters
 {
 public:
-    struct LiveStreamBrowserUrl {
+    struct BrowserUrl {
         QString platformName;
         QUrl url;
     };
@@ -73,7 +73,8 @@ public:
 
     QString statusSuffix() const;
     QString tooltipText() const;
-    std::vector<LiveStreamBrowserUrl> liveStreamBrowserUrls() const;
+    std::vector<BrowserUrl> liveStreamBrowserUrls() const;
+    std::vector<BrowserUrl> channelBrowserUrls() const;
 
     ChannelPtr twitchChannel() const;
     ChannelPtr kickChannel() const;

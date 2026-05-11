@@ -280,7 +280,8 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
             auto *removeButton = new QToolButton(row);
             removeButton->setAutoRaise(true);
             removeButton->setCursor(Qt::PointingHandCursor);
-            removeButton->setIcon(QPixmap(QStringLiteral(":/buttons/trashCan.png")));
+            removeButton->setIcon(
+                QPixmap(QStringLiteral(":/buttons/trash-lightMode.svg")));
             removeButton->setIconSize(QSize(14, 14));
             removeButton->setFixedSize(20, 20);
             removeButton->setToolTip(QStringLiteral("Remove search term"));

@@ -881,6 +881,7 @@ enum class HelixStartCommercialError {
 
 enum class HelixGetGlobalBadgesError {
     Unknown,
+    UserNotAuthenticated,
 
     // The error message is forwarded directly from the Twitch API
     Forwarded,

@@ -17,6 +17,7 @@
 #include "singletons/Settings.hpp"
 #include "singletons/Updates.hpp"
 #include "util/AttachToConsole.hpp"
+#include "util/ChatterinoImport.hpp"
 #include "util/IpcQueue.hpp"
 
 #include <QApplication>
@@ -129,6 +130,18 @@ int main(int argc, char **argv)
 #endif
         qCInfo(chatterinoApp) << "Mergerino Qt SSL active backend protocols:"
                               << QSslSocket::supportedProtocols();
+
+        if (chatterino_import::hasPendingImport(*paths))
+        {
+            auto result = chatterino_import::applyPendingImport(*paths);
+            if (!result)
+            {
+                QMessageBox::warning(
+                    nullptr, "Chatterino import failed",
+                    "Mergerino could not import Chatterino settings:\n\n" +
+                        result.error());
+            }
+        }
 
         Settings settings(args, paths->settingsDirectory);
 

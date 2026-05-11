@@ -1,5 +1,19 @@
 Patch Notes
 
+11/05/2026
+- Added YouTube OAuth sign in
+- Added YouTube chatting support and moderation tools
+- Added Chatterino import for settings, tabs, accounts etc
+- Added open stream in browser to tabs
+- Added multi-platform selector menu when 3+ platforms are live
+- Added hotkey to swap platforms within chat (Ctrl + D)
+- Added local Twitch login flow
+- Added default platform selection from the quick account menu
+- Added bulk tab selection to drag or delete (Ctrl/Shift)
+- Improved UI elements and error messages
+- Updated default platform highlight to logos
+- Fixed a bug causing logout to swap the user to anonymous
+
 07/05/2026
 - Added Export Chat setting
 - Added patch notes popup after updating
@@ -14,12 +28,12 @@ Patch Notes
 - Added recent message history
 - Added uptime to stream info preview
 - Added usercards for all platforms
-- Added mod actions for Kick
+- Added mod tools for Kick
 - Added reply to message function
 - Added multi-platform chat mode
 - Added emoji rendering to YouTube chat
 - Improved YouTube livestream fetching
-- Improved emote tab
+- Improved emote menu
 
 27/04/2026
 - Added auto update

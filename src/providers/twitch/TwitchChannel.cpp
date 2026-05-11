@@ -1854,6 +1854,12 @@ void TwitchChannel::refreshBadges()
 
             switch (error)
             {
+                case HelixGetChannelBadgesError::UserNotAuthenticated: {
+                    errorMessage +=
+                        "Sign in to Twitch to load channel badges.";
+                }
+                break;
+
                 case HelixGetChannelBadgesError::Forwarded: {
                     errorMessage += message;
                 }

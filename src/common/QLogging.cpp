@@ -43,7 +43,6 @@ Q_LOGGING_CATEGORY(chatterinoNotification, "chatterino.notification",
                    logThreshold);
 Q_LOGGING_CATEGORY(chatterinoImageuploader, "chatterino.imageuploader",
                    logThreshold);
-Q_LOGGING_CATEGORY(chatterinoPronouns, "chatterino.pronouns", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoPubSub, "chatterino.pubsub", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoRecentMessages, "chatterino.recentmessages",
                    logThreshold);
@@ -69,3 +68,4 @@ Q_LOGGING_CATEGORY(chatterinoWidget, "chatterino.widget", logThreshold);
 Q_LOGGING_CATEGORY(chatterinoWindowmanager, "chatterino.windowmanager",
                    logThreshold);
 Q_LOGGING_CATEGORY(chatterinoXDG, "chatterino.xdg", logThreshold);
+Q_LOGGING_CATEGORY(chatterinoYouTube, "chatterino.youtube", logThreshold);

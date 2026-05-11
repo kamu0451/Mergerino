@@ -18,6 +18,7 @@
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
 #include "util/FuzzyConvert.hpp"
+#include "util/ChatterinoImport.hpp"
 #include "util/Helpers.hpp"
 #include "util/IncognitoBrowser.hpp"
 #include "widgets/BaseWindow.hpp"
@@ -25,6 +26,7 @@
 #include "widgets/settingspages/GeneralPageView.hpp"
 #include "widgets/settingspages/SettingWidget.hpp"
 
+#include <QApplication>
 #include <QDesktopServices>
 #include <QFileDialog>
 #include <QFontDialog>
@@ -86,6 +88,65 @@ void addKeyboardModifierSetting(GeneralPageView &layout, const QString &title,
             }
         },
         false);
+}
+
+void importChatterinoFromSettings(QWidget *parent)
+{
+    if (!chatterino_import::defaultSourceSettingsDirectoryExists())
+    {
+        QMessageBox::warning(
+            parent, "Chatterino settings not found",
+            "Mergerino could not find Chatterino settings in the default "
+            "Chatterino2 AppData folder.");
+        return;
+    }
+
+    const auto reply = QMessageBox::question(
+        parent, "Import from Chatterino",
+        "Import Chatterino settings, ping alerts, commands, user data, and "
+        "channel tabs into Mergerino?\n\nMergerino will restart. Current "
+        "Mergerino settings files will be backed up before they are replaced.",
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (reply != QMessageBox::Yes)
+    {
+        return;
+    }
+
+    auto *settings = getSettings();
+    chatterino_import::ImportOptions options;
+    options.startupPromptAcknowledged =
+        settings->startupPromptAcknowledged.getValue();
+    options.autorun = settings->autorun.getValue();
+    options.currentVersion = CHATTERINO_VERSION;
+    options.mergedPlatformIndicatorMode =
+        settings->mergedPlatformIndicatorMode.getValue();
+    options.platformEventHighlightStyle =
+        settings->platformEventHighlightStyle.getValue();
+    options.platformEventHighlightCustomColor =
+        settings->platformEventHighlightCustomColor.getValue();
+
+    auto stage =
+        chatterino_import::stageImportFromDefaultSource(getApp()->getPaths(),
+                                                        options);
+    if (!stage)
+    {
+        QMessageBox::critical(parent, "Chatterino import failed",
+                              "Mergerino could not stage the Chatterino "
+                              "import:\n\n" +
+                                  stage.error());
+        return;
+    }
+
+    if (!chatterino_import::restartApplication())
+    {
+        QMessageBox::critical(
+            parent, "Restart failed",
+            "Mergerino staged the Chatterino import, but could not restart "
+            "itself. Close and reopen Mergerino to finish the import.");
+        return;
+    }
+
+    QApplication::quit();
 }
 
 }  // namespace
@@ -965,6 +1026,14 @@ void GeneralPage::initLayout(GeneralPageView &layout)
 #endif
     });
 
+    layout.addSubtitle("Chatterino Import");
+    layout.addDescription(
+        "Import Chatterino settings, ping alerts, commands, user data, and "
+        "channel tabs. Mergerino restarts to finish the import.");
+    layout.addButton("Import from Chatterino", [&layout] {
+        importChatterinoFromSettings(layout.window());
+    });
+
     layout.addSubtitle("Temporary files (Cache)");
     layout.addDescription(
         "Files that are used often (such as emotes) are saved to disk to "
@@ -1426,11 +1495,6 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                             s.lowercaseDomains)
         ->setTooltip(
             "Make all clickable links lowercase to deter phishing attempts.")
-        ->addTo(layout);
-
-    SettingWidget::checkbox("Show user's pronouns in user card", s.showPronouns)
-        ->setDescription(
-            R"(Pronouns are retrieved from <a href="https://pr.alejo.io">pr.alejo.io</a> when a user card is opened.)")
         ->addTo(layout);
 
     SettingWidget::checkbox("Show stream title in live message",

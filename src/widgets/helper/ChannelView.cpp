@@ -32,6 +32,7 @@
 #include "providers/twitch/TwitchBadge.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Resources.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/StreamerMode.hpp"
@@ -271,6 +272,7 @@ MessagePtr makeActivityCompactMessage(const MessagePtr &message,
     auto compact = message->clone();
     compact->messageText = text;
     compact->searchText = text;
+    compact->flags.unset(MessageFlag::Collapsed);
     compact->elements.clear();
 
     bool copiedTimestamp = false;
@@ -295,6 +297,83 @@ MessagePtr makeActivityCompactMessage(const MessagePtr &message,
     compact->elements.emplace_back(std::make_unique<TextElement>(
         text, MessageElementFlag::Text, MessageColor::System));
     return compact;
+}
+
+struct ActivityCompactGiftSummary {
+    QString name;
+    int count = 0;
+    bool isMembership = false;
+};
+
+std::optional<ActivityCompactGiftSummary> activityCompactGiftSummary(
+    const Message &message)
+{
+    static const QRegularExpression REGEX(
+        QStringLiteral(
+            R"(^(.+?)\s+gifted\s+(\d+)\s+(subscriptions?|subs?|memberships?)$)"),
+        QRegularExpression::CaseInsensitiveOption);
+
+    const auto match = REGEX.match(message.messageText.trimmed());
+    if (!match.hasMatch())
+    {
+        return std::nullopt;
+    }
+
+    return ActivityCompactGiftSummary{
+        .name = match.captured(1).trimmed(),
+        .count = match.captured(2).toInt(),
+        .isMembership = match.captured(3).contains(
+            QStringLiteral("membership"), Qt::CaseInsensitive),
+    };
+}
+
+bool activityGiftSummariesCanMerge(const Message &previous,
+                                   const ActivityCompactGiftSummary &prev,
+                                   const Message &next,
+                                   const ActivityCompactGiftSummary &cur)
+{
+    if (previous.platform != next.platform ||
+        prev.isMembership != cur.isMembership ||
+        prev.name.compare(cur.name, Qt::CaseInsensitive) != 0)
+    {
+        return false;
+    }
+
+    if (previous.serverReceivedTime.isValid() &&
+        next.serverReceivedTime.isValid())
+    {
+        auto seconds = previous.serverReceivedTime.secsTo(
+            next.serverReceivedTime);
+        if (seconds < 0)
+        {
+            seconds = -seconds;
+        }
+        return seconds <= 45;
+    }
+
+    if (previous.parseTime.isValid() && next.parseTime.isValid())
+    {
+        auto seconds = previous.parseTime.secsTo(next.parseTime);
+        if (seconds < 0)
+        {
+            seconds = -seconds;
+        }
+        return seconds <= 45;
+    }
+
+    return true;
+}
+
+QString activityMergedGiftSummaryText(const ActivityCompactGiftSummary &summary,
+                                      int count)
+{
+    const auto unit = summary.isMembership
+                          ? (count == 1 ? QStringLiteral("membership")
+                                        : QStringLiteral("memberships"))
+                          : (count == 1 ? QStringLiteral("sub")
+                                        : QStringLiteral("subs"));
+    return QStringLiteral("%1 gifted %2 %3")
+        .arg(summary.name, QString::number(count), unit);
 }
 
 void addImageContextMenuItems(QMenu *menu,
@@ -1289,6 +1368,23 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         return std::nullopt;
     }
 
+    if (const auto recipientCount = getActivityGiftBombRecipientCount(*message))
+    {
+        if (!shouldShowMessageInActivityPane(
+                *message,
+                this->split_ ? this->split_->twitchActivityMinimumBits() : 100,
+                this->split_ ? this->split_->kickActivityMinimumKicks() : 100,
+                this->split_ ? this->split_->tiktokActivityMinimumDiamonds()
+                             : 0))
+        {
+            return std::nullopt;
+        }
+
+        pendingGiftRecipients = std::max(0, *recipientCount);
+        return makeActivityCompactMessage(message,
+                                          compactActivityGiftBombText(*message));
+    }
+
     if (isActivityGiftRecipientMessage(*message))
     {
         if (pendingGiftRecipients > 0)
@@ -1307,14 +1403,55 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         return std::nullopt;
     }
 
-    if (const auto recipientCount = getActivityGiftBombRecipientCount(*message))
+    return message;
+}
+
+bool ChannelView::tryMergeActivityGiftMessage(const MessagePtr &message)
+{
+    const auto currentSummary = activityCompactGiftSummary(*message);
+    if (!currentSummary)
     {
-        pendingGiftRecipients = std::max(0, *recipientCount);
-        return makeActivityCompactMessage(message,
-                                          compactActivityGiftBombText(*message));
+        return false;
     }
 
-    return message;
+    const auto lastLayout = this->messages_.last();
+    if (!lastLayout)
+    {
+        return false;
+    }
+
+    const auto previousMessage = (*lastLayout)->getMessagePtr();
+    const auto previousSummary = activityCompactGiftSummary(*previousMessage);
+    if (!previousSummary ||
+        !activityGiftSummariesCanMerge(*previousMessage, *previousSummary,
+                                       *message, *currentSummary))
+    {
+        return false;
+    }
+
+    const auto mergedCount = previousSummary->count + currentSummary->count;
+    auto mergedMessage = makeActivityCompactMessage(
+        previousMessage,
+        activityMergedGiftSummaryText(*previousSummary, mergedCount));
+    auto mergedLayout = std::make_shared<MessageLayout>(mergedMessage);
+
+    if ((*lastLayout)->flags.has(MessageLayoutFlag::AlternateBackground))
+    {
+        mergedLayout->flags.set(MessageLayoutFlag::AlternateBackground);
+    }
+    if ((*lastLayout)->flags.has(MessageLayoutFlag::IgnoreHighlights))
+    {
+        mergedLayout->flags.set(MessageLayoutFlag::IgnoreHighlights);
+    }
+
+    const auto index = this->messages_.size() - 1;
+    if (this->showScrollbarHighlights())
+    {
+        this->scrollBar_->replaceHighlight(
+            index, this->scrollbarHighlightForMessage(mergedMessage));
+    }
+    this->messages_.replaceItem(index, mergedLayout);
+    return true;
 }
 
 void ChannelView::rebuildActivityMessages()
@@ -1339,6 +1476,11 @@ void ChannelView::rebuildActivityMessages()
         const auto transformed = this->transformActivityMessage(
             msg, pendingGiftRecipients, suppressNextAnnouncementMessage);
         if (!transformed)
+        {
+            continue;
+        }
+
+        if (this->tryMergeActivityGiftMessage(*transformed))
         {
             continue;
         }
@@ -2045,6 +2187,12 @@ void ChannelView::messageAppended(MessagePtr &message,
             return;
         }
         visibleMessage = *transformed;
+
+        if (this->tryMergeActivityGiftMessage(visibleMessage))
+        {
+            this->queueLayout();
+            return;
+        }
     }
 
     auto *messageFlags = &message->flags;
@@ -2814,13 +2962,20 @@ void ChannelView::wheelEvent(QWheelEvent *event)
         float mouseMultiplier = getSettings()->mouseScrollMultiplier;
 
         // This ensures snapshot won't be indexed out of bounds when scrolling really fast
+        auto &snapshot = this->getMessagesSnapshot();
+        if (snapshot.empty())
+        {
+            event->accept();
+            return;
+        }
+
         qreal desired = std::max<qreal>(0, this->scrollBar_->getDesiredValue());
         qreal delta = event->angleDelta().y() * qreal(1.5) * mouseMultiplier;
 
-        auto &snapshot = this->getMessagesSnapshot();
         int snapshotLength = int(snapshot.size());
-        int i = std::min<int>(int(desired - this->scrollBar_->getMinimum()),
-                              snapshotLength - 1);
+        int i = std::clamp<int>(
+            int(desired - this->scrollBar_->getMinimum()), 0,
+            snapshotLength - 1);
 
         if (delta > 0)
         {
@@ -3779,26 +3934,77 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
         }
     }
 
-    if (!layout->getMessage()->id.isEmpty() &&
-        this->underlyingChannel_->hasModRights())
+    const auto message = layout->getMessage();
+    const auto moderationChannel = this->hasSourceChannel()
+                                       ? this->sourceChannel_
+                                       : this->underlyingChannel_;
+    auto *mergedModerationChannel =
+        moderationChannel
+            ? dynamic_cast<MergedChannel *>(moderationChannel.get())
+            : nullptr;
+    const bool canModerateYouTube =
+        message->platform == MessagePlatform::YouTube &&
+        mergedModerationChannel != nullptr &&
+        mergedModerationChannel->youtubeLiveChat() != nullptr &&
+        mergedModerationChannel->youtubeLiveChat()->hasModeratorPrivileges();
+    const bool canModerateMessage =
+        message->platform == MessagePlatform::YouTube
+            ? canModerateYouTube
+            : moderationChannel && moderationChannel->hasModRights();
+
+    if (!message->id.isEmpty() && canModerateMessage)
     {
         menu->addSeparator();
         auto *moderateAction = menu->addAction("Mo&derate");
         auto *moderateMenu = new QMenu(menu);
         moderateAction->setMenu(moderateMenu);
         moderateMenu->addAction(
-            "&Delete message", [this, id = layout->getMessage()->id] {
+            "&Delete message",
+            [id = message->id, platform = message->platform,
+             moderationChannel] {
                 auto *twitchChannel = dynamic_cast<TwitchChannel *>(
-                    this->underlyingChannel_.get());
+                    moderationChannel.get());
                 if (twitchChannel)
                 {
                     twitchChannel->deleteMessagesAs(
                         id, getApp()->getAccounts()->twitch.getCurrent().get());
                 }
                 else if (auto *kc = dynamic_cast<KickChannel *>(
-                             this->underlyingChannel_.get()))
+                             moderationChannel.get()))
                 {
                     kc->deleteMessage(id);
+                }
+                else if (auto *mergedChannel = dynamic_cast<MergedChannel *>(
+                             moderationChannel.get()))
+                {
+                    if (platform == MessagePlatform::YouTube &&
+                        mergedChannel->youtubeLiveChat() != nullptr)
+                    {
+                        mergedChannel->youtubeLiveChat()->deleteMessage(id);
+                    }
+                    else if (platform == MessagePlatform::Kick)
+                    {
+                        auto *kickChannel = dynamic_cast<KickChannel *>(
+                            mergedChannel->kickChannel().get());
+                        if (kickChannel != nullptr)
+                        {
+                            kickChannel->deleteMessage(id);
+                        }
+                    }
+                    else
+                    {
+                        auto *mergedTwitchChannel =
+                            dynamic_cast<TwitchChannel *>(
+                                mergedChannel->twitchChannel().get());
+                        if (mergedTwitchChannel != nullptr)
+                        {
+                            mergedTwitchChannel->deleteMessagesAs(
+                                id, getApp()
+                                        ->getAccounts()
+                                        ->twitch.getCurrent()
+                                        .get());
+                        }
+                    }
                 }
             });
     }

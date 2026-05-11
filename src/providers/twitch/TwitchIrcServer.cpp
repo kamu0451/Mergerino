@@ -475,29 +475,6 @@ void TwitchIrcServer::onReadConnected(IrcConnection *connection)
         this->joinBucket_->send(channel->getName());
     }
 
-    // connected/disconnected message
-    auto connectedMsg = makeSystemMessage("connected");
-    connectedMsg->flags.set(MessageFlag::ConnectedMessage);
-    auto reconnected = makeSystemMessage("reconnected");
-    reconnected->flags.set(MessageFlag::ConnectedMessage);
-
-    for (const auto &chan : activeChannels)
-    {
-        MessagePtr last = chan->getLastMessage();
-
-        bool replaceMessage =
-            last && last->flags.has(MessageFlag::DisconnectedMessage);
-
-        if (replaceMessage)
-        {
-            chan->replaceMessage(last, reconnected);
-        }
-        else
-        {
-            chan->addMessage(connectedMsg, MessageContext::Original);
-        }
-    }
-
     this->falloffCounter_ = 1;
 }
 
@@ -510,10 +487,6 @@ void TwitchIrcServer::onDisconnected()
 {
     std::lock_guard<std::mutex> lock(this->channelMutex);
 
-    MessageBuilder b(systemMessage, "disconnected");
-    b->flags.set(MessageFlag::DisconnectedMessage);
-    auto disconnectedMsg = b.release();
-
     for (std::weak_ptr<Channel> &weak : this->channels.values())
     {
         std::shared_ptr<Channel> chan = weak.lock();
@@ -521,8 +494,6 @@ void TwitchIrcServer::onDisconnected()
         {
             continue;
         }
-
-        chan->addMessage(disconnectedMsg, MessageContext::Original);
 
         if (auto *channel = dynamic_cast<TwitchChannel *>(chan.get()))
         {

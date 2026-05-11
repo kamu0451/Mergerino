@@ -17,20 +17,109 @@
 #include "providers/kick/KickApi.hpp"
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/kick/KickLiveUpdates.hpp"
+#include "providers/kick/KickMessageBuilder.hpp"
 #include "providers/seventv/eventapi/Dispatch.hpp"
 #include "providers/seventv/SeventvAPI.hpp"
 #include "providers/seventv/SeventvEmotes.hpp"
 #include "providers/seventv/SeventvEventAPI.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Settings.hpp"
+#include "util/BoostJsonWrap.hpp"
 #include "util/FormatTime.hpp"
 #include "util/Helpers.hpp"
 #include "util/PostToThread.hpp"
+
+#include <boost/json/parse.hpp>
+
+#include <algorithm>
 
 using namespace Qt::Literals;
 using namespace std::chrono_literals;
 
 namespace chatterino {
+
+namespace {
+
+void normalizeRecentMessageMetadata(boost::json::object &message)
+{
+    auto metadataIt = message.find("metadata");
+    if (metadataIt == message.end() || !metadataIt->value().is_string())
+    {
+        return;
+    }
+
+    auto &metadataValue = metadataIt->value();
+    const auto &metadataString = metadataValue.as_string();
+    if (metadataString.empty())
+    {
+        return;
+    }
+
+    boost::system::error_code ec;
+    auto parsed = boost::json::parse(
+        std::string_view(metadataString.data(), metadataString.size()), ec);
+    if (!ec && parsed.is_object())
+    {
+        metadataValue = std::move(parsed);
+    }
+}
+
+std::vector<MessagePtr> buildKickRecentMessages(
+    KickChannel *channel, const std::vector<boost::json::object> &rawMessages)
+{
+    std::vector<MessagePtr> messages;
+    messages.reserve(rawMessages.size());
+
+    for (const auto &rawMessage : rawMessages)
+    {
+        auto raw = rawMessage;
+        normalizeRecentMessageMetadata(raw);
+
+        BoostJsonObject json(raw);
+        auto result = KickMessageBuilder::makeChatMessage(channel, json);
+        auto msg = std::move(result.first);
+        if (!msg)
+        {
+            continue;
+        }
+
+        msg->flags.set(MessageFlag::RecentMessage);
+        messages.emplace_back(std::move(msg));
+    }
+
+    std::sort(messages.begin(), messages.end(),
+              [](const auto &lhs, const auto &rhs) {
+                  return lhs->serverReceivedTime < rhs->serverReceivedTime;
+              });
+
+    return messages;
+}
+
+std::vector<MessagePtr> removeExistingMessages(KickChannel *channel,
+                                               std::vector<MessagePtr> messages)
+{
+    std::vector<MessagePtr> newMessages;
+    newMessages.reserve(messages.size());
+
+    for (auto &msg : messages)
+    {
+        if (!msg)
+        {
+            continue;
+        }
+
+        if (!msg->id.isEmpty() && channel->findMessageByID(msg->id))
+        {
+            continue;
+        }
+
+        newMessages.emplace_back(std::move(msg));
+    }
+
+    return newMessages;
+}
+
+}  // namespace
 
 KickChannel::KickChannel(const QString &name)
     : Channel(name.toLower(), Type::Kick)
@@ -568,25 +657,58 @@ void KickChannel::resolveChannelInfo()
 
 void KickChannel::setUserInfo(UserInit init)
 {
-    auto oldUserID = std::exchange(this->userID_, init.userID);
-    auto oldChannelID = std::exchange(this->channelID_, init.channelID);
-    auto oldRoomID = std::exchange(this->roomID_, init.roomID);
+    const auto oldUserID = this->userID_;
+    const auto oldChannelID = this->channelID_;
+    const auto oldRoomID = this->roomID_;
+
+    if ((oldChannelID != 0 && init.channelID != 0 &&
+         oldChannelID != init.channelID) ||
+        (oldRoomID != 0 && init.roomID != 0 && oldRoomID != init.roomID))
+    {
+        qCWarning(chatterinoKick)
+            << *this << "Unexpected room/channel ID change - oldChannelID:"
+            << oldChannelID << "channelID:" << init.channelID
+            << "oldRoomID:" << oldRoomID << "roomID:" << init.roomID;
+        return;
+    }
+
+    if (init.userID != 0)
+    {
+        this->userID_ = init.userID;
+    }
+    if (init.channelID != 0)
+    {
+        this->channelID_ = init.channelID;
+    }
+    if (init.roomID != 0)
+    {
+        this->roomID_ = init.roomID;
+    }
 
     if (oldChannelID != this->channelID() || oldRoomID != this->roomID())
     {
-        if (oldChannelID != 0 || oldRoomID != 0)
+        if (this->roomID() != 0 && this->channelID() != 0)
         {
-            qCWarning(chatterinoKick)
-                << *this << "Unexpected room/channel ID change - oldChannelID:"
-                << oldChannelID << "channelID:" << this->channelID()
-                << "oldRoomID:" << oldRoomID << "roomID:" << this->roomID();
-            return;
+            auto *srv = getApp()->getKickChatServer();
+            srv->registerRoomID(this->roomID(), this->channelID(),
+                                this->weakFromThis());
+            const auto roomID = this->roomID();
+            const auto channelID = this->channelID();
+            this->loadRecentMessages([weak = this->weakFromThis(), roomID,
+                                      channelID] {
+                auto self = weak.lock();
+                if (!self)
+                {
+                    return;
+                }
+                getApp()->getKickChatServer()->liveUpdates().joinRoom(roomID,
+                                                                       channelID);
+            });
         }
-
-        auto *srv = getApp()->getKickChatServer();
-        srv->registerRoomID(this->roomID(), this->channelID(),
-                            this->weakFromThis());
-        srv->liveUpdates().joinRoom(this->roomID(), this->channelID());
+        else
+        {
+            this->loadRecentMessages();
+        }
     }
 
     if (oldUserID != this->userID())
@@ -594,6 +716,108 @@ void KickChannel::setUserInfo(UserInit init)
         this->reloadSeventvEmotes(false);
         this->userIDChanged.invoke();
     }
+}
+
+void KickChannel::loadRecentMessages(std::function<void()> onDone)
+{
+    if (!getSettings()->loadTwitchMessageHistoryOnConnect)
+    {
+        if (onDone)
+        {
+            onDone();
+        }
+        return;
+    }
+
+    if (this->roomID() == 0)
+    {
+        if (onDone)
+        {
+            onDone();
+        }
+        return;
+    }
+
+    if (this->loadedRecentMessages_.load())
+    {
+        if (onDone)
+        {
+            onDone();
+        }
+        return;
+    }
+
+    if (this->loadingRecentMessages_.test_and_set())
+    {
+        if (onDone)
+        {
+            onDone();
+        }
+        return;
+    }
+
+    auto weak = this->weakFromThis();
+    KickApi::privateRecentMessages(
+        this->roomID(), getSettings()->twitchMessageHistoryLimit.getValue(),
+        [weak, onDone = std::move(onDone)](
+            const ExpectedStr<std::vector<boost::json::object>> &res) mutable {
+            auto finish = [&onDone] {
+                if (onDone)
+                {
+                    onDone();
+                }
+            };
+            auto self = weak.lock();
+            if (!self)
+            {
+                finish();
+                return;
+            }
+
+            if (!res)
+            {
+                qCDebug(chatterinoKick)
+                    << *self
+                    << "Failed to load Kick message history:" << res.error();
+                self->addSystemMessage(
+                    QStringLiteral(
+                        "Kick message history unavailable (Error: %1)")
+                        .arg(res.error()));
+                self->loadingRecentMessages_.clear();
+                finish();
+                return;
+            }
+
+            auto messages = removeExistingMessages(
+                self.get(), buildKickRecentMessages(self.get(), *res));
+            if (!messages.empty())
+            {
+                self->addMessagesAtStart(messages);
+                self->loadedRecentMessages_.store(true);
+            }
+            self->loadingRecentMessages_.clear();
+
+            std::vector<MessagePtr> mentionMessages;
+            for (const auto &msg : messages)
+            {
+                const auto highlighted =
+                    msg->flags.has(MessageFlag::Highlighted);
+                const auto showInMentions =
+                    msg->flags.has(MessageFlag::ShowInMentions);
+                if (highlighted && showInMentions)
+                {
+                    mentionMessages.push_back(msg);
+                }
+            }
+
+            if (!mentionMessages.empty())
+            {
+                getApp()->getTwitch()->getMentionsChannel()
+                    ->fillInMissingMessages(mentionMessages);
+            }
+
+            finish();
+        });
 }
 
 size_t KickChannel::maxBurstMessages() const

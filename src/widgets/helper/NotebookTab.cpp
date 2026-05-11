@@ -32,6 +32,7 @@
 #include <QLineEdit>
 #include <QMimeData>
 #include <QPainter>
+#include <QTimer>
 
 #include <algorithm>
 
@@ -527,6 +528,27 @@ bool NotebookTab::isSelected() const
     return this->selected_;
 }
 
+bool NotebookTab::isBulkSelected() const
+{
+    return this->bulkSelected_;
+}
+
+void NotebookTab::setBulkSelected(bool value)
+{
+    if (this->bulkSelected_ == value)
+    {
+        return;
+    }
+
+    this->bulkSelected_ = value;
+    this->update();
+}
+
+void NotebookTab::updateVisualState()
+{
+    this->update();
+}
+
 void NotebookTab::removeHighlightStateChangeSources(
     const HighlightSources &toRemove)
 {
@@ -874,7 +896,12 @@ void NotebookTab::paintEvent(QPaintEvent *)
     // select the right tab colors
     Theme::TabColors colors;
 
-    if (this->selected_)
+    const auto bulkSelectionActive =
+        this->notebook_->bulkSelectedTabCount() > 0;
+    const auto visuallySelected =
+        this->bulkSelected_ || (this->selected_ && !bulkSelectionActive);
+
+    if (visuallySelected)
     {
         colors = this->theme->tabs.selected;
     }
@@ -898,7 +925,7 @@ void NotebookTab::paintEvent(QPaintEvent *)
         (windowFocused ? colors.backgrounds.regular
                        : colors.backgrounds.unfocused);
 
-    auto selectionOffset = ceil((this->selected_ ? 0.f : 1.f) * scale);
+    auto selectionOffset = ceil((visuallySelected ? 0.f : 1.f) * scale);
 
     // fill the tab background
     auto bgRect = this->rect();
@@ -921,7 +948,7 @@ void NotebookTab::paintEvent(QPaintEvent *)
     painter.fillRect(bgRect, tabBackground);
 
     // draw color indicator line
-    auto lineThickness = ceil((this->selected_ ? 2.f : 1.f) * scale);
+    auto lineThickness = ceil((visuallySelected ? 2.f : 1.f) * scale);
     auto lineColor = this->mouseOver_ ? colors.line.hover
                                       : (windowFocused ? colors.line.regular
                                                        : colors.line.unfocused);
@@ -974,7 +1001,7 @@ void NotebookTab::paintEvent(QPaintEvent *)
         auto diameter = 4 * scale;
         QRect liveIndicatorRect(x, y, diameter, diameter);
         translateRectForLocation(liveIndicatorRect, this->tabLocation_,
-                                 this->selected_ ? 0 : -1);
+                                 visuallySelected ? 0 : -1);
         painter.drawEllipse(liveIndicatorRect);
     }
 
@@ -992,7 +1019,7 @@ void NotebookTab::paintEvent(QPaintEvent *)
     int offset = int(scale * 4 / compactDivider);
     QRect textRect(offset, 0, this->width() - offset - offset, height);
     translateRectForLocation(textRect, this->tabLocation_,
-                             this->selected_ ? -1 : -2);
+                             visuallySelected ? -1 : -2);
 
     if (this->shouldDrawXButton())
     {
@@ -1038,13 +1065,13 @@ void NotebookTab::paintEvent(QPaintEvent *)
     }
 
     // draw mouse over effect
-    if (!this->selected_)
+    if (!visuallySelected)
     {
         this->fancyPaint(painter);
     }
 
     // draw line at border
-    if (!this->selected_ && this->isInLastRow_)
+    if (!visuallySelected && this->isInLastRow_)
     {
         QRect borderRect;
         switch (this->tabLocation_)
@@ -1084,6 +1111,34 @@ void NotebookTab::mousePressEvent(QMouseEvent *event)
         this->mouseDown_ = true;
         this->mouseDownX_ = this->getXRect().contains(event->pos());
 
+        const auto modifiers = event->modifiers();
+        const auto canBulkSelect =
+            !this->mouseDownX_ &&
+            this->notebook_->getAllowUserTabManagement();
+
+        if (canBulkSelect && modifiers.testFlag(Qt::ShiftModifier))
+        {
+            this->mouseDown_ = false;
+            this->notebook_->selectBulkRangeTo(
+                this, modifiers.testFlag(Qt::ControlModifier));
+            this->update();
+            event->accept();
+            return;
+        }
+
+        if (canBulkSelect && modifiers.testFlag(Qt::ControlModifier))
+        {
+            this->mouseDown_ = false;
+            this->notebook_->toggleBulkSelectedTab(this);
+            this->update();
+            event->accept();
+            return;
+        }
+
+        if (!this->bulkSelected_)
+        {
+            this->notebook_->clearBulkSelectedTabs();
+        }
         this->notebook_->select(this->page);
     }
 
@@ -1158,6 +1213,13 @@ void NotebookTab::mouseReleaseEvent(QMouseEvent *event)
 
 void NotebookTab::mouseDoubleClickEvent(QMouseEvent *event)
 {
+    if (event->modifiers().testFlag(Qt::ControlModifier) ||
+        event->modifiers().testFlag(Qt::ShiftModifier))
+    {
+        event->accept();
+        return;
+    }
+
     const auto canRenameTab = this->notebook_->getAllowUserTabManagement() &&
                               getSettings()->disableTabRenamingOnClick == false;
 
@@ -1262,21 +1324,62 @@ void NotebookTab::mouseMoveEvent(QMouseEvent *event)
 
         if (clickedPage != nullptr && clickedPage != this->page)
         {
-            this->notebook_->rearrangePage(this->page, index);
+            if (!this->notebook_->tryRearrangeBulkSelectedTabs(this->page,
+                                                               index))
+            {
+                this->notebook_->rearrangePage(this->page, index);
+            }
         }
     }
 
     Button::mouseMoveEvent(event);
 }
 
+void NotebookTab::queueWheelTabSelection(int delta)
+{
+    if (delta == 0)
+    {
+        return;
+    }
+
+    this->pendingWheelDirection_ += delta > 0 ? 1 : -1;
+
+    if (this->wheelSelectionQueued_)
+    {
+        return;
+    }
+
+    this->wheelSelectionQueued_ = true;
+    QTimer::singleShot(16, this, [this] {
+        this->wheelSelectionQueued_ = false;
+
+        const auto direction = this->pendingWheelDirection_;
+        this->pendingWheelDirection_ = 0;
+
+        if (direction == 0 || this->page == nullptr ||
+            this->notebook_ == nullptr ||
+            this->notebook_->indexOf(this->page) == -1)
+        {
+            return;
+        }
+
+        direction > 0 ? this->notebook_->selectPreviousTab(false)
+                      : this->notebook_->selectNextTab(false);
+    });
+}
+
 void NotebookTab::wheelEvent(QWheelEvent *event)
 {
     const auto defaultMouseDelta = 120;
     const auto verticalDelta = event->angleDelta().y();
-    const auto selectTab = [this](int delta) {
-        delta > 0 ? this->notebook_->selectPreviousTab()
-                  : this->notebook_->selectNextTab();
-    };
+    if (verticalDelta == 0 || this->notebook_->indexOf(this->page) == -1)
+    {
+        event->ignore();
+        return;
+    }
+
+    event->accept();
+
     // If it's true
     // Then the user uses the trackpad or perhaps the most accurate mouse
     // Which has small delta.
@@ -1285,13 +1388,13 @@ void NotebookTab::wheelEvent(QWheelEvent *event)
         this->mouseWheelDelta_ += verticalDelta;
         if (std::abs(this->mouseWheelDelta_) >= defaultMouseDelta)
         {
-            selectTab(this->mouseWheelDelta_);
+            this->queueWheelTabSelection(this->mouseWheelDelta_);
             this->mouseWheelDelta_ = 0;
         }
     }
     else
     {
-        selectTab(verticalDelta);
+        this->queueWheelTabSelection(verticalDelta);
     }
 }
 
@@ -1314,7 +1417,11 @@ QRect NotebookTab::getXRect() const
     QRect xRect(rect.right() - static_cast<int>((20 - compactReducer) * s),
                 rect.center().y() - centerAdjustment, size, size);
 
-    if (this->selected_)
+    const auto visuallySelected =
+        this->bulkSelected_ ||
+        (this->selected_ && this->notebook_->bulkSelectedTabCount() == 0);
+
+    if (visuallySelected)
     {
         translateRectForLocation(xRect, this->tabLocation_, 1);
     }

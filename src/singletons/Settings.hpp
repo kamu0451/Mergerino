@@ -129,9 +129,9 @@ constexpr std::optional<std::string_view> qmagicenumDisplayName(
     switch (value)
     {
         case PlatformIndicatorMode::Badge:
-            return "Platform badge";
+            return "Platform badge (default)";
         case PlatformIndicatorMode::LineColor:
-            return "Platform line color (default)";
+            return "Platform line color";
         case PlatformIndicatorMode::Both:
             return "Platform line color + badge";
     }
@@ -297,7 +297,7 @@ public:
     BoolSetting colorUsernames = {"/appearance/messages/colorUsernames", true};
     EnumStringSetting<PlatformIndicatorMode> mergedPlatformIndicatorMode = {
         "/appearance/messages/mergedPlatformIndicatorMode",
-        PlatformIndicatorMode::LineColor,
+        PlatformIndicatorMode::Badge,
     };
     EnumStringSetting<PlatformEventHighlightStyle> platformEventHighlightStyle =
         {"/appearance/messages/platformEventHighlightStyle",
@@ -835,7 +835,6 @@ public:
     BoolSetting informOnTabVisibilityToggle = {"/misc/askOnTabVisibilityToggle",
                                                true};
     BoolSetting lockNotebookLayout = {"/misc/lockNotebookLayout", false};
-    BoolSetting showPronouns = {"/misc/showPronouns", false};
     BoolSetting showTitleInLiveMessage = {
         "/extraChannels/live/showTitle",
         false,

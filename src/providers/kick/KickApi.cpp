@@ -8,6 +8,8 @@
 #include <boost/json/parse.hpp>
 #include <QUrlQuery>
 
+#include <algorithm>
+
 namespace {
 
 using namespace chatterino;
@@ -309,6 +311,85 @@ void KickApi::privateEmotesInChannel(
 {
     getJsonNoAuth(u"https://kick.com/emotes/" % slugify(username),
                   std::move(cb));
+}
+
+void KickApi::privateRecentMessages(
+    uint64_t chatroomID, int limit,
+    Callback<std::vector<boost::json::object>> cb)
+{
+    if (chatroomID == 0)
+    {
+        cb(makeUnexpected(u"Missing chatroom ID"_s));
+        return;
+    }
+
+    const auto boundedLimit = std::max(1, limit);
+    const QString url = u"https://kick.com/api/v2/channels/" %
+                        QString::number(chatroomID) %
+                        u"/messages?limit=" % QString::number(boundedLimit);
+
+    NetworkRequest(url)
+        .headerList(kickNoAuthHeaders())
+        .onError([cb](const NetworkResult &res) {
+            cb(makeUnexpected(res.formatError()));
+        })
+        .onSuccess([cb = std::move(cb)](const NetworkResult &res) {
+            const auto &ba = res.getData();
+            boost::system::error_code ec;
+            auto jv =
+                boost::json::parse(std::string_view(ba.data(), ba.size()), ec);
+            if (ec)
+            {
+                qCWarning(chatterinoKick)
+                    << "Failed to parse recent messages response:"
+                    << ec.message();
+                cb(makeUnexpected(u"Failed to parse API response: "_s %
+                                  QString::fromStdString(ec.message())));
+                return;
+            }
+
+            if (!jv.is_object())
+            {
+                qCWarning(chatterinoKick)
+                    << "Recent messages root value was not an object";
+                cb(makeUnexpected(u"Root value was not an object"_s));
+                return;
+            }
+
+            const auto &root = jv.as_object();
+            const auto dataIt = root.find("data");
+            if (dataIt == root.end() || !dataIt->value().is_object())
+            {
+                cb(makeUnexpected(u"'data' is not an object"_s));
+                return;
+            }
+
+            const auto &data = dataIt->value().as_object();
+            const auto messagesIt = data.find("messages");
+            if (messagesIt == data.end() || !messagesIt->value().is_array())
+            {
+                cb(makeUnexpected(u"'data.messages' is not an array"_s));
+                return;
+            }
+
+            const auto &messageValues = messagesIt->value().as_array();
+            std::vector<boost::json::object> messages;
+            messages.reserve(messageValues.size());
+            for (const auto &messageValue : messageValues)
+            {
+                if (!messageValue.is_object())
+                {
+                    cb(makeUnexpected(
+                        u"'data.messages' contained a non-object value"_s));
+                    return;
+                }
+
+                messages.emplace_back(messageValue.as_object());
+            }
+
+            cb(std::move(messages));
+        })
+        .execute();
 }
 
 void KickApi::sendMessage(uint64_t broadcasterUserID, const QString &message,

@@ -2862,7 +2862,7 @@ void Helix::getGlobalBadges(
             switch (*result.status())
             {
                 case 401: {
-                    failureCallback(Error::Forwarded, message);
+                    failureCallback(Error::UserNotAuthenticated, message);
                 }
                 break;
 
@@ -2913,9 +2913,13 @@ void Helix::getChannelBadges(
 
             switch (*result.status())
             {
-                case 400:
-                case 401: {
+                case 400: {
                     failureCallback(Error::Forwarded, message);
+                }
+                break;
+
+                case 401: {
+                    failureCallback(Error::UserNotAuthenticated, message);
                 }
                 break;
 

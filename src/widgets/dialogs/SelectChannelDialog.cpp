@@ -903,7 +903,7 @@ PlatformIndicatorMode SelectChannelDialog::platformIndicatorMode() const
 {
     if (this->ui_.indicatorMode == nullptr)
     {
-        return PlatformIndicatorMode::LineColor;
+        return PlatformIndicatorMode::Badge;
     }
 
     return indicatorModeFromIndex(this->ui_.indicatorMode->currentIndex());

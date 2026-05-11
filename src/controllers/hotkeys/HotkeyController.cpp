@@ -440,6 +440,9 @@ void HotkeyController::addDefaults(std::set<QString> &addedHotkeys)
         this->tryAddDefault(addedHotkeys, HotkeyCategory::SplitInput,
                             QKeySequence("Ctrl+E"), "openEmotesPopup",
                             std::vector<QString>(), "emote picker");
+        this->tryAddDefault(addedHotkeys, HotkeyCategory::SplitInput,
+                            QKeySequence("Ctrl+D"), "cycleSendPlatform",
+                            std::vector<QString>(), "cycle send platform");
 
         // all variations of send message :)
         {

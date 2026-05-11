@@ -690,7 +690,16 @@ std::set<QString> WindowManager::getVisibleChannelNames() const
 
         for (auto *split : page->getSplits())
         {
-            visible.emplace(split->getChannel()->getName());
+            auto channel = split->getChannel();
+            visible.emplace(channel->getName());
+
+            if (auto *merged = dynamic_cast<MergedChannel *>(channel.get()))
+            {
+                if (auto twitchChannel = merged->twitchChannel())
+                {
+                    visible.emplace(twitchChannel->getName());
+                }
+            }
         }
     }
 

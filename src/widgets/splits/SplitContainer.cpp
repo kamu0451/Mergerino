@@ -1049,7 +1049,8 @@ void SplitContainer::applyFromDescriptorRecursively(
         }
         else if (split->isActivityPane())
         {
-            split->setPlatformIndicatorMode(PlatformIndicatorMode::LineColor);
+            split->setPlatformIndicatorMode(
+                getSettings()->mergedPlatformIndicatorMode.getEnum());
         }
 
         this->insertSplit(split);
@@ -1121,7 +1122,7 @@ void SplitContainer::applyFromDescriptorRecursively(
                 else if (split->isActivityPane())
                 {
                     split->setPlatformIndicatorMode(
-                        PlatformIndicatorMode::LineColor);
+                        getSettings()->mergedPlatformIndicatorMode.getEnum());
                 }
 
                 auto node = std::make_shared<Node>();

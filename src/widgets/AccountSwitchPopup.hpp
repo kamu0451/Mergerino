@@ -9,6 +9,7 @@
 #include <boost/signals2/connection.hpp>
 #include <QElapsedTimer>
 #include <QLabel>
+#include <QListWidget>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QWidget>
@@ -42,8 +43,12 @@ private:
         QStackedWidget *accountStack = nullptr;
         QPushButton *twitchProviderButton = nullptr;
         QPushButton *kickProviderButton = nullptr;
+        QPushButton *youtubeProviderButton = nullptr;
         AccountSwitchWidget *accountSwitchWidget = nullptr;
         KickAccountSwitchWidget *kickAccountSwitcher = nullptr;
+        QWidget *youtubeAccountPage = nullptr;
+        QWidget *youtubeReviewNotice = nullptr;
+        QListWidget *youtubeAccountSwitcher = nullptr;
         QLabel *statusLabel = nullptr;
         QPushButton *loginButton = nullptr;
         QPushButton *manageAccountsButton = nullptr;

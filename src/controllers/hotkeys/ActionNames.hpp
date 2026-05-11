@@ -251,6 +251,8 @@ inline const std::map<HotkeyCategory, ActionDefinitionMap> actionNames{
               // XXX: write a hover for this that doesn't suck
           }},
          {"nextMessage", ActionDefinition{"Choose next sent message"}},
+         {"cycleSendPlatform",
+          ActionDefinition{"Cycle send platform selection"}},
          {"openEmotesPopup", ActionDefinition{"Open emotes list"}},
          {"paste", ActionDefinition{"Paste"}},
          {"previousMessage",

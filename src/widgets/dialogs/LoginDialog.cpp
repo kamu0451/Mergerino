@@ -11,6 +11,7 @@
 #include "singletons/Settings.hpp"
 #include "util/Clipboard.hpp"
 #include "util/Helpers.hpp"
+#include "widgets/dialogs/TwitchLoginPage.hpp"
 
 #ifdef USEWINSDK
 #    include <Windows.h>
@@ -21,6 +22,7 @@
 #include <QDesktopServices>
 #include <QDebug>
 #include <QMessageBox>
+#include <QPointer>
 #include <QUrl>
 
 namespace chatterino {
@@ -77,39 +79,72 @@ bool logInWithCredentials(QWidget *parent, const QString &userID,
 
 BasicLoginWidget::BasicLoginWidget()
 {
-    const QString logInLink = "https://chatterino.com/client_login";
+    const QString chatterinoLogInLink = "https://chatterino.com/client_login";
     this->setLayout(&this->ui_.layout);
 
-    this->ui_.flowLabel.setText("Uses the browser-based Twitch login flow.");
+    this->ui_.flowLabel.setText("Uses Mergerino's local Twitch login flow.");
     this->ui_.flowLabel.setWordWrap(true);
 
-    this->ui_.loginButton.setText("Log in (Opens in browser)");
-    this->ui_.pasteCodeButton.setText("Paste login info");
+    this->ui_.loginButton.setText("Log in with Twitch");
+    this->ui_.chatterinoLoginButton.setText("Chatterino fallback");
+    this->ui_.pasteCodeButton.setText("Paste info");
     this->ui_.unableToOpenBrowserHelper.setWindowTitle(
         "Mergerino - unable to open in browser");
     this->ui_.unableToOpenBrowserHelper.setWordWrap(true);
     this->ui_.unableToOpenBrowserHelper.hide();
     this->ui_.unableToOpenBrowserHelper.setText(
-        QString("An error occurred while attempting to open <a href=\"%1\">the "
-                "login page</a> - open it manually in your browser and proceed "
-                "from there.")
-            .arg(logInLink));
+        "Mergerino's local Twitch login could not start. Use the Chatterino "
+        "fallback only if the normal login is blocked.");
     this->ui_.unableToOpenBrowserHelper.setOpenExternalLinks(true);
+    this->ui_.chatterinoLoginButton.hide();
+    this->ui_.pasteCodeButton.hide();
 
     this->ui_.layout.addWidget(&this->ui_.flowLabel);
     this->ui_.horizontalLayout.addWidget(&this->ui_.loginButton);
+    this->ui_.horizontalLayout.addWidget(&this->ui_.chatterinoLoginButton);
     this->ui_.horizontalLayout.addWidget(&this->ui_.pasteCodeButton);
 
     this->ui_.layout.addLayout(&this->ui_.horizontalLayout);
     this->ui_.layout.addWidget(&this->ui_.unableToOpenBrowserHelper);
 
-    connect(&this->ui_.loginButton, &QPushButton::clicked, [this, logInLink]() {
-        qCDebug(chatterinoWidget) << "open login in browser";
-        if (!QDesktopServices::openUrl(QUrl(logInLink)))
-        {
-            qCWarning(chatterinoWidget) << "open login in browser failed";
-            this->ui_.unableToOpenBrowserHelper.show();
-        }
+    auto showChatterinoFallback = [this] {
+        this->ui_.unableToOpenBrowserHelper.show();
+        this->ui_.chatterinoLoginButton.show();
+        this->ui_.pasteCodeButton.show();
+    };
+
+    connect(&this->ui_.loginButton, &QPushButton::clicked,
+            [this, showChatterinoFallback]() {
+                if (!TwitchLoginPage::startLoginFlow(
+                        this,
+                        [window = QPointer<QWidget>(this->window())] {
+                            if (window)
+                            {
+                                window->close();
+                            }
+                        }))
+                {
+                    showChatterinoFallback();
+                }
+    });
+
+    connect(&this->ui_.chatterinoLoginButton, &QPushButton::clicked,
+            [this, chatterinoLogInLink]() {
+                qCDebug(chatterinoWidget)
+                    << "open Chatterino login in browser";
+                if (!QDesktopServices::openUrl(QUrl(chatterinoLogInLink)))
+                {
+                    qCWarning(chatterinoWidget)
+                        << "open Chatterino login in browser failed";
+                    this->ui_.unableToOpenBrowserHelper.setText(
+                        QString("Unable to open <a href=\"%1\">the Chatterino "
+                                "fallback login page</a>. Open it manually in "
+                                "your browser, then paste the login info here.")
+                            .arg(chatterinoLogInLink));
+                    this->ui_.unableToOpenBrowserHelper.setOpenExternalLinks(
+                        true);
+                    this->ui_.unableToOpenBrowserHelper.show();
+                }
     });
 
     connect(&this->ui_.pasteCodeButton, &QPushButton::clicked, [this]() {
@@ -268,10 +303,15 @@ LoginDialog::LoginDialog(QWidget *parent,
     this->ui_.mainLayout.addWidget(&this->ui_.buttonBox);
 
     this->ui_.tabWidget.addTab(&this->ui_.kick, "Kick");
+    this->ui_.tabWidget.addTab(&this->ui_.youtube, "YouTube");
 
     if (preferredProvider == ProviderId::Kick)
     {
         this->ui_.tabWidget.setCurrentWidget(&this->ui_.kick);
+    }
+    else if (preferredProvider == ProviderId::YouTube)
+    {
+        this->ui_.tabWidget.setCurrentWidget(&this->ui_.youtube);
     }
 }
 

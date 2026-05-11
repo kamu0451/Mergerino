@@ -350,6 +350,7 @@ private:
     std::optional<MessagePtr> transformActivityMessage(
         const MessagePtr &message, int &pendingGiftRecipients,
         bool &suppressNextAnnouncementMessage) const;
+    bool tryMergeActivityGiftMessage(const MessagePtr &message);
     void rebuildActivityMessages();
     void enqueueOrAddProxyMessage(
         const MessagePtr &message,

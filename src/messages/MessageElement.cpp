@@ -1374,9 +1374,14 @@ void TwitchModerationElement::addToContainer(MessageLayoutContainer &container,
             container.getScale() * 16,
         };
         auto actions = getSettings()->moderationActions.readOnly();
+        if (!actions)
+        {
+            return;
+        }
+
         for (const auto &action : *actions)
         {
-            if (const auto &image = action.getImage())
+            if (const auto &image = action.getImage(); image && *image)
             {
                 container.addElement(
                     (new ImageLayoutElement(*this, *image, size))

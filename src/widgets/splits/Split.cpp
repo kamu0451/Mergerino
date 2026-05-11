@@ -19,6 +19,8 @@
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/youtube/YouTubeAccount.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/ImageUploader.hpp"
 #include "singletons/Settings.hpp"
@@ -89,8 +91,8 @@ bool isTwitchSpecialChannelType(Channel::Type type)
 
 PlatformIndicatorMode defaultPlatformIndicatorMode(bool isActivityPane)
 {
-    return isActivityPane ? PlatformIndicatorMode::LineColor
-                          : getSettings()->mergedPlatformIndicatorMode.getEnum();
+    (void)isActivityPane;
+    return getSettings()->mergedPlatformIndicatorMode.getEnum();
 }
 
 bool mergedSplitHasTikTokEnabled(const Split *split)
@@ -452,13 +454,21 @@ Split::Split(QWidget *parent)
     // update placeholder text on Twitch account change and channel change
     this->bSignals_.emplace_back(
         getApp()->getAccounts()->twitch.currentUserChanged.connect([this] {
+            this->input_->updatePlatformSelector();
             this->updateInputPlaceholder();
         }));
     this->signalHolder_.managedConnect(this->channelChanged, [this] {
+        this->input_->updatePlatformSelector();
         this->updateInputPlaceholder();
     });
     this->signalHolder_.managedConnect(
         getApp()->getAccounts()->kick.currentUserChanged, [this] {
+            this->input_->updatePlatformSelector();
+            this->updateInputPlaceholder();
+        });
+    this->signalHolder_.managedConnect(
+        getApp()->getAccounts()->youtube.currentUserChanged, [this] {
+            this->input_->updatePlatformSelector();
             this->updateInputPlaceholder();
         });
     this->signalHolder_.managedConnect(this->input_->sendPlatformChanged,
@@ -1396,6 +1406,11 @@ void Split::updateInputPlaceholder()
         {
             loginTargets.append("Kick");
         }
+        if (merged->config().youtubeEnabled && merged->youtubeLiveChat() &&
+            merged->youtubeLiveChat()->isLive())
+        {
+            loginTargets.append("YouTube");
+        }
 
         const auto platformName =
             this->input_->selectedSendPlatformDisplayName();
@@ -1528,6 +1543,7 @@ void Split::setChannel(IndirectChannel newChannel)
 
     this->usermodeChangedConnection_.disconnect();
     this->roomModeChangedConnection_.disconnect();
+    this->channelIDChangedConnection_.disconnect();
     this->indirectChannelChangedConnection_.disconnect();
 
     TwitchChannel *tc = dynamic_cast<TwitchChannel *>(newChannel.get().get());
@@ -1581,6 +1597,15 @@ void Split::setChannel(IndirectChannel newChannel)
         this->channel_.get()->displayNameChanged, [this] {
             this->actionRequested.invoke(Action::RefreshTab);
         });
+    if (auto *merged = dynamic_cast<MergedChannel *>(this->channel_.get().get()))
+    {
+        this->channelIDChangedConnection_ =
+            merged->streamStatusChanged.connect([this] {
+                this->input_->updatePlatformSelector(true);
+                this->updateInputPlaceholder();
+            });
+    }
+    this->input_->applyActiveAccountProviderDefault();
 
     QObject::connect(
         this->view_, &ChannelView::messageAddedToChannel, this,
@@ -2083,6 +2108,19 @@ void Split::openInBrowser()
     else if (auto *kc = dynamic_cast<KickChannel *>(channel.get()))
     {
         QDesktopServices::openUrl("https://kick.com/" + kc->slug());
+    }
+    else if (auto *merged = dynamic_cast<MergedChannel *>(channel.get()))
+    {
+        auto browserUrls = merged->liveStreamBrowserUrls();
+        if (browserUrls.empty())
+        {
+            browserUrls = merged->channelBrowserUrls();
+        }
+
+        if (!browserUrls.empty())
+        {
+            QDesktopServices::openUrl(browserUrls.front().url);
+        }
     }
 }
 

@@ -2,6 +2,7 @@
 
 #include "util/Expected.hpp"
 
+#include <boost/json/object.hpp>
 #include <QDateTime>
 #include <QString>
 
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <span>
+#include <vector>
 
 namespace chatterino {
 
@@ -123,6 +125,10 @@ public:
     static void privateEmotesInChannel(
         const QString &username,
         Callback<std::vector<KickPrivateEmoteSetInfo>> cb);
+
+    static void privateRecentMessages(
+        uint64_t chatroomID, int limit,
+        Callback<std::vector<boost::json::object>> cb);
 
     void sendMessage(uint64_t broadcasterUserID, const QString &message,
                      const QString &replyToMessageID, Callback<void> cb);

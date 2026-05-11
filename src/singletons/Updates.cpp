@@ -21,6 +21,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSaveFile>
 #include <QStringList>
 #include <QUrl>
@@ -35,9 +36,81 @@ using namespace literals;
 const QUrl MERGERINO_LATEST_RELEASE_API(
     u"https://api.github.com/repos/Fixlation/Mergerino/releases/latest"_s);
 
-QString shortCommit(QString commit)
+QString normalizedReleaseVersion(const QString &value)
 {
-    return commit.left(7);
+    auto candidate = value.trimmed();
+    if (candidate.isEmpty())
+    {
+        return {};
+    }
+
+    semver::version parsed;
+    if (parsed.from_string_noexcept(candidate.toStdString()))
+    {
+        return candidate;
+    }
+
+    if (candidate.startsWith(u'v', Qt::CaseInsensitive))
+    {
+        const auto withoutPrefix = candidate.sliced(1);
+        if (parsed.from_string_noexcept(withoutPrefix.toStdString()))
+        {
+            return withoutPrefix;
+        }
+    }
+
+    static const QRegularExpression semverPattern{
+        QStringLiteral(R"((\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)(?:\.\d+)?)?))"),
+        QRegularExpression::CaseInsensitiveOption};
+
+    const auto match = semverPattern.match(candidate);
+    if (!match.hasMatch())
+    {
+        return {};
+    }
+
+    candidate = match.captured(1).toLower();
+    if (!parsed.from_string_noexcept(candidate.toStdString()))
+    {
+        return {};
+    }
+
+    return candidate;
+}
+
+QString releaseVersionFrom(const QString &releaseName, const QString &tagName)
+{
+    for (const auto &candidate : {releaseName, tagName})
+    {
+        auto version = normalizedReleaseVersion(candidate);
+        if (!version.isEmpty())
+        {
+            return version;
+        }
+    }
+
+    return {};
+}
+
+bool isNewerVersion(const QString &online, const QString &current)
+{
+    semver::version onlineVersion;
+    if (!onlineVersion.from_string_noexcept(online.toStdString()))
+    {
+        qCWarning(chatterinoUpdate) << "Unable to parse online version"
+                                    << online << "into a proper semver string";
+        return false;
+    }
+
+    semver::version currentVersion;
+    if (!currentVersion.from_string_noexcept(current.toStdString()))
+    {
+        qCWarning(chatterinoUpdate) << "Unable to parse current version"
+                                    << current << "into a proper semver string";
+        return false;
+    }
+
+    return currentVersion < onlineVersion;
 }
 
 }  // namespace
@@ -137,7 +210,6 @@ void Updates::checkForUpdates()
     }
 
     this->onlineVersion_.clear();
-    this->onlineCommit_.clear();
     this->updateDownloadUrl_.clear();
     this->isDowngrade_ = false;
     this->setStatus_(Searching);
@@ -149,7 +221,8 @@ void Updates::checkForUpdates()
             const auto root = result.parseJson();
             const auto releaseName = root["name"].toString();
             const auto tagName = root["tag_name"].toString();
-            const auto releaseCommit = root["target_commitish"].toString();
+            const auto releaseVersion =
+                releaseVersionFrom(releaseName, tagName);
 
             QString downloadUrl;
             const auto assets = root["assets"].toArray();
@@ -164,24 +237,26 @@ void Updates::checkForUpdates()
                 }
             }
 
-            if (releaseCommit.isEmpty() || downloadUrl.isEmpty())
+            if (releaseVersion.isEmpty() || downloadUrl.isEmpty())
             {
                 qCWarning(chatterinoUpdate)
-                    << "Latest Mergerino release is missing commit or asset";
+                    << "Latest Mergerino release is missing version or asset";
                 this->setStatus_(SearchFailed);
                 return;
             }
 
-            this->onlineCommit_ = releaseCommit;
-            this->onlineVersion_ =
-                !releaseName.isEmpty() ? releaseName : tagName;
-            if (this->onlineVersion_.isEmpty())
-            {
-                this->onlineVersion_ = shortCommit(releaseCommit);
-            }
+            this->onlineVersion_ = releaseVersion;
             this->updateDownloadUrl_ = downloadUrl;
 
-            this->checkReleaseCommit_(releaseCommit);
+            this->isDowngrade_ =
+                Updates::isDowngradeOf(releaseVersion, this->currentVersion_);
+            if (isNewerVersion(releaseVersion, this->currentVersion_))
+            {
+                this->setStatus_(UpdateAvailable);
+                return;
+            }
+
+            this->setStatus_(NoUpdateAvailable);
         })
         .onError([this](NetworkResult result) {
             qCWarning(chatterinoUpdate)
@@ -231,10 +306,9 @@ bool Updates::isDowngrade() const
 
 QString Updates::buildUpdateAvailableText() const
 {
-    return QString("A new Mergerino build is available.\n\nCurrent: %1\nLatest: "
+    return QString("A new Mergerino version is available.\n\nCurrent: %1\nLatest: "
                    "%2\n\nInstall it and restart Mergerino?")
-        .arg(shortCommit(Version::instance().commitFullHash()),
-             shortCommit(this->onlineCommit_));
+        .arg(this->currentVersion_, this->onlineVersion_);
 }
 
 void Updates::setStatus_(Status status)
@@ -246,56 +320,6 @@ void Updates::setStatus_(Status status)
             this->statusUpdated.invoke(status);
         });
     }
-}
-
-void Updates::checkReleaseCommit_(QString releaseCommit)
-{
-    const auto &version = Version::instance();
-    const auto currentCommit = version.commitFullHash();
-
-    if (currentCommit.isEmpty() ||
-        currentCommit == "GIT-REPOSITORY-NOT-FOUND")
-    {
-        qCWarning(chatterinoUpdate)
-            << "Cannot compare Mergerino update commits without a build hash";
-        this->setStatus_(SearchFailed);
-        return;
-    }
-
-    if (releaseCommit.startsWith(currentCommit) ||
-        currentCommit.startsWith(releaseCommit))
-    {
-        this->setStatus_(NoUpdateAvailable);
-        return;
-    }
-
-    const QUrl compareUrl(
-        u"https://api.github.com/repos/Fixlation/Mergerino/compare/%1...%2"_s
-            .arg(currentCommit, releaseCommit));
-
-    NetworkRequest(compareUrl)
-        .header("Accept", "application/vnd.github+json")
-        .timeout(15000)
-        .onSuccess([this](NetworkResult result) {
-            const auto root = result.parseJson();
-            const auto status = root["status"].toString();
-            const auto aheadBy = root["ahead_by"].toInt();
-
-            if (status == "ahead" && aheadBy > 0)
-            {
-                this->setStatus_(UpdateAvailable);
-                return;
-            }
-
-            this->setStatus_(NoUpdateAvailable);
-        })
-        .onError([this](NetworkResult result) {
-            qCWarning(chatterinoUpdate)
-                << "Failed to compare Mergerino update commits:"
-                << result.formatError();
-            this->setStatus_(SearchFailed);
-        })
-        .execute();
 }
 
 void Updates::downloadAndRunInstaller_()

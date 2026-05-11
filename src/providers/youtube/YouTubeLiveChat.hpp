@@ -15,12 +15,15 @@
 
 #include <functional>
 #include <memory>
+#include <unordered_map>
 #include <unordered_set>
 
 class QJsonObject;
 class QJsonValue;
 
 namespace chatterino {
+
+class YouTubeAccount;
 
 class YouTubeLiveChat
 {
@@ -30,21 +33,33 @@ public:
 
     void start();
     void stop();
+    void sendMessage(const QString &message);
+    void deleteMessage(const QString &messageId);
+    void banUser(const QString &channelId, const QString &displayName = {});
+    void timeoutUser(const QString &channelId, int durationSeconds,
+                     const QString &displayName = {});
+    void unbanUser(const QString &channelId, const QString &displayName = {});
 
     bool isLive() const;
+    bool hasModeratorPrivileges() const;
     const QString &videoId() const;
     const QString &statusText() const;
     const QString &liveTitle() const;
     uint64_t liveViewerCount() const;
     QString liveUptime() const;
     QString previewThumbnailUrl() const;
+    QString resolvedSource() const;
 
     pajlada::Signals::Signal<QString> sourceResolved;
     pajlada::Signals::Signal<MessagePtr> messageReceived;
     pajlada::Signals::Signal<MessagePtr> systemMessageReceived;
     pajlada::Signals::NoArgSignal liveStatusChanged;
+    pajlada::Signals::NoArgSignal moderationStatusChanged;
 
 private:
+    using ActiveLiveChatIdCallback =
+        std::function<void(std::shared_ptr<YouTubeAccount>, QString)>;
+
     void resolveVideoId();
     void resolveChannelIdFromSource(const QString &source,
                                     std::function<void(QString)> onResolved);
@@ -69,6 +84,19 @@ private:
     void bootstrapInnertubeContext(std::function<void()> onReady,
                                    QString failureText);
     void fetchLiveChatPage(bool skipInitialBacklog = true);
+    void ensureActiveLiveChatId(std::shared_ptr<YouTubeAccount> account,
+                                ActiveLiveChatIdCallback callback,
+                                QString operationName);
+    void postLiveChatMessage(std::shared_ptr<YouTubeAccount> account,
+                             QString liveChatId, QString message);
+    void postLiveChatBan(std::shared_ptr<YouTubeAccount> account,
+                         QString liveChatId, QString channelId,
+                         QString displayName, int durationSeconds);
+    void deleteLiveChatBan(std::shared_ptr<YouTubeAccount> account,
+                           QString banId, QString channelId,
+                           QString displayName);
+    void verifySourceLiveAfterMissingContinuation(
+        const QString &requestedVideoId, bool skipInitialBacklog);
     void poll();
     void refreshLiveChatContinuation(QString text, int retryDelayMs);
     void schedulePoll(int delayMs);
@@ -78,10 +106,15 @@ private:
                          bool notifyAsSystemMessage = true);
     void waitForNextLive(QString text, int retryDelayMs);
     void resetInnertubeContext();
+    void resetModeratorPrivileges();
+    bool moderationToolsDisabledForCurrentAccount() const;
+    void reportModerationToolsUnavailable();
+    void reportModerationActionFailure(const QString &action,
+                                       const QString &error);
+    void updateModeratorPrivilegesFromRenderer(const QJsonObject &renderer);
     void setLive(bool live);
     void setStatusText(QString text, bool notifyAsSystemMessage = false);
     bool shouldResolveLiveStreamFromSource() const;
-    QString resolvedSource() const;
 
     static QString maybeExtractVideoId(const QString &url);
     static QString normalizeSource(const QString &source);
@@ -97,8 +130,10 @@ private:
     static QString extractEmbedLiveVideoId(const QString &html);
     static QString extractLiveVideoId(const QString &html,
                                       bool allowPageCanonical);
+    static QString extractLiveOwnerChannelId(const QJsonObject &nextResponse);
     static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
     static QDateTime extractLiveStartTime(const QJsonObject &nextResponse);
+    static bool rendererHasModeratorBadge(const QJsonObject &renderer);
     static QString parseText(const QJsonValue &value);
     static uint64_t parseViewerCount(const QJsonValue &value);
     static MessagePtr parseRendererMessage(const QJsonObject &renderer,
@@ -113,10 +148,18 @@ private:
     QString continuation_;
     QString statusText_;
     QString liveTitle_;
+    QString liveOwnerChannelId_;
+    QString activeLiveChatVideoId_;
+    QString activeLiveChatId_;
+    QString moderatorPrivilegesVideoId_;
+    QString moderatorPrivilegesAccountChannelId_;
+    QString moderationDisabledVideoId_;
+    QString moderationDisabledAccountChannelId_;
     QDateTime liveStartedAt_;
 
     bool running_{false};
     bool live_{false};
+    bool hasModeratorPrivileges_{false};
     bool failureReported_{false};
     bool skipInitialBacklog_{false};
     int activePollStreak_{0};
@@ -127,6 +170,7 @@ private:
 
     std::shared_ptr<bool> lifetimeGuard_;
     std::unordered_set<QString> seenMessageIds_;
+    std::unordered_map<QString, QString> liveChatBanIds_;
     QString joinedLiveVideoId_;
 };
 

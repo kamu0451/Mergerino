@@ -16,6 +16,7 @@
 
 #include <functional>
 #include <span>
+#include <vector>
 
 namespace chatterino {
 
@@ -110,6 +111,13 @@ public:
 
     QWidget *tabAt(QPoint point, int &index, int maxWidth = 2000000000);
     void rearrangePage(QWidget *page, int index);
+    bool tryRearrangeBulkSelectedTabs(QWidget *draggedPage, int targetIndex);
+    void toggleBulkSelectedTab(NotebookTab *tab);
+    void selectBulkRangeTo(NotebookTab *tab, bool keepExisting);
+    void clearBulkSelectedTabs();
+    void removeBulkSelectedTabs();
+    int bulkSelectedTabCount() const;
+    pajlada::Signals::NoArgSignal bulkSelectionChanged;
 
     bool getAllowUserTabManagement() const;
     void setAllowUserTabManagement(bool value);
@@ -196,6 +204,9 @@ private:
 
     void performHorizontalLayout(const LayoutContext &ctx, bool animated);
     void performVerticalLayout(const LayoutContext &ctx, bool animated);
+    void setBulkSelectedTab(NotebookTab *tab, bool value);
+    NotebookTab *bulkRangeAnchor();
+    void updateSelectedTabVisualState();
 
     /**
      * @brief Show a popup informing the user of some big tab visibility changes
@@ -222,6 +233,8 @@ private:
     QWidget *selectedPage_ = nullptr;
 
     std::vector<Button *> customButtons_;
+    std::vector<NotebookTab *> bulkSelectedTabs_;
+    NotebookTab *bulkSelectionAnchorTab_ = nullptr;
 
     bool allowUserTabManagement_ = false;
     bool showTabs_ = true;
@@ -274,11 +287,15 @@ private:
     QAction *sortTabsAlphabeticallyAction_;
 
     void addCustomButtons();
+    void addBulkSelectionButton();
+    void updateBulkSelectionButton();
 
     pajlada::Signals::SignalHolder signalHolder_;
 
     // Main window on Windows has basically a duplicate of this in Window
     SvgButton *accountButton_{};
+    SvgButton *bulkClearButton_{};
+    SvgButton *bulkDeleteButton_{};
     PixmapButton *streamerModeIcon_{};
     void updateAccountButtonIcon();
     void updateStreamerModeIcon();

@@ -4,19 +4,25 @@
 
 #include "providers/youtube/YouTubeLiveChat.hpp"
 
+#include "Application.hpp"
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
+#include "common/QLogging.hpp"
+#include "controllers/accounts/AccountController.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
+#include "providers/youtube/YouTubeAccount.hpp"
 
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QRegularExpression>
+#include <QStringBuilder>
 #include <QTimer>
 #include <QUrl>
 #include <QUrlQuery>
@@ -32,6 +38,91 @@ using namespace chatterino;
 QString trimmedSource(QString value)
 {
     return value.trimmed();
+}
+
+QString formatGoogleError(const NetworkResult &result)
+{
+    const auto json = result.parseJson();
+    QString error;
+
+    const auto errorValue = json["error"];
+    if (errorValue.isObject())
+    {
+        error = errorValue.toObject()["message"].toString();
+    }
+    else
+    {
+        error = json["error_description"].toString(errorValue.toString());
+    }
+
+    if (!error.isEmpty())
+    {
+        return QStringLiteral("Error: %1 (%2)")
+            .arg(error, result.formatError());
+    }
+    return QStringLiteral("Error: %1 (no further information)")
+        .arg(result.formatError());
+}
+
+QString liveChatBanCacheKey(const QString &liveChatId, const QString &channelId)
+{
+    return liveChatId + QChar(u'\n') + channelId;
+}
+
+QString moderationDisplayName(const QString &displayName,
+                              const QString &channelId)
+{
+    return displayName.trimmed().isEmpty() ? channelId : displayName.trimmed();
+}
+
+bool isLikelyChannelIdValue(const QString &value)
+{
+    static const QRegularExpression channelIdRegex("^UC[A-Za-z0-9_-]{22}$");
+    return channelIdRegex.match(value.trimmed()).hasMatch();
+}
+
+QString extractFirstBrowseChannelId(const QJsonValue &value)
+{
+    if (value.isObject())
+    {
+        const auto object = value.toObject();
+        const auto endpoint =
+            object["navigationEndpoint"].toObject()["browseEndpoint"].toObject();
+        const auto browseId = endpoint["browseId"].toString();
+        if (isLikelyChannelIdValue(browseId))
+        {
+            return browseId;
+        }
+
+        const auto directBrowseId =
+            object["browseEndpoint"].toObject()["browseId"].toString();
+        if (isLikelyChannelIdValue(directBrowseId))
+        {
+            return directBrowseId;
+        }
+
+        for (const auto &key : object.keys())
+        {
+            const auto result = extractFirstBrowseChannelId(object[key]);
+            if (!result.isEmpty())
+            {
+                return result;
+            }
+        }
+    }
+    else if (value.isArray())
+    {
+        for (const auto &item : value.toArray())
+        {
+            const auto result = extractFirstBrowseChannelId(item);
+            if (!result.isEmpty())
+            {
+                return result;
+            }
+        }
+    }
+
+    return {};
 }
 
 QString trimTrailingSlash(QString value)
@@ -382,6 +473,18 @@ bool isEndedOrOfflineLiveBroadcast(const QJsonObject &nextResponse)
     return isLiveNow.isBool() && !isLiveNow.toBool();
 }
 
+bool containsActiveLiveMarker(const QString &text)
+{
+    return text.contains(QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
+           text.contains(QStringLiteral(
+               "THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE")) ||
+           text.contains(QStringLiteral("BADGE_STYLE_TYPE_LIVE_NOW")) ||
+           text.contains(QStringLiteral(R"("style":"LIVE")")) ||
+           text.contains(QStringLiteral(R"("isLive":true)")) ||
+           text.contains(QStringLiteral(R"("isLiveNow":true)")) ||
+           text.contains(QStringLiteral(" watching now"), Qt::CaseInsensitive);
+}
+
 QString extractLiveLockupVideoId(const QString &html)
 {
     static const QString lockupMarker =
@@ -414,15 +517,7 @@ QString extractLiveLockupVideoId(const QString &html)
             continue;
         }
 
-        const bool hasLiveBadge =
-            block.contains(
-                QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
-            block.contains(
-                QStringLiteral("THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE"));
-        const bool hasWatchingMetadata =
-            block.contains(QStringLiteral(" watching now"),
-                           Qt::CaseInsensitive);
-        if (!hasLiveBadge && !hasWatchingMetadata)
+        if (!containsActiveLiveMarker(block))
         {
             continue;
         }
@@ -462,16 +557,7 @@ QString extractLiveVideoRendererVideoId(const QString &html)
         const auto block = html.sliced(start, end - start);
         searchFrom = start + rendererMarker.size();
 
-        const bool hasLiveBadge =
-            block.contains(QStringLiteral(R"("style":"LIVE")")) ||
-            block.contains(
-                QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
-            block.contains(
-                QStringLiteral("THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE"));
-        const bool hasWatchingMetadata =
-            block.contains(QStringLiteral(" watching now"),
-                           Qt::CaseInsensitive);
-        if (!hasLiveBadge && !hasWatchingMetadata)
+        if (!containsActiveLiveMarker(block))
         {
             continue;
         }
@@ -500,15 +586,7 @@ QString extractLiveWatchEndpointVideoId(const QString &html)
             std::min<qsizetype>(html.size(), match.capturedEnd() + 8000);
         const auto block = html.sliced(start, end - start);
 
-        const bool hasLiveBadge =
-            block.contains(
-                QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
-            block.contains(
-                QStringLiteral("THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE"));
-        const bool hasWatchingMetadata =
-            block.contains(QStringLiteral(" watching now"),
-                           Qt::CaseInsensitive);
-        if (hasLiveBadge || hasWatchingMetadata)
+        if (containsActiveLiveMarker(block))
         {
             return match.captured(1);
         }
@@ -522,7 +600,10 @@ QString extractLiveWatchEndpointVideoId(const QString &html)
 bool isLikelyJsonVideoId(const QString &value)
 {
     static const QRegularExpression videoIdRegex("^[A-Za-z0-9_-]{11}$");
-    return videoIdRegex.match(value.trimmed()).hasMatch();
+
+    const auto trimmed = value.trimmed();
+    return trimmed != QStringLiteral("live_stream") &&
+        videoIdRegex.match(trimmed).hasMatch();
 }
 
 bool jsonContainsLiveMarker(const QJsonValue &value)
@@ -530,12 +611,7 @@ bool jsonContainsLiveMarker(const QJsonValue &value)
     if (value.isString())
     {
         const auto text = value.toString();
-        return text.contains(QStringLiteral(" watching now"),
-                             Qt::CaseInsensitive) ||
-               text.contains(
-                   QStringLiteral("THUMBNAIL_OVERLAY_BADGE_STYLE_LIVE")) ||
-               text.contains(QStringLiteral(
-                   "THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE"));
+        return containsActiveLiveMarker(text);
     }
 
     if (value.isArray())
@@ -740,6 +816,10 @@ void YouTubeLiveChat::start()
     this->continuation_.clear();
     this->statusText_.clear();
     this->liveTitle_.clear();
+    this->liveOwnerChannelId_.clear();
+    this->activeLiveChatVideoId_.clear();
+    this->activeLiveChatId_.clear();
+    this->resetModeratorPrivileges();
     this->liveStartedAt_ = {};
     this->liveViewerCount_ = 0;
     this->seenMessageIds_.clear();
@@ -765,9 +845,335 @@ void YouTubeLiveChat::stop()
     this->lifetimeGuard_.reset();
 }
 
+void YouTubeLiveChat::sendMessage(const QString &message)
+{
+    const auto text = message.trimmed();
+    if (text.isEmpty())
+    {
+        return;
+    }
+
+    if (!this->running_ || !this->live_ || this->videoId_.isEmpty())
+    {
+        this->systemMessageReceived.invoke(
+            makeSystemStatusMessage("YouTube live chat is not ready yet."));
+        return;
+    }
+
+    auto *accounts = getApp()->getAccounts();
+    if (!accounts->youtube.isLoggedIn())
+    {
+        this->systemMessageReceived.invoke(
+            makeSystemStatusMessage("Log in to YouTube to send merged chat."));
+        return;
+    }
+
+    auto account = accounts->youtube.current();
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    account->ensureFreshToken(
+        [this, weak, account, text](bool ok) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            if (!ok)
+            {
+                this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                    "YouTube login expired. Log in again to send chat."));
+                return;
+            }
+
+            this->ensureActiveLiveChatId(
+                account,
+                [this, text](std::shared_ptr<YouTubeAccount> account,
+                             QString liveChatId) mutable {
+                    this->postLiveChatMessage(std::move(account),
+                                              std::move(liveChatId), text);
+                },
+                QStringLiteral("YouTube chat send"));
+        });
+}
+
+void YouTubeLiveChat::deleteMessage(const QString &messageId)
+{
+    const auto id = messageId.trimmed();
+    if (id.isEmpty())
+    {
+        return;
+    }
+
+    auto *accounts = getApp()->getAccounts();
+    if (!accounts->youtube.isLoggedIn())
+    {
+        this->systemMessageReceived.invoke(makeSystemStatusMessage(
+            "Log in to YouTube to moderate merged chat."));
+        return;
+    }
+
+    if (!this->hasModeratorPrivileges())
+    {
+        this->reportModerationToolsUnavailable();
+        return;
+    }
+
+    auto account = accounts->youtube.current();
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    account->ensureFreshToken(
+        [this, weak, account, id](bool ok) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            if (!ok)
+            {
+                this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                    "YouTube login expired. Log in again to moderate chat."));
+                return;
+            }
+
+            QUrl url("https://www.googleapis.com/youtube/v3/liveChat/messages");
+            QUrlQuery query{{"id", id}};
+            url.setQuery(query);
+
+            NetworkRequest(url, NetworkRequestType::Delete)
+                .header("Authorization",
+                        QStringLiteral("Bearer ") + account->authToken())
+                .timeout(20'000)
+                .onSuccess([this, weak](const NetworkResult &) {
+                    if (!weak.lock() || !this->running_)
+                    {
+                        return;
+                    }
+
+                    this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                        "Deleted YouTube message."));
+                })
+                .onError([this, weak](const NetworkResult &result) {
+                    if (!weak.lock() || !this->running_)
+                    {
+                        return;
+                    }
+
+                    const auto error = formatGoogleError(result);
+                    qCWarning(chatterinoYouTube)
+                        << "Deleting YouTube live chat message failed"
+                        << error;
+                    this->reportModerationActionFailure(
+                        QStringLiteral("delete YouTube message"), error);
+                })
+                .execute();
+        });
+}
+
+void YouTubeLiveChat::banUser(const QString &channelId,
+                              const QString &displayName)
+{
+    const auto userChannelId = channelId.trimmed();
+    if (userChannelId.isEmpty())
+    {
+        this->systemMessageReceived.invoke(makeSystemStatusMessage(
+            "YouTube user channel ID is missing."));
+        return;
+    }
+
+    auto *accounts = getApp()->getAccounts();
+    if (!accounts->youtube.isLoggedIn())
+    {
+        this->systemMessageReceived.invoke(makeSystemStatusMessage(
+            "Log in to YouTube to moderate merged chat."));
+        return;
+    }
+
+    if (!this->hasModeratorPrivileges())
+    {
+        this->reportModerationToolsUnavailable();
+        return;
+    }
+
+    auto account = accounts->youtube.current();
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    account->ensureFreshToken(
+        [this, weak, account, userChannelId, displayName](bool ok) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            if (!ok)
+            {
+                this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                    "YouTube login expired. Log in again to moderate chat."));
+                return;
+            }
+
+            this->ensureActiveLiveChatId(
+                account,
+                [this, userChannelId, displayName](
+                    std::shared_ptr<YouTubeAccount> account,
+                    QString liveChatId) mutable {
+                    this->postLiveChatBan(std::move(account),
+                                          std::move(liveChatId), userChannelId,
+                                          displayName, 0);
+                },
+                QStringLiteral("YouTube moderation"));
+        });
+}
+
+void YouTubeLiveChat::timeoutUser(const QString &channelId,
+                                  int durationSeconds,
+                                  const QString &displayName)
+{
+    const auto userChannelId = channelId.trimmed();
+    if (userChannelId.isEmpty())
+    {
+        this->systemMessageReceived.invoke(makeSystemStatusMessage(
+            "YouTube user channel ID is missing."));
+        return;
+    }
+
+    auto *accounts = getApp()->getAccounts();
+    if (!accounts->youtube.isLoggedIn())
+    {
+        this->systemMessageReceived.invoke(makeSystemStatusMessage(
+            "Log in to YouTube to moderate merged chat."));
+        return;
+    }
+
+    if (!this->hasModeratorPrivileges())
+    {
+        this->reportModerationToolsUnavailable();
+        return;
+    }
+
+    auto account = accounts->youtube.current();
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    account->ensureFreshToken(
+        [this, weak, account, userChannelId, displayName,
+         durationSeconds](bool ok) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            if (!ok)
+            {
+                this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                    "YouTube login expired. Log in again to moderate chat."));
+                return;
+            }
+
+            const auto seconds = std::max(durationSeconds, 1);
+            this->ensureActiveLiveChatId(
+                account,
+                [this, userChannelId, displayName, seconds](
+                    std::shared_ptr<YouTubeAccount> account,
+                    QString liveChatId) mutable {
+                    this->postLiveChatBan(std::move(account),
+                                          std::move(liveChatId), userChannelId,
+                                          displayName, seconds);
+                },
+                QStringLiteral("YouTube moderation"));
+        });
+}
+
+void YouTubeLiveChat::unbanUser(const QString &channelId,
+                                const QString &displayName)
+{
+    const auto userChannelId = channelId.trimmed();
+    if (userChannelId.isEmpty())
+    {
+        this->systemMessageReceived.invoke(makeSystemStatusMessage(
+            "YouTube user channel ID is missing."));
+        return;
+    }
+
+    auto *accounts = getApp()->getAccounts();
+    if (!accounts->youtube.isLoggedIn())
+    {
+        this->systemMessageReceived.invoke(makeSystemStatusMessage(
+            "Log in to YouTube to moderate merged chat."));
+        return;
+    }
+
+    if (!this->hasModeratorPrivileges())
+    {
+        this->reportModerationToolsUnavailable();
+        return;
+    }
+
+    auto account = accounts->youtube.current();
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    account->ensureFreshToken(
+        [this, weak, account, userChannelId, displayName](bool ok) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            if (!ok)
+            {
+                this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                    "YouTube login expired. Log in again to moderate chat."));
+                return;
+            }
+
+            this->ensureActiveLiveChatId(
+                account,
+                [this, userChannelId, displayName](
+                    std::shared_ptr<YouTubeAccount> account,
+                    QString liveChatId) mutable {
+                    const auto key =
+                        liveChatBanCacheKey(liveChatId, userChannelId);
+                    const auto it = this->liveChatBanIds_.find(key);
+                    if (it == this->liveChatBanIds_.end() || it->second.isEmpty())
+                    {
+                        this->systemMessageReceived.invoke(
+                            makeSystemStatusMessage(
+                                "YouTube unban needs a ban ID. Mergerino can "
+                                "unban users it banned during this session."));
+                        return;
+                    }
+
+                    this->deleteLiveChatBan(std::move(account), it->second,
+                                            userChannelId, displayName);
+                },
+                QStringLiteral("YouTube moderation"));
+        });
+}
+
 bool YouTubeLiveChat::isLive() const
 {
     return this->live_;
+}
+
+bool YouTubeLiveChat::hasModeratorPrivileges() const
+{
+    if (!this->live_ || this->videoId_.isEmpty())
+    {
+        return false;
+    }
+
+    auto *accounts = getApp()->getAccounts();
+    if (!accounts->youtube.isLoggedIn())
+    {
+        return false;
+    }
+
+    const auto account = accounts->youtube.current();
+    const auto currentChannelId = account->channelID();
+    if (currentChannelId.isEmpty())
+    {
+        return false;
+    }
+
+    if (this->moderationToolsDisabledForCurrentAccount())
+    {
+        return false;
+    }
+
+    return true;
 }
 
 const QString &YouTubeLiveChat::videoId() const
@@ -1599,6 +2005,13 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             }
             if (this->continuation_.isEmpty())
             {
+                if (this->shouldResolveLiveStreamFromSource())
+                {
+                    this->verifySourceLiveAfterMissingContinuation(
+                        requestedVideoId, skipInitialBacklog);
+                    return;
+                }
+
                 if (activeLiveRefresh && !this->failureReported_)
                 {
                     this->recoverLiveChat(
@@ -1608,33 +2021,31 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
                     return;
                 }
 
-                if (this->shouldResolveLiveStreamFromSource())
+                if (activeLiveRefresh)
                 {
-                    this->waitForNextLive("Waiting for a live YouTube stream.",
-                                          YOUTUBE_RECONNECT_DELAY_MS);
+                    // Fixed video sources do not have a live channel page
+                    // to fall back to. After the retry path has already
+                    // failed, a missing continuation means this live chat
+                    // is no longer active.
+                    this->setLive(false);
+                    this->liveTitle_.clear();
+                    this->liveStartedAt_ = {};
+                    this->liveViewerCount_ = 0;
                 }
-                else
-                {
-                    if (activeLiveRefresh)
-                    {
-                        // Fixed video sources do not have a live channel page
-                        // to fall back to. After the retry path has already
-                        // failed, a missing continuation means this live chat
-                        // is no longer active.
-                        this->setLive(false);
-                        this->liveTitle_.clear();
-                        this->liveStartedAt_ = {};
-                        this->liveViewerCount_ = 0;
-                    }
-                    this->setStatusText(
-                        "Couldn't find the YouTube live chat continuation "
-                        "data.",
-                        !this->failureReported_);
-                    this->failureReported_ = true;
-                    this->resetInnertubeContext();
-                    this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
-                }
+                this->setStatusText(
+                    "Couldn't find the YouTube live chat continuation data.",
+                    !this->failureReported_);
+                this->failureReported_ = true;
+                this->resetInnertubeContext();
+                this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
                 return;
+            }
+
+            const auto ownerChannelId = extractLiveOwnerChannelId(json);
+            if (this->liveOwnerChannelId_ != ownerChannelId)
+            {
+                this->liveOwnerChannelId_ = ownerChannelId;
+                this->moderationStatusChanged.invoke();
             }
 
             this->liveTitle_ = extractLiveStreamTitle(json);
@@ -1699,6 +2110,375 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
         })
         .execute();
+}
+
+void YouTubeLiveChat::ensureActiveLiveChatId(
+    std::shared_ptr<YouTubeAccount> account, ActiveLiveChatIdCallback callback,
+    QString operationName)
+{
+    if (!account || account->isAnonymous() || this->videoId_.isEmpty())
+    {
+        this->systemMessageReceived.invoke(
+            makeSystemStatusMessage("YouTube live chat is not ready yet."));
+        return;
+    }
+
+    if (this->activeLiveChatVideoId_ == this->videoId_ &&
+        !this->activeLiveChatId_.isEmpty())
+    {
+        callback(std::move(account), this->activeLiveChatId_);
+        return;
+    }
+
+    QUrl url("https://www.googleapis.com/youtube/v3/videos");
+    QUrlQuery query{
+        {"part", "liveStreamingDetails"},
+        {"id", this->videoId_},
+    };
+    url.setQuery(query);
+
+    const auto isModerationOperation =
+        operationName == QStringLiteral("YouTube moderation");
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    NetworkRequest(url)
+        .header("Authorization",
+                QStringLiteral("Bearer ") + account->authToken())
+        .timeout(20'000)
+        .onSuccess([this, weak, account = std::move(account),
+                    callback = std::move(callback), isModerationOperation](
+                       const NetworkResult &result) mutable {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            const auto items = result.parseJson()["items"].toArray();
+            if (items.isEmpty() || !items.at(0).isObject())
+            {
+                if (isModerationOperation)
+                {
+                    this->reportModerationActionFailure(
+                        QStringLiteral("prepare YouTube moderation"),
+                        QStringLiteral(
+                            "YouTube did not return the current live stream."));
+                    return;
+                }
+
+                this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                    "YouTube did not return the current live stream."));
+                return;
+            }
+
+            const auto liveChatId =
+                items.at(0)
+                    .toObject()["liveStreamingDetails"]
+                    .toObject()["activeLiveChatId"]
+                    .toString()
+                    .trimmed();
+            if (liveChatId.isEmpty())
+            {
+                if (isModerationOperation)
+                {
+                    this->reportModerationActionFailure(
+                        QStringLiteral("prepare YouTube moderation"),
+                        QStringLiteral("YouTube did not return an active live "
+                                       "chat for this stream."));
+                    return;
+                }
+
+                this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                    "YouTube did not return an active live chat for this "
+                    "stream."));
+                return;
+            }
+
+            this->activeLiveChatVideoId_ = this->videoId_;
+            this->activeLiveChatId_ = liveChatId;
+            callback(std::move(account), liveChatId);
+        })
+        .onError([this, weak, isModerationOperation,
+                  operationName = std::move(operationName)](
+                     const NetworkResult &result) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            const auto error = formatGoogleError(result);
+            qCWarning(chatterinoYouTube)
+                << "Fetching active YouTube live chat ID failed" << error;
+            if (isModerationOperation)
+            {
+                this->reportModerationActionFailure(
+                    QStringLiteral("prepare YouTube moderation"), error);
+                return;
+            }
+
+            this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                QString("Could not prepare %1. %2").arg(operationName, error)));
+        })
+        .execute();
+}
+
+void YouTubeLiveChat::postLiveChatMessage(
+    std::shared_ptr<YouTubeAccount> account, QString liveChatId,
+    QString message)
+{
+    if (!account || account->isAnonymous() || liveChatId.isEmpty() ||
+        message.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    QUrl url("https://www.googleapis.com/youtube/v3/liveChat/messages");
+    QUrlQuery query{{"part", "snippet"}};
+    url.setQuery(query);
+
+    QJsonObject root{
+        {"snippet",
+         QJsonObject{
+             {"liveChatId", liveChatId},
+             {"type", "textMessageEvent"},
+             {"textMessageDetails",
+              QJsonObject{
+                  {"messageText", message},
+              }},
+         }},
+    };
+
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    NetworkRequest(url, NetworkRequestType::Post)
+        .header("Authorization",
+                QStringLiteral("Bearer ") + account->authToken())
+        .json(root)
+        .timeout(20'000)
+        .onSuccess([weak](const NetworkResult &) {
+            if (!weak.lock())
+            {
+                return;
+            }
+        })
+        .onError([this, weak](const NetworkResult &result) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            if (result.status() && (*result.status() == 403 ||
+                                    *result.status() == 404))
+            {
+                this->activeLiveChatVideoId_.clear();
+                this->activeLiveChatId_.clear();
+            }
+
+            const auto error = formatGoogleError(result);
+            qCWarning(chatterinoYouTube)
+                << "Sending YouTube live chat message failed" << error;
+            this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                QString("Could not send YouTube chat message. %1").arg(error)));
+        })
+        .execute();
+}
+
+void YouTubeLiveChat::postLiveChatBan(
+    std::shared_ptr<YouTubeAccount> account, QString liveChatId,
+    QString channelId, QString displayName, int durationSeconds)
+{
+    if (!account || account->isAnonymous() || liveChatId.isEmpty() ||
+        channelId.isEmpty())
+    {
+        return;
+    }
+
+    QUrl url("https://www.googleapis.com/youtube/v3/liveChat/bans");
+    QUrlQuery query{{"part", "snippet"}};
+    url.setQuery(query);
+
+    QJsonObject snippet{
+        {"liveChatId", liveChatId},
+        {"type", durationSeconds > 0 ? "temporary" : "permanent"},
+        {"bannedUserDetails",
+         QJsonObject{
+             {"channelId", channelId},
+         }},
+    };
+    if (durationSeconds > 0)
+    {
+        snippet.insert("banDurationSeconds", durationSeconds);
+    }
+
+    QJsonObject root{{"snippet", snippet}};
+
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    NetworkRequest(url, NetworkRequestType::Post)
+        .header("Authorization",
+                QStringLiteral("Bearer ") + account->authToken())
+        .json(root)
+        .timeout(20'000)
+        .onSuccess([this, weak, liveChatId, channelId, displayName,
+                    durationSeconds](const NetworkResult &result) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            const auto banId = result.parseJson()["id"].toString();
+            if (!banId.isEmpty())
+            {
+                this->liveChatBanIds_[liveChatBanCacheKey(liveChatId,
+                                                          channelId)] = banId;
+            }
+
+            const auto name = moderationDisplayName(displayName, channelId);
+            if (durationSeconds > 0)
+            {
+                this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                    QString("Timed out %1 on YouTube for %2 seconds.")
+                        .arg(name, QString::number(durationSeconds))));
+            }
+            else
+            {
+                this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                    QString("Banned %1 on YouTube.").arg(name)));
+            }
+        })
+        .onError([this, weak, durationSeconds](const NetworkResult &result) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            if (result.status() && (*result.status() == 403 ||
+                                    *result.status() == 404))
+            {
+                this->activeLiveChatVideoId_.clear();
+                this->activeLiveChatId_.clear();
+            }
+
+            const auto error = formatGoogleError(result);
+            qCWarning(chatterinoYouTube)
+                << "Banning YouTube live chat user failed" << error;
+            const auto action =
+                durationSeconds > 0 ? QStringLiteral("timeout YouTube user")
+                                    : QStringLiteral("ban YouTube user");
+            this->reportModerationActionFailure(action, error);
+        })
+        .execute();
+}
+
+void YouTubeLiveChat::deleteLiveChatBan(
+    std::shared_ptr<YouTubeAccount> account, QString banId, QString channelId,
+    QString displayName)
+{
+    if (!account || account->isAnonymous() || banId.isEmpty())
+    {
+        return;
+    }
+
+    QUrl url("https://www.googleapis.com/youtube/v3/liveChat/bans");
+    QUrlQuery query{{"id", banId}};
+    url.setQuery(query);
+
+    auto weak = std::weak_ptr<bool>(this->lifetimeGuard_);
+    NetworkRequest(url, NetworkRequestType::Delete)
+        .header("Authorization",
+                QStringLiteral("Bearer ") + account->authToken())
+        .timeout(20'000)
+        .onSuccess([this, weak, channelId, displayName, banId](
+                       const NetworkResult &) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            for (auto it = this->liveChatBanIds_.begin();
+                 it != this->liveChatBanIds_.end();)
+            {
+                if (it->second == banId)
+                {
+                    it = this->liveChatBanIds_.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
+
+            this->systemMessageReceived.invoke(makeSystemStatusMessage(
+                QString("Unbanned %1 on YouTube.")
+                    .arg(moderationDisplayName(displayName, channelId))));
+        })
+        .onError([this, weak, banId](const NetworkResult &result) {
+            if (!weak.lock() || !this->running_)
+            {
+                return;
+            }
+
+            if (result.status() && *result.status() == 404)
+            {
+                for (auto it = this->liveChatBanIds_.begin();
+                     it != this->liveChatBanIds_.end();)
+                {
+                    if (it->second == banId)
+                    {
+                        it = this->liveChatBanIds_.erase(it);
+                    }
+                    else
+                    {
+                        ++it;
+                    }
+                }
+            }
+
+            const auto error = formatGoogleError(result);
+            qCWarning(chatterinoYouTube)
+                << "Removing YouTube live chat ban failed" << error;
+            this->reportModerationActionFailure(
+                QStringLiteral("unban YouTube user"), error);
+        })
+        .execute();
+}
+
+void YouTubeLiveChat::verifySourceLiveAfterMissingContinuation(
+    const QString &requestedVideoId, bool skipInitialBacklog)
+{
+    const auto source = this->resolvedSource();
+    if (source.isEmpty())
+    {
+        this->waitForNextLive("Waiting for a live YouTube stream.",
+                              YOUTUBE_RECONNECT_DELAY_MS);
+        return;
+    }
+
+    this->probeLiveVideoIdFromSource(
+        source, [this, requestedVideoId, skipInitialBacklog](QString videoId) {
+            if (!this->running_ || this->videoId_ != requestedVideoId)
+            {
+                return;
+            }
+
+            if (videoId.isEmpty())
+            {
+                this->waitForNextLive("Waiting for a live YouTube stream.",
+                                      YOUTUBE_RECONNECT_DELAY_MS);
+                return;
+            }
+
+            if (videoId != requestedVideoId)
+            {
+                this->videoId_ = std::move(videoId);
+                this->seenMessageIds_.clear();
+                this->fetchLiveChatPage(skipInitialBacklog);
+                return;
+            }
+
+            this->setLive(true);
+            this->setStatusText(
+                "YouTube stream is live. Waiting for live chat.");
+            this->failureReported_ = true;
+            this->resetInnertubeContext();
+            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
+        });
 }
 
 void YouTubeLiveChat::poll()
@@ -1784,8 +2564,10 @@ void YouTubeLiveChat::poll()
                 }
 
                 const auto &rendererName = keys.first();
+                const auto renderer = item[rendererName].toObject();
+                this->updateModeratorPrivilegesFromRenderer(renderer);
                 auto message = parseRendererMessage(
-                    item[rendererName].toObject(), rendererName, this->videoId_);
+                    renderer, rendererName, this->videoId_);
                 if (!message || message->id.isEmpty())
                 {
                     continue;
@@ -2001,6 +2783,8 @@ void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
     this->videoId_.clear();
     this->continuation_.clear();
     this->liveTitle_.clear();
+    this->activeLiveChatVideoId_.clear();
+    this->activeLiveChatId_.clear();
     this->liveStartedAt_ = {};
     this->liveViewerCount_ = 0;
     this->seenMessageIds_.clear();
@@ -2021,11 +2805,139 @@ void YouTubeLiveChat::resetInnertubeContext()
     this->visitorData_.clear();
 }
 
+void YouTubeLiveChat::resetModeratorPrivileges()
+{
+    if (!this->hasModeratorPrivileges_ &&
+        this->moderatorPrivilegesVideoId_.isEmpty() &&
+        this->moderatorPrivilegesAccountChannelId_.isEmpty())
+    {
+        return;
+    }
+
+    this->hasModeratorPrivileges_ = false;
+    this->moderatorPrivilegesVideoId_.clear();
+    this->moderatorPrivilegesAccountChannelId_.clear();
+    this->moderationStatusChanged.invoke();
+}
+
+bool YouTubeLiveChat::moderationToolsDisabledForCurrentAccount() const
+{
+    auto *accounts = getApp()->getAccounts();
+    if (!accounts->youtube.isLoggedIn())
+    {
+        return false;
+    }
+
+    const auto account = accounts->youtube.current();
+    const auto currentChannelId = account->channelID();
+    if (currentChannelId.isEmpty())
+    {
+        return false;
+    }
+
+    return this->moderationDisabledVideoId_ == this->videoId_ &&
+           this->moderationDisabledAccountChannelId_.compare(
+               currentChannelId, Qt::CaseInsensitive) == 0;
+}
+
+void YouTubeLiveChat::reportModerationToolsUnavailable()
+{
+    this->systemMessageReceived.invoke(makeSystemStatusMessage(
+        "YouTube moderation tools are hidden for this live chat after a "
+        "moderation action failed."));
+}
+
+void YouTubeLiveChat::reportModerationActionFailure(const QString &action,
+                                                   const QString &error)
+{
+    auto *accounts = getApp()->getAccounts();
+    QString currentChannelId;
+    if (accounts->youtube.isLoggedIn())
+    {
+        currentChannelId = accounts->youtube.current()->channelID();
+    }
+
+    bool changed = false;
+    if (!this->videoId_.isEmpty() && !currentChannelId.isEmpty() &&
+        (this->moderationDisabledVideoId_ != this->videoId_ ||
+         this->moderationDisabledAccountChannelId_.compare(
+             currentChannelId, Qt::CaseInsensitive) != 0))
+    {
+        this->moderationDisabledVideoId_ = this->videoId_;
+        this->moderationDisabledAccountChannelId_ = currentChannelId;
+        changed = true;
+    }
+
+    this->systemMessageReceived.invoke(makeSystemStatusMessage(
+        QString("Could not %1. You're probably not a mod or owner here. "
+                "Hiding YouTube mod tools.")
+            .arg(action)));
+
+    if (changed)
+    {
+        this->moderationStatusChanged.invoke();
+    }
+}
+
+void YouTubeLiveChat::updateModeratorPrivilegesFromRenderer(
+    const QJsonObject &renderer)
+{
+    auto *accounts = getApp()->getAccounts();
+    if (!accounts->youtube.isLoggedIn() || this->videoId_.isEmpty())
+    {
+        return;
+    }
+
+    const auto account = accounts->youtube.current();
+    const auto currentChannelId = account->channelID();
+    if (currentChannelId.isEmpty() ||
+        currentChannelId.compare(renderer["authorExternalChannelId"].toString(),
+                                 Qt::CaseInsensitive) != 0)
+    {
+        return;
+    }
+
+    const auto hasPrivileges = rendererHasModeratorBadge(renderer);
+    if (!hasPrivileges)
+    {
+        return;
+    }
+
+    const auto moderationWasDisabled =
+        this->moderationToolsDisabledForCurrentAccount();
+    const auto changed =
+        !this->hasModeratorPrivileges_ ||
+        this->moderatorPrivilegesVideoId_ != this->videoId_ ||
+        this->moderatorPrivilegesAccountChannelId_.compare(
+            currentChannelId, Qt::CaseInsensitive) != 0 ||
+        moderationWasDisabled;
+    if (!changed)
+    {
+        return;
+    }
+
+    this->hasModeratorPrivileges_ = true;
+    this->moderatorPrivilegesVideoId_ = this->videoId_;
+    this->moderatorPrivilegesAccountChannelId_ = currentChannelId;
+    if (moderationWasDisabled)
+    {
+        this->moderationDisabledVideoId_.clear();
+        this->moderationDisabledAccountChannelId_.clear();
+    }
+    this->moderationStatusChanged.invoke();
+}
+
 void YouTubeLiveChat::setLive(bool live)
 {
     if (this->live_ == live)
     {
         return;
+    }
+
+    if (!live)
+    {
+        this->liveOwnerChannelId_.clear();
+        this->resetModeratorPrivileges();
     }
 
     this->live_ = live;
@@ -2089,22 +3001,26 @@ QString YouTubeLiveChat::maybeExtractVideoId(const QString &urlString)
 
     if (query.hasQueryItem("v"))
     {
-        return query.queryItemValue("v").trimmed();
+        const auto videoId = query.queryItemValue("v").trimmed();
+        return isLikelyVideoId(videoId) ? videoId : QString{};
     }
 
     if (host.endsWith("youtu.be"))
     {
-        return path.sliced(1).section('/', 0, 0).trimmed();
+        const auto videoId = path.sliced(1).section('/', 0, 0).trimmed();
+        return isLikelyVideoId(videoId) ? videoId : QString{};
     }
 
     if (path.startsWith("/live/"))
     {
-        return path.section('/', 2, 2).trimmed();
+        const auto videoId = path.section('/', 2, 2).trimmed();
+        return isLikelyVideoId(videoId) ? videoId : QString{};
     }
 
     if (path.startsWith("/shorts/") || path.startsWith("/embed/"))
     {
-        return path.section('/', 2, 2).trimmed();
+        const auto videoId = path.section('/', 2, 2).trimmed();
+        return isLikelyVideoId(videoId) ? videoId : QString{};
     }
 
     return {};
@@ -2158,6 +3074,16 @@ QString YouTubeLiveChat::normalizeSource(const QString &source)
 
     const auto host = url.host().toLower();
     const auto path = trimTrailingSlash(url.path());
+    const QUrlQuery query(url);
+    if (host.endsWith("youtube.com") && path == "/embed/live_stream")
+    {
+        const auto channelId = query.queryItemValue("channel").trimmed();
+        if (isLikelyChannelId(channelId))
+        {
+            return channelId;
+        }
+    }
+
     if (host.endsWith("youtube.com") && path.startsWith("/@"))
     {
         return path.section('/', 1, 1).trimmed();
@@ -2230,7 +3156,10 @@ QString YouTubeLiveChat::sourceStreamsPath(const QString &source)
 bool YouTubeLiveChat::isLikelyVideoId(const QString &value)
 {
     static const QRegularExpression videoIdRegex("^[A-Za-z0-9_-]{11}$");
-    return videoIdRegex.match(value.trimmed()).hasMatch();
+
+    const auto trimmed = value.trimmed();
+    return trimmed != QStringLiteral("live_stream") &&
+        videoIdRegex.match(trimmed).hasMatch();
 }
 
 QString YouTubeLiveChat::extractFirstMatch(const QString &text,
@@ -2298,7 +3227,7 @@ QString YouTubeLiveChat::extractVideoChannelId(const QString &html)
 
 QString YouTubeLiveChat::extractEmbedLiveVideoId(const QString &html)
 {
-    return extractFirstMatch(
+    const auto videoId = extractFirstMatch(
         html,
         {R"yt(<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")yt",
          R"yt(<meta property="og:url" content="https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")yt",
@@ -2307,6 +3236,8 @@ QString YouTubeLiveChat::extractEmbedLiveVideoId(const QString &html)
          R"yt(https://www\.youtube\.com/embed/([A-Za-z0-9_-]{11}))yt",
          R"yt(/embed/([A-Za-z0-9_-]{11}))yt",
          R"yt(\\/embed\\/([A-Za-z0-9_-]{11}))yt"});
+
+    return isLikelyVideoId(videoId) ? videoId : QString{};
 }
 
 QString YouTubeLiveChat::extractLiveVideoId(const QString &html,
@@ -2317,7 +3248,8 @@ QString YouTubeLiveChat::extractLiveVideoId(const QString &html,
         const auto canonicalVideoId = extractFirstMatch(
             html, {R"yt(<link rel="canonical" href="https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")yt",
                    R"yt(<meta property="og:url" content="https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")yt",
-                   R"yt(itemprop="url" content="https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")yt"});
+                   R"yt(itemprop="url" content="https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})")yt",
+                   R"yt("canonicalBaseUrl":"\\/watch\\?v=([A-Za-z0-9_-]{11})")yt"});
         if (!canonicalVideoId.isEmpty())
         {
             return canonicalVideoId;
@@ -2374,11 +3306,68 @@ QString YouTubeLiveChat::extractLiveStreamTitle(const QJsonObject &nextResponse)
     return {};
 }
 
+QString YouTubeLiveChat::extractLiveOwnerChannelId(
+    const QJsonObject &nextResponse)
+{
+    const auto contents =
+        nextResponse["contents"]
+            .toObject()["twoColumnWatchNextResults"]
+            .toObject()["results"]
+            .toObject()["results"]
+            .toObject()["contents"]
+            .toArray();
+
+    for (const auto &itemValue : contents)
+    {
+        const auto secondary =
+            itemValue.toObject()["videoSecondaryInfoRenderer"].toObject();
+        if (secondary.isEmpty())
+        {
+            continue;
+        }
+
+        const auto owner =
+            secondary["owner"].toObject()["videoOwnerRenderer"].toObject();
+        if (!owner.isEmpty())
+        {
+            const auto ownerId = extractFirstBrowseChannelId(owner);
+            if (!ownerId.isEmpty())
+            {
+                return ownerId;
+            }
+        }
+
+        const auto fallbackOwnerId = extractFirstBrowseChannelId(secondary);
+        if (!fallbackOwnerId.isEmpty())
+        {
+            return fallbackOwnerId;
+        }
+    }
+
+    return {};
+}
+
 QDateTime YouTubeLiveChat::extractLiveStartTime(const QJsonObject &nextResponse)
 {
     const auto liveBroadcastDetails = extractLiveBroadcastDetails(nextResponse);
     return parseYouTubeIsoDateTime(
         liveBroadcastDetails["startTimestamp"].toString());
+}
+
+bool YouTubeLiveChat::rendererHasModeratorBadge(const QJsonObject &renderer)
+{
+    const auto badges = renderer["authorBadges"].toArray();
+    if (badges.isEmpty())
+    {
+        return false;
+    }
+
+    const auto badgeText = QString::fromUtf8(
+                               QJsonDocument(badges).toJson(
+                                   QJsonDocument::Compact))
+                               .toLower();
+    return badgeText.contains(QStringLiteral("moderator")) ||
+           badgeText.contains(QStringLiteral("owner"));
 }
 
 QString YouTubeLiveChat::parseText(const QJsonValue &value)
@@ -2405,6 +3394,16 @@ QString YouTubeLiveChat::parseText(const QJsonValue &value)
     }
 
     return text.trimmed();
+}
+
+QString normalizedYouTubeAuthorName(QString author)
+{
+    author = author.trimmed();
+    if (author.size() > 1 && author.startsWith('@'))
+    {
+        author.remove(0, 1);
+    }
+    return author;
 }
 
 uint64_t YouTubeLiveChat::parseViewerCount(const QJsonValue &value)
@@ -2548,7 +3547,7 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
         return nullptr;
     }
 
-    const auto author = parseText(authorNameValue);
+    const auto author = normalizedYouTubeAuthorName(parseText(authorNameValue));
     if (author.isEmpty())
     {
         return nullptr;

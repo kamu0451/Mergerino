@@ -56,6 +56,7 @@ public:
     void setReply(MessagePtr target);
     void setPlaceholderText(const QString &text);
     void updatePlatformSelector(bool animate = false);
+    void applyActiveAccountProviderDefault();
     std::optional<MessagePlatform> selectedSendPlatform() const;
     QString selectedSendPlatformDisplayName() const;
     QString selectedSendAccountName() const;
@@ -160,8 +161,13 @@ protected:
     std::vector<MessagePlatform> selectedSendPlatforms() const;
     ChannelPtr channelForSendPlatform(MessagePlatform platform) const;
     bool canSendToPlatform(MessagePlatform platform) const;
+    void normalizeSelectedSendPlatforms(
+        const std::vector<MessagePlatform> &availablePlatforms);
+    void setSelectedSendPlatforms(std::vector<MessagePlatform> platforms);
+    void showPlatformSelectionMenu();
     void selectSendPlatform(MessagePlatform platform);
     void selectAllSendPlatforms();
+    bool tryCycleSendPlatform();
     void cycleSendPlatform();
 
     Split *const split_;
@@ -203,6 +209,7 @@ protected:
     int prevIndex_ = 0;
     MessagePlatform selectedSendPlatform_ = MessagePlatform::AnyOrTwitch;
     bool selectedSendAllPlatforms_ = false;
+    std::vector<MessagePlatform> customSelectedSendPlatforms_;
 
     // Hidden denotes whether this split input should be hidden or not
     // This is used instead of the regular QWidget::hide/show because

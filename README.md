@@ -55,38 +55,38 @@ git submodule update --init --recursive
 
 ## Privacy Policy
 
-Effective date: May 11, 2026
+<sub>Effective date: May 11, 2026</sub>
 
-Mergerino is a desktop chat client. It does not operate a hosted backend for YouTube login. When you sign in with Google, the app uses Google's OAuth flow and the YouTube Data API directly from your desktop device so YouTube chat features can work inside the app.
+<sub>Mergerino is a desktop chat client. It does not operate a hosted backend for YouTube login. When you sign in with Google, the app uses Google's OAuth flow and the YouTube Data API directly from your desktop device so YouTube chat features can work inside the app.</sub>
 
-Mergerino requests YouTube access only for user-facing chat features, including:
+<sub>Mergerino requests YouTube access only for user-facing chat features, including:</sub>
 
-- Showing YouTube live chat for channels you open in the app
-- Sending YouTube live chat messages as the signed-in Google account
-- Performing YouTube live chat moderation actions, such as deleting messages or hiding users, when the signed-in account is permitted to do so by YouTube
-- Displaying basic YouTube account/channel information needed to show which account is signed in
+- <sub>Showing YouTube live chat for channels you open in the app</sub>
+- <sub>Sending YouTube live chat messages as the signed-in Google account</sub>
+- <sub>Performing YouTube live chat moderation actions, such as deleting messages or hiding users, when the signed-in account is permitted to do so by YouTube</sub>
+- <sub>Displaying basic YouTube account/channel information needed to show which account is signed in</sub>
 
-Mergerino stores YouTube OAuth tokens locally on your device so you do not have to sign in every time you open the app. The Mergerino developer does not receive, store, sell, rent, or share your Google OAuth tokens or Google user data.
+<sub>Mergerino stores YouTube OAuth tokens locally on your device so you do not have to sign in every time you open the app. The Mergerino developer does not receive, store, sell, rent, or share your Google OAuth tokens or Google user data.</sub>
 
-Mergerino uses Google user data only to provide and improve the visible YouTube chat features in the app. It does not use Google user data for advertising, tracking, credit decisions, data brokerage, or unrelated analytics.
+<sub>Mergerino uses Google user data only to provide and improve the visible YouTube chat features in the app. It does not use Google user data for advertising, tracking, credit decisions, data brokerage, or unrelated analytics.</sub>
 
-You can revoke Mergerino's Google access at any time from your Google Account permissions page: https://myaccount.google.com/permissions
+<sub>You can revoke Mergerino's Google access at any time from your Google Account permissions page: https://myaccount.google.com/permissions</sub>
 
-For privacy or support questions, open an issue on this GitHub repository or contact the maintainer via Discord or Twitter/X.
+<sub>For privacy or support questions, open an issue on this GitHub repository or contact the maintainer via Discord or Twitter/X.</sub>
 
 ## Terms of Service
 
-Effective date: May 11, 2026
+<sub>Effective date: May 11, 2026</sub>
 
-Mergerino is provided as an unofficial desktop chat client for accessing supported live chat platforms from one app. By using Mergerino, you are responsible for following the terms, community guidelines, and developer policies of the services you connect to, including YouTube, Twitch, Kick, and TikTok.
+<sub>Mergerino is provided as an unofficial desktop chat client for accessing supported live chat platforms from one app. By using Mergerino, you are responsible for following the terms, community guidelines, and developer policies of the services you connect to, including YouTube, Twitch, Kick, and TikTok.</sub>
 
-When you sign in to a third-party service through Mergerino, any messages, moderation actions, or account actions made through the app are performed by your signed-in account. You are responsible for how your account is used inside the app.
+<sub>When you sign in to a third-party service through Mergerino, any messages, moderation actions, or account actions made through the app are performed by your signed-in account. You are responsible for how your account is used inside the app.</sub>
 
-Mergerino is provided "as is", without warranties of any kind. The maintainer does not guarantee that every platform feature will remain available, uninterrupted, or compatible with future changes made by third-party services.
+<sub>Mergerino is provided "as is", without warranties of any kind. The maintainer does not guarantee that every platform feature will remain available, uninterrupted, or compatible with future changes made by third-party services.</sub>
 
-Mergerino is not affiliated with, endorsed by, or sponsored by YouTube, Google, Twitch, Kick, TikTok, or Chatterino.
+<sub>Mergerino is not affiliated with, endorsed by, or sponsored by YouTube, Google, Twitch, Kick, TikTok, or Chatterino.</sub>
 
-For support questions, bug reports, or terms-related questions, open an issue on this GitHub repository or contact the maintainer via Discord or Twitter/X.
+<sub>For support questions, bug reports, or terms-related questions, open an issue on this GitHub repository or contact the maintainer via Discord or Twitter/X.</sub>
 
 ## Notes
 

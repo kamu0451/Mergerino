@@ -154,6 +154,7 @@ std::shared_ptr<Channel> KickChatServer::getOrCreate(
     auto existing = this->findBySlug(lower);
     if (existing)
     {
+        existing->loadRecentMessages();
         if (existing->userID() != 0)
         {
             this->liveController_.queueNewChannel(existing->userID());

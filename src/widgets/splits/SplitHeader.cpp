@@ -30,7 +30,6 @@
 #include "util/LayoutHelper.hpp"
 #include "widgets/buttons/DrawnButton.hpp"
 #include "widgets/buttons/LabelButton.hpp"
-#include "widgets/buttons/PixmapButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
 #include "widgets/ChatterListWidget.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
@@ -553,9 +552,13 @@ void SplitHeader::initializeLayout()
     this->dropdownButton_ =
         new DrawnButton(DrawnButton::Symbol::Kebab, {}, this);
 
-    this->clearActivityButton_ = new PixmapButton(this);
-    this->clearActivityButton_->setPixmap(
-        tintPixmap(getResources().buttons.trashCan, Qt::white));
+    this->clearActivityButton_ = new SvgButton(
+        {
+            .dark = ":/buttons/trash-darkMode.svg",
+            .light = ":/buttons/trash-lightMode.svg",
+        },
+        this, {0, 0});
+    this->clearActivityButton_->setContentSize(QSize{14, 14});
     this->clearActivityButton_->setScaleIndependentSize(BUTTON_WIDTH, 24);
     this->clearActivityButton_->hide();
 
@@ -894,6 +897,42 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
                     h->getDisplaySequence(HotkeyCategory::Split, "delete"),
                     this->split_, &Split::deleteFromContainer);
     menu->addSeparator();
+    if (auto *mergedChannel =
+            dynamic_cast<MergedChannel *>(this->split_->getChannel().get()))
+    {
+        auto browserUrls = mergedChannel->liveStreamBrowserUrls();
+        const auto hasLiveStreams = !browserUrls.empty();
+        if (!hasLiveStreams)
+        {
+            browserUrls = mergedChannel->channelBrowserUrls();
+        }
+
+        if (!browserUrls.empty())
+        {
+            auto *streamMenu = new QMenu(
+                hasLiveStreams ? "Open stream in browser"
+                               : "Open channel in browser",
+                menu.get());
+            for (const auto &browserUrl : browserUrls)
+            {
+                streamMenu->addAction(browserUrl.platformName, this,
+                                      [url = browserUrl.url] {
+                                          openUrlInBrowser(url);
+                                      });
+            }
+
+            auto *streamAction = menu->addMenu(streamMenu);
+            const auto defaultUrl = browserUrls.front().url;
+            auto openDefault = [defaultUrl] {
+                openUrlInBrowser(defaultUrl);
+            };
+            QObject::connect(streamAction, &QAction::triggered, this,
+                             openDefault);
+            menu->installEventFilter(new ClickableSubmenuActionFilter(
+                menu.get(), streamAction, std::move(openDefault)));
+            menu->addSeparator();
+        }
+    }
     menu->addAction(
         "Popup",
         h->getDisplaySequence(HotkeyCategory::Window, "popup", {{"split"}}),
@@ -986,34 +1025,6 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
         }
 
         menu->addSeparator();
-    }
-
-    if (auto *mergedChannel =
-            dynamic_cast<MergedChannel *>(this->split_->getChannel().get()))
-    {
-        const auto streamUrls = mergedChannel->liveStreamBrowserUrls();
-        if (!streamUrls.empty())
-        {
-            auto *streamMenu = new QMenu("Open stream in browser", menu.get());
-            for (const auto &streamUrl : streamUrls)
-            {
-                streamMenu->addAction(streamUrl.platformName, this,
-                                      [url = streamUrl.url] {
-                                          openUrlInBrowser(url);
-                                      });
-            }
-
-            auto *streamAction = menu->addMenu(streamMenu);
-            const auto defaultUrl = streamUrls.front().url;
-            auto openDefault = [defaultUrl] {
-                openUrlInBrowser(defaultUrl);
-            };
-            QObject::connect(streamAction, &QAction::triggered, this,
-                             openDefault);
-            menu->installEventFilter(new ClickableSubmenuActionFilter(
-                menu.get(), streamAction, std::move(openDefault)));
-            menu->addSeparator();
-        }
     }
 
     if (this->split_->getChannel()->getType() == Channel::Type::TwitchWhispers)

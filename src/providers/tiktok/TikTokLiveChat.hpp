@@ -91,6 +91,7 @@ private:
     void setStatusText(QString text, bool notifyAsSystemMessage = false);
     void setLive(bool live);
     void setViewerCount(unsigned count);
+    void armOfflineRecheck();
     void handleWebMessage(const QString &json);
     void handleRoomInfo(const QJsonObject &root);
     void emitSystemMessage(const QString &text);

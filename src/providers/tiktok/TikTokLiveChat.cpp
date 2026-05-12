@@ -426,6 +426,15 @@ struct TikTokLiveChat::Impl {
     static constexpr int livenessCheckIntervalMs = 30000;
     static constexpr qint64 livenessTimeoutMs = 180000;
 
+    // Offline-recheck poller. Once we've decided the user is offline,
+    // TikTok's webapp on the /@user/live page doesn't repoll, so the tab
+    // would sit on "is not live" forever. Reload the page periodically
+    // while not live so TikTok re-issues room/info -- catches the user
+    // coming online within `offlineRecheckIntervalMs`. The hidden 1x1
+    // host with image/media/font/CDN blocking makes each reload cheap.
+    QTimer offlineRecheckTimer;
+    static constexpr int offlineRecheckIntervalMs = 90000;
+
     // Set once check_alive (or the inline `alive` field) has returned a
     // definitive live/offline answer for this session. While false, the
     // WebSocket fallback can flip live_ on chat/gift frames; once true,
@@ -752,6 +761,7 @@ void TikTokLiveChat::start()
                                        "(no response from room)");
                          this->setStatusText(msg, true);
                          this->setLive(false);
+                         this->armOfflineRecheck();
                      });
     this->impl_->livenessTimer.setSingleShot(false);
     this->impl_->livenessTimer.setInterval(Impl::livenessCheckIntervalMs);
@@ -778,6 +788,33 @@ void TikTokLiveChat::start()
             QStringLiteral("TikTok live chat ended (no activity)"), true);
         this->setLive(false);
     });
+    this->impl_->offlineRecheckTimer.setSingleShot(false);
+    this->impl_->offlineRecheckTimer.setInterval(
+        Impl::offlineRecheckIntervalMs);
+    QObject::connect(
+        &this->impl_->offlineRecheckTimer, &QTimer::timeout, [this]() {
+            if (!this->running_ || this->live_ || !this->impl_ ||
+                !this->impl_->webview)
+            {
+                return;
+            }
+            // Skip while a login window is showing: a reload here would
+            // wipe the user's in-progress sign-in. Once autoHideLoginHost
+            // latches loginAutoHidden=true, reloads are safe again.
+            if (this->impl_->loginVisible && !this->impl_->loginAutoHidden)
+            {
+                return;
+            }
+            // Wipe per-session state so the auth-vs-offline discriminator
+            // in handleRoomInfo (which keys on checkAliveSeen + roomId_)
+            // treats the next prompts response as a fresh offline check,
+            // not as auth expiry from a prior session.
+            this->roomId_.clear();
+            this->impl_->checkAliveSeen = false;
+            qCDebug(chatterinoTikTok)
+                << "offline recheck: reloading" << this->username_;
+            this->impl_->webview->Reload();
+        });
     // TIKTOK_LOGIN_MODE=1 in env: open a visible WebView so the user can
     // sign in to TikTok. Cookies persist in the user-data-dir, so a
     // single one-time login carries over to subsequent hidden runs.
@@ -1205,8 +1242,13 @@ QString TikTokLiveChat::normalizeSource(const QString &ref)
 
 void TikTokLiveChat::setStatusText(QString text, bool notifyAsSystemMessage)
 {
+    // Dedupe identical status updates: the offline-recheck loop reloads
+    // the page every ~90s and the post-reload ws-open + stuck-connection
+    // watchdog would otherwise re-emit "X is not live" as a system
+    // message every cycle. Only push to chat on actual transitions.
+    const bool textChanged = this->statusText_ != text;
     this->statusText_ = std::move(text);
-    if (notifyAsSystemMessage && !this->statusText_.isEmpty())
+    if (notifyAsSystemMessage && textChanged && !this->statusText_.isEmpty())
     {
         this->emitSystemMessage(this->statusText_);
     }
@@ -1226,6 +1268,7 @@ void TikTokLiveChat::setLive(bool live)
         {
             this->impl_->livenessTimer.stop();
             this->impl_->lastLiveEvidenceMs = 0;
+            this->armOfflineRecheck();
         }
     }
     else if (this->impl_)
@@ -1235,6 +1278,16 @@ void TikTokLiveChat::setLive(bool live)
         this->impl_->lastLiveEvidenceMs =
             QDateTime::currentMSecsSinceEpoch();
         this->impl_->livenessTimer.start();
+        this->impl_->offlineRecheckTimer.stop();
+        // Going live is the universal "past connecting" signal. The 60s
+        // stuck-connection grace period existed only to detect rooms that
+        // never produced any live evidence; once live_ is true the
+        // livenessTimer (3-min staleness window) takes over. Without this
+        // stop, a quiet stream that produced exactly one chat frame
+        // would Joined, then 60s later false-positive "live chat
+        // unavailable (no response from room)" -- which the offline-
+        // recheck loop would then keep cycling through.
+        this->impl_->stuckConnectionTimer.stop();
     }
     this->liveStatusChanged.invoke();
 }
@@ -1247,6 +1300,21 @@ void TikTokLiveChat::setViewerCount(unsigned count)
     }
     this->viewerCount_ = count;
     this->viewerCountChanged.invoke();
+}
+
+void TikTokLiveChat::armOfflineRecheck()
+{
+    // Idempotent: callable from any "decided offline" path. setLive(false)
+    // is a no-op when live_ was already false, so the initial-offline
+    // paths (stuck-connection fire, offline prompts response, ws-close
+    // before going live) must arm the timer here directly. QTimer::start()
+    // on an already-running timer restarts the interval, which is fine -
+    // each fresh evidence of "still offline" pushes the next reload out.
+    if (!this->running_ || !this->impl_ || this->live_)
+    {
+        return;
+    }
+    this->impl_->offlineRecheckTimer.start();
 }
 
 void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
@@ -1289,19 +1357,37 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         !dataObj.contains(QStringLiteral("room")) &&
         !dataObj.contains(QStringLiteral("id_str")))
     {
+        // TikTok serves the same `prompts` response for two distinct cases:
+        //   1) auth genuinely expired on a live, high-viewer room
+        //   2) the streamer is simply offline (no room exists)
+        // Only case 1 warrants surfacing the login window. Use checkAliveSeen
+        // as the discriminator: it flips true once a check_alive batch has
+        // included *our* roomId, which only happens after a prior successful
+        // `enter` response pinned the id. So `checkAliveSeen == true` means
+        // auth was working before -> this prompts response is auth expiry.
+        // `checkAliveSeen == false` on the first prompts response is the
+        // offline-streamer case, and we should not pop the login UI.
+        const bool authLikelyExpired =
+            this->impl_ && this->impl_->checkAliveSeen;
         if (this->impl_)
         {
             this->impl_->stuckConnectionTimer.stop();
-            // Auto-prompt: surface the WebView2 host so the user can
-            // re-authenticate. Once chat frames start flowing,
-            // autoHideLoginHost() will hide it again automatically.
-            this->impl_->promoteToLoginHost(this->username_);
+            if (authLikelyExpired)
+            {
+                // Auto-prompt: surface the WebView2 host so the user can
+                // re-authenticate. Once chat frames start flowing,
+                // autoHideLoginHost() will hide it again automatically.
+                this->impl_->promoteToLoginHost(this->username_);
+            }
         }
         this->setStatusText(
-            QStringLiteral("TikTok: sign-in required to view %1")
-                .arg(this->username_),
+            authLikelyExpired
+                ? QStringLiteral("TikTok: sign-in required to view %1")
+                      .arg(this->username_)
+                : QStringLiteral("TikTok: %1 is not live").arg(this->username_),
             true);
         this->setLive(false);
+        this->armOfflineRecheck();
         return;
     }
 
@@ -1355,6 +1441,7 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
             this->impl_->checkAliveSeen = true;
         }
         this->setLive(false);
+        this->armOfflineRecheck();
         // The object-form "finished" response carries no room data, no
         // viewer count, and no title - nothing else worth processing.
         return;
@@ -1433,6 +1520,10 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
                 }
             }
             this->setLive(anyRoomLive);
+            if (!anyRoomLive)
+            {
+                this->armOfflineRecheck();
+            }
         }
     }
 
@@ -1480,7 +1571,28 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
             if (this->impl_)
             {
                 this->impl_->autoHideLoginHost(this->username_);
+                // Pinning roomId_ proves TikTok issued an object-form
+                // room/enter or room/info response with a valid id - this
+                // is TikTok's "user is live, room exists" signal. The
+                // prompts/offline branch and the "room has finished"
+                // (status_code 30003) branch above both shortcircuit
+                // before we get here, so by this point the room is
+                // definitively live. Stop the 60s grace period; on
+                // quiet streams check_alive batches can legitimately
+                // take longer than that to include our room, and the
+                // livenessTimer (3-min staleness window) is the right
+                // fallback from here on.
+                this->impl_->stuckConnectionTimer.stop();
             }
+            // Announce "live" immediately on the room/enter response
+            // rather than waiting for the first chat frame. Quiet
+            // streams (or streams with all chat in the dom-chat path
+            // that hasn't attached yet) would otherwise sit in
+            // "Connected to TikTok" without ever firing the join
+            // announce. setLive(true) is gated by the live_ change
+            // guard so multiple object-form responses in one session
+            // only emit one transition.
+            this->setLive(true);
         }
         else
         {
@@ -1636,8 +1748,16 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         // actual decoded chat event before treating the room as live.
         qCDebug(chatterinoTikTok) << "ws-open for" << this->username_;
         this->setStatusText(QStringLiteral("Connected to TikTok"));
-        if (this->impl_)
+        if (this->impl_ && !this->live_)
         {
+            // The 60s grace period only applies to the initial connect.
+            // TikTok's webapp opens additional/reconnecting WebSockets
+            // mid-session (auxiliary state sockets, im-ws reconnects);
+            // re-arming the stuck timer on every ws-open would
+            // false-positive "live chat unavailable" the moment a
+            // 60-second quiet stretch happens to coincide with a fresh
+            // ws-open. Once live_ is true, the livenessTimer (3-min
+            // staleness window) is the only backstop we need.
             this->impl_->stuckConnectionTimer.start();
         }
         return;
@@ -1660,6 +1780,7 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
             this->impl_->stuckConnectionTimer.stop();
         }
         this->setLive(false);
+        this->armOfflineRecheck();
         this->setStatusText(QStringLiteral("TikTok live chat disconnected"),
                             true);
         return;

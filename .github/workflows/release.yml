@@ -38,7 +38,6 @@ jobs:
         env:
           ASSET_NAME: Mergerino.zip
           ASSET_PATH: release-artifact/Mergerino.zip
-          RELEASE_NAME: Latest
           RELEASE_TAG: latest
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -51,9 +50,31 @@ jobs:
             const assetName = process.env.ASSET_NAME;
             const assetPath = path.join(process.env.GITHUB_WORKSPACE, process.env.ASSET_PATH);
             const headSha = context.payload.workflow_run.head_sha;
-            const releaseName = process.env.RELEASE_NAME;
             const tag = process.env.RELEASE_TAG;
+
+            const versionFile = (await github.rest.repos.getContent({
+              owner,
+              repo,
+              path: 'src/common/Version.hpp',
+              ref: headSha,
+            })).data;
+            if (!versionFile.content || !versionFile.encoding) {
+              throw new Error('Unable to read src/common/Version.hpp from the release commit.');
+            }
+
+            const versionText = Buffer.from(versionFile.content, versionFile.encoding).toString('utf8');
+            const versionMatch =
+              versionText.match(/CHATTERINO_DISPLAY_VERSION\s*=\s*QStringLiteral\("([^"]+)"\)/) ??
+              versionText.match(/CHATTERINO_VERSION\s*=\s*QStringLiteral\("([^"]+)"\)/);
+            if (!versionMatch) {
+              throw new Error('Unable to determine Mergerino version from src/common/Version.hpp.');
+            }
+
+            const releaseVersion = versionMatch[1];
+            const releaseName = `Mergerino ${releaseVersion}`;
             const body = [
+              `Mergerino ${releaseVersion}`,
+              '',
               'Rolling release for the latest successful `main` build.',
               '',
               'This release is replaced automatically on every successful push to `main`.',

@@ -436,12 +436,21 @@ void Application::initialize(Settings &settings, const Paths &paths)
             !pendingPostUpdateVersion.isEmpty() &&
             pendingPostUpdateVersion == CHATTERINO_VERSION &&
             previousVersion != CHATTERINO_VERSION;
+        // Versions before pendingPostUpdateVersion existed only leave
+        // currentVersion behind after the updater restarts.
+        const bool legacyPostUpdateForThisVersion =
+            pendingPostUpdateVersion.isEmpty() && !previousVersion.isEmpty() &&
+            Updates::isDowngradeOf(previousVersion, CHATTERINO_VERSION);
 
         if (pendingPostUpdateForThisVersion)
         {
             this->previousVersionForPatchNotes_ =
                 previousVersion.isEmpty() ? pendingPostUpdateVersion
                                           : previousVersion;
+        }
+        else if (legacyPostUpdateForThisVersion)
+        {
+            this->previousVersionForPatchNotes_ = previousVersion;
         }
         else if (!pendingPostUpdateVersion.isEmpty())
         {

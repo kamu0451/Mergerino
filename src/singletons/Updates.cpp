@@ -36,6 +36,8 @@ using namespace literals;
 
 const QUrl MERGERINO_LATEST_RELEASE_API(
     u"https://api.github.com/repos/Fixlation/Mergerino/releases/latest"_s);
+const QString MERGERINO_RAW_VERSION_URL =
+    u"https://raw.githubusercontent.com/Fixlation/Mergerino/%1/src/common/Version.hpp"_s;
 
 QString normalizedReleaseVersion(const QString &value)
 {
@@ -84,6 +86,33 @@ QString releaseVersionFrom(const QString &releaseName, const QString &tagName)
     for (const auto &candidate : {releaseName, tagName})
     {
         auto version = normalizedReleaseVersion(candidate);
+        if (!version.isEmpty())
+        {
+            return version;
+        }
+    }
+
+    return {};
+}
+
+QString releaseVersionFromVersionHeader(const QString &contents)
+{
+    static const QRegularExpression displayVersionPattern{
+        QStringLiteral(
+            R"re(CHATTERINO_DISPLAY_VERSION\s*=\s*QStringLiteral\("([^"]+)"\))re")};
+    static const QRegularExpression versionPattern{
+        QStringLiteral(
+            R"re(CHATTERINO_VERSION\s*=\s*QStringLiteral\("([^"]+)"\))re")};
+
+    for (const auto &pattern : {displayVersionPattern, versionPattern})
+    {
+        const auto match = pattern.match(contents);
+        if (!match.hasMatch())
+        {
+            continue;
+        }
+
+        auto version = normalizedReleaseVersion(match.captured(1));
         if (!version.isEmpty())
         {
             return version;
@@ -222,8 +251,7 @@ void Updates::checkForUpdates()
             const auto root = result.parseJson();
             const auto releaseName = root["name"].toString();
             const auto tagName = root["tag_name"].toString();
-            const auto releaseVersion =
-                releaseVersionFrom(releaseName, tagName);
+            const auto targetCommitish = root["target_commitish"].toString();
 
             QString downloadUrl;
             const auto assets = root["assets"].toArray();
@@ -238,26 +266,61 @@ void Updates::checkForUpdates()
                 }
             }
 
-            if (releaseVersion.isEmpty() || downloadUrl.isEmpty())
+            const auto handleReleaseVersion =
+                [this, downloadUrl](const QString &releaseVersion) {
+                    if (releaseVersion.isEmpty() || downloadUrl.isEmpty())
+                    {
+                        qCWarning(chatterinoUpdate)
+                            << "Latest Mergerino release is missing version or asset";
+                        this->setStatus_(SearchFailed);
+                        return;
+                    }
+
+                    this->onlineVersion_ = releaseVersion;
+                    this->updateDownloadUrl_ = downloadUrl;
+
+                    this->isDowngrade_ = Updates::isDowngradeOf(
+                        releaseVersion, this->currentVersion_);
+                    if (isNewerVersion(releaseVersion, this->currentVersion_))
+                    {
+                        this->setStatus_(UpdateAvailable);
+                        return;
+                    }
+
+                    this->setStatus_(NoUpdateAvailable);
+                };
+
+            const auto releaseVersion = releaseVersionFrom(releaseName, tagName);
+            if (!releaseVersion.isEmpty())
+            {
+                handleReleaseVersion(releaseVersion);
+                return;
+            }
+
+            if (targetCommitish.isEmpty())
             {
                 qCWarning(chatterinoUpdate)
-                    << "Latest Mergerino release is missing version or asset";
+                    << "Latest Mergerino release is missing version and target commit";
                 this->setStatus_(SearchFailed);
                 return;
             }
 
-            this->onlineVersion_ = releaseVersion;
-            this->updateDownloadUrl_ = downloadUrl;
-
-            this->isDowngrade_ =
-                Updates::isDowngradeOf(releaseVersion, this->currentVersion_);
-            if (isNewerVersion(releaseVersion, this->currentVersion_))
-            {
-                this->setStatus_(UpdateAvailable);
-                return;
-            }
-
-            this->setStatus_(NoUpdateAvailable);
+            NetworkRequest(
+                QUrl(MERGERINO_RAW_VERSION_URL.arg(targetCommitish)))
+                .timeout(15000)
+                .onSuccess([handleReleaseVersion](NetworkResult versionResult) {
+                    const auto versionHeader =
+                        QString::fromUtf8(versionResult.getData());
+                    handleReleaseVersion(
+                        releaseVersionFromVersionHeader(versionHeader));
+                })
+                .onError([this](NetworkResult versionResult) {
+                    qCWarning(chatterinoUpdate)
+                        << "Failed to fetch Mergerino release version:"
+                        << versionResult.formatError();
+                    this->setStatus_(SearchFailed);
+                })
+                .execute();
         })
         .onError([this](NetworkResult result) {
             qCWarning(chatterinoUpdate)

@@ -2727,7 +2727,7 @@ void YouTubeLiveChat::scheduleHealthCheck(int delayMs)
             this->liveChatProgressTimer_.elapsed() >= YOUTUBE_STALL_TIMEOUT_MS)
         {
             this->recoverLiveChat("YouTube live chat stalled. Reconnecting.",
-                                  YOUTUBE_RECONNECT_DELAY_MS);
+                                  YOUTUBE_RECONNECT_DELAY_MS, false);
         }
 
         this->scheduleHealthCheck(YOUTUBE_HEALTH_CHECK_INTERVAL_MS);

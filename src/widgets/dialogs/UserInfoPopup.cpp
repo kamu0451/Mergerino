@@ -129,6 +129,14 @@ bool checkMessageUserName(const QString &userName, MessagePtr message)
     return (isSubscription || isModAction || isSelectedUser);
 }
 
+std::optional<MessageFlags> doNotLogFlags(
+    const MessagePtr &message, std::optional<MessageFlags> overridingFlags)
+{
+    auto flags = overridingFlags.value_or(message->flags);
+    flags.set(MessageFlag::DoNotLog);
+    return flags;
+}
+
 ChannelPtr filterMessages(const QString &userName, ChannelPtr channel)
 {
     std::vector<MessagePtr> snapshot = channel->getMessageSnapshot();
@@ -142,11 +150,8 @@ ChannelPtr filterMessages(const QString &userName, ChannelPtr channel)
     {
         if (checkMessageUserName(userName, message))
         {
-            auto overrideFlags = std::optional<MessageFlags>(message->flags);
-            overrideFlags->set(MessageFlag::DoNotLog);
-
             channelPtr->addMessage(message, MessageContext::Repost,
-                                   overrideFlags);
+                                   doNotLogFlags(message, std::nullopt));
         }
     }
 
@@ -1153,6 +1158,32 @@ void UserInfoPopup::updateLatestMessages()
         filterMessages(this->userName_, this->underlyingChannel_);
     this->ui_.latestMessages->setChannel(filteredChannel);
     this->ui_.latestMessages->setSourceChannel(this->underlyingChannel_);
+    this->refreshConnection_ =
+        std::make_unique<pajlada::Signals::ScopedConnection>(
+            this->underlyingChannel_->messageAppended.connect(
+                [self = QPointer(this), filteredChannel](
+                    MessagePtr &message,
+                    std::optional<MessageFlags> overridingFlags) {
+                    if (self == nullptr || self->preparedForClose_)
+                    {
+                        return;
+                    }
+                    if (!checkMessageUserName(self->userName_, message))
+                    {
+                        return;
+                    }
+
+                    const bool hadMessages = filteredChannel->hasMessages();
+                    filteredChannel->addMessage(
+                        message, MessageContext::Repost,
+                        doNotLogFlags(message, overridingFlags));
+                    if (!hadMessages)
+                    {
+                        self->ui_.latestMessages->setVisible(true);
+                        self->ui_.noMessagesLabel->setVisible(false);
+                        self->adjustSize();
+                    }
+                }));
 
     const bool hasMessages = filteredChannel->hasMessages();
     this->ui_.latestMessages->setVisible(hasMessages);

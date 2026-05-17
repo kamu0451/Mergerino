@@ -157,6 +157,8 @@ protected:
     int replyMessageWidth() const;
 
     std::vector<MessagePlatform> availableSendPlatforms() const;
+    std::vector<MessagePlatform> cycleSendPlatforms(
+        const std::vector<MessagePlatform> &availablePlatforms) const;
     std::optional<MessagePlatform> replySendPlatform() const;
     std::vector<MessagePlatform> selectedSendPlatforms() const;
     ChannelPtr channelForSendPlatform(MessagePlatform platform) const;
@@ -210,6 +212,7 @@ protected:
     MessagePlatform selectedSendPlatform_ = MessagePlatform::AnyOrTwitch;
     bool selectedSendAllPlatforms_ = false;
     std::vector<MessagePlatform> customSelectedSendPlatforms_;
+    std::vector<MessagePlatform> enabledSendPlatforms_;
 
     // Hidden denotes whether this split input should be hidden or not
     // This is used instead of the regular QWidget::hide/show because

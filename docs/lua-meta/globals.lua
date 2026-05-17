@@ -28,7 +28,7 @@ c2.EventType = {
 
 ---@class CompletionList
 ---@field values string[] The completions
----@field hide_others boolean Whether other completions from Chatterino should be hidden/ignored.
+---@field hide_others boolean Whether other completions from Mergerino should be hidden/ignored.
 
 ---@class CompletionEvent
 ---@field query string The word being completed
@@ -875,13 +875,13 @@ function c2.register_command(name, handler) end
 ---@param func fun(event: CompletionEvent): CompletionList The callback to be invoked.
 function c2.register_callback(type, func) end
 
---- Writes a message to the Chatterino log.
+--- Writes a message to the Mergerino log.
 ---
 ---@param level c2.LogLevel The desired level.
 ---@param ... any Values to log. Should be convertible to a string with `tostring()`.
 function c2.log(level, ...) end
 
---- Calls callback around msec milliseconds later. Does not freeze Chatterino.
+--- Calls callback around msec milliseconds later. Does not freeze Mergerino.
 ---
 ---@param callback fun() The callback that will be called.
 ---@param msec number How long to wait.

@@ -121,6 +121,7 @@ enum class PlatformIndicatorMode : std::uint8_t {
     Badge,
     LineColor,
     Both,
+    None,
 };
 
 constexpr std::optional<std::string_view> qmagicenumDisplayName(
@@ -134,6 +135,8 @@ constexpr std::optional<std::string_view> qmagicenumDisplayName(
             return "Platform line color";
         case PlatformIndicatorMode::Both:
             return "Platform line color + badge";
+        case PlatformIndicatorMode::None:
+            return "None";
     }
 }
 
@@ -496,7 +499,7 @@ public:
         EmoteTooltipScale::Medium,
     };
     BoolSetting showUnlistedSevenTVEmotes = {
-        "/emotes/showUnlistedSevenTVEmotes", false};
+        "/emotes/showUnlistedSevenTVEmotes", true};
     /**
      * This setting is kept for backwards compatibility.
      */

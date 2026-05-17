@@ -56,11 +56,14 @@ int indicatorModeIndex(PlatformIndicatorMode mode)
 {
     switch (mode)
     {
-        case PlatformIndicatorMode::Badge:
-            return 1;
-        case PlatformIndicatorMode::Both:
-            return 2;
         case PlatformIndicatorMode::LineColor:
+            return 1;
+        case PlatformIndicatorMode::Badge:
+            return 2;
+        case PlatformIndicatorMode::Both:
+            return 3;
+        case PlatformIndicatorMode::None:
+            return 0;
         default:
             return 0;
     }
@@ -71,10 +74,13 @@ PlatformIndicatorMode indicatorModeFromIndex(int index)
     switch (index)
     {
         case 1:
-            return PlatformIndicatorMode::Badge;
+            return PlatformIndicatorMode::LineColor;
         case 2:
+            return PlatformIndicatorMode::Badge;
+        case 3:
             return PlatformIndicatorMode::Both;
         case 0:
+            return PlatformIndicatorMode::None;
         default:
             return PlatformIndicatorMode::LineColor;
     }
@@ -555,11 +561,12 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     platformLayout->addRow("TikTok", ui.tiktokSource);
 
     ui.indicatorMode = new QComboBox();
+    ui.indicatorMode->addItem("None");
     ui.indicatorMode->addItem("Highlights");
     ui.indicatorMode->addItem("Logos");
     ui.indicatorMode->addItem("Both");
     const auto platformStyleTooltip = QStringLiteral(
-        "Show platform color, logo, or both.");
+        "Show no platform indicator, platform color, logo, or both.");
     platformLayout->addRow(
         createLabelWithInfo("Platform style", platformStyleTooltip, this),
         ui.indicatorMode);

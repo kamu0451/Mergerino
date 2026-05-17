@@ -108,6 +108,10 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
     descriptor.type_ = data.value("type").toString();
     descriptor.server_ = data.value("server").toInt(-1);
     descriptor.moderationMode_ = root.value("moderationMode").toBool();
+    if (root["activityPane"].isBool())
+    {
+        descriptor.activityPane_ = root.value("activityPane").toBool();
+    }
     descriptor.inputEnabled_ = root.value("inputEnabled").toBool(true);
     if (root["filterActivity"].isBool())
     {

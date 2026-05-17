@@ -1,5 +1,13 @@
 Patch Notes
 
+17/05/2026
+- Added custom channel subscriber badges to Kick
+- Added 'None' to platform style options
+- Added pin application option
+- Improved platform swap chatbox hotkey behaviour
+- Disabled message animations when searching
+- Fixed a bug causing messages to not live-update in user cards
+
 11/05/2026
 - Added YouTube OAuth sign in
 - Added YouTube chatting support and moderation tools

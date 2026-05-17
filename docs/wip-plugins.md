@@ -1,17 +1,17 @@
 # Plugins
 
-If Chatterino is compiled with the `CHATTERINO_PLUGINS` CMake option, it can
+If Mergerino is compiled with the `CHATTERINO_PLUGINS` CMake option, it can
 load and execute Lua files. Note that while there are attempts at making this
 decently safe, we cannot guarantee safety.
 
 ## Plugin structure
 
-Chatterino searches for plugins in the `Plugins` directory in the app data, right next to `Settings` and `Logs`.
+Mergerino searches for plugins in the `Plugins` directory in the app data, right next to `Settings` and `Logs`.
 
 Each plugin should have its own directory.
 
 ```
-Chatterino Plugins dir/
+Mergerino Plugins dir/
 └── plugin_name/
     ├── init.lua
     ├── info.json
@@ -30,7 +30,7 @@ Example file:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/Chatterino/chatterino2/master/docs/plugin-info.schema.json",
+  "$schema": "https://raw.githubusercontent.com/Fixlation/Mergerino/main/docs/plugin-info.schema.json",
   "name": "Test plugin",
   "description": "This plugin is for testing stuff.",
   "authors": ["Mm2PL"],
@@ -42,7 +42,7 @@ Example file:
 }
 ```
 
-An example plugin is available at [https://github.com/Mm2PL/Chatterino-test-plugin](https://github.com/Mm2PL/Chatterino-test-plugin)
+For a basic plugin, use the `init.lua` and `info.json` structure above as the starting point.
 
 ## Permissions
 
@@ -114,7 +114,7 @@ runtime.
 
 Type definitions for LuaLS are available in
 [the `/lua-meta` directory](./lua-meta). These are generated from [the C++
-headers](../src/controllers/plugins/LuaAPI.hpp) of Chatterino using [a
+headers](../src/controllers/plugins/LuaAPI.hpp) of Mergerino using [a
 script](../scripts/make_luals_meta.py).
 
 ## API
@@ -130,20 +130,20 @@ The following parts of the Lua standard library are loaded:
 
 The official manual for them is available [here](https://www.lua.org/manual/5.4/manual.html#6).
 
-### Chatterino API
+### Mergerino API
 
-All Chatterino functions are exposed in a global table called `c2`. The following members are available:
+All Mergerino plugin functions are exposed in a global table called `c2`. The following members are available:
 
 #### `log(level, args...)`
 
-Writes a message to the Chatterino log. The `level` argument should be a
+Writes a message to the Mergerino log. The `level` argument should be a
 `LogLevel` member. All `args` should be convertible to a string with
 `tostring()`.
 
 Example:
 
 ```lua
-c2.log(c2.LogLevel.Warning, "Hello, this should show up in the Chatterino log by default")
+c2.log(c2.LogLevel.Warning, "Hello, this should show up in the Mergerino log by default")
 
 c2.log(c2.LogLevel.Debug, "Hello world")
 -- Equivalent to doing qCDebug(chatterinoLua) << "[pluginDirectory:Plugin Name]" << "Hello, world"; from C++
@@ -266,7 +266,7 @@ Returns `true` if this account is an anonymous account (no associated Twitch use
 
 #### `ChannelType` enum
 
-This table describes channel types Chatterino supports. The values behind the
+This table describes channel types Mergerino supports. The values behind the
 names may change, do not count on them. It has the following keys:
 
 - `None`
@@ -284,7 +284,7 @@ names may change, do not count on them. It has the following keys:
 #### `Channel`
 
 This is a type that represents a channel. Existence of this object doesn't
-force Chatterino to hold the channel open. Should the user close the last split
+force Mergerino to hold the channel open. Should the user close the last split
 holding this channel open, your Channel object will expire. You can check for
 this using the `Channel:is_valid()` function. Using any other function on an
 expired Channel yields an error. Using any `Channel` member function on a
@@ -678,7 +678,7 @@ Create and connect to a WebSocket server specified by `url`.
 
 | Key         | Type                    | Description                                                                                                                             |
 | ----------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `headers`   | `table<string, string>` | Additional headers to set when connecting to the server. Any headers specified here will overwrite the ones Chatterino sets by default. |
+| `headers`   | `table<string, string>` | Additional headers to set when connecting to the server. Any headers specified here will overwrite the ones Mergerino sets by default. |
 | `on_open`   | `fun()`                 | Called when the WebSocket handshake completed.                                                                                          |
 | `on_text`   | `fun(data: string)`     | Handler for text messages.                                                                                                              |
 | `on_binary` | `fun(data: string)`     | Handler for binary messages. Here, the data might not be valid UTF-8.                                                                   |
@@ -701,7 +701,7 @@ Closes the WebSocket connection.
 #### `Message`
 
 Allows creation and modification of rich chat messages. A `Message` is
-Chatterino's representation of a chat message or any system message.
+Mergerino's representation of a chat message or any system message.
 The interface to Lua is currently limited but is expected to be expanded soon.
 
 Messages can be added to a [`Channel`](#channel). Once a message is added to a
@@ -899,9 +899,9 @@ Requires the [network permission](#permissions).
 These functions are wrappers for Lua's I/O library. Functions on file pointer
 objects (`FILE*`) are not modified or replaced. [You can read the documentation
 for them here](https://www.lua.org/manual/5.4/manual.html#pdf-file:close).
-Chatterino does _not_ give you stdin and stdout as default input and output
+Mergerino does _not_ give you stdin and stdout as default input and output
 respectively. The following objects are missing from the `io` table exposed by
-Chatterino compared to Lua's native library: `stdin`, `stdout`, `stderr`.
+Mergerino compared to Lua's native library: `stdin`, `stdout`, `stderr`.
 
 #### `close([file])`
 
@@ -972,7 +972,7 @@ See [official documentation](https://www.lua.org/manual/5.4/manual.html#pdf-io.o
 
 #### `popen(exe [, mode])`
 
-This function is unavailable in Chatterino. Calling it results in an error
+This function is unavailable in Mergerino. Calling it results in an error
 message to let you know that it's not available, no permissions needed.
 
 See [official documentation](https://www.lua.org/manual/5.4/manual.html#pdf-io.popen)
@@ -986,7 +986,7 @@ See [official documentation](https://www.lua.org/manual/5.4/manual.html#pdf-io.r
 
 #### `tmpfile()`
 
-This function is unavailable in Chatterino. Calling it results in an error
+This function is unavailable in Mergerino. Calling it results in an error
 message to let you know that it's not available, no permissions needed.
 
 See [official documentation](https://www.lua.org/manual/5.4/manual.html#pdf-io.tmpfile)
@@ -1007,7 +1007,7 @@ See [official documentation](https://www.lua.org/manual/5.4/manual.html#pdf-io.w
 
 ### Debug API
 
-To aid debugging, Chatterino provides Lua's `debug.traceback` function.
+To aid debugging, Mergerino provides Lua's `debug.traceback` function.
 Other functions from the `debug` library are not exposed.
 
 #### `traceback([thread,] [message [, level]])`
@@ -1034,7 +1034,7 @@ See [official documentation](https://www.lua.org/manual/5.4/manual.html#pdf-debu
 
 #### `load(chunk [, chunkname [, mode [, env]]])`
 
-This function is only available if Chatterino is compiled in debug mode. It is meant for debugging with little exception.
+This function is only available if Mergerino is compiled in debug mode. It is meant for debugging with little exception.
 This function behaves really similarity to Lua's `load`, however it does not allow for bytecode to be executed.
 It achieves this by forcing all inputs to be encoded with `UTF-8`.
 
@@ -1069,7 +1069,7 @@ The `print` global function is equivalent to calling `c2.log(c2.LogLevel.Debug, 
 
 ### JSON API
 
-Chatterino includes the `chatterino.json` module for parsing and serializing JSON:
+Mergerino includes the `chatterino.json` module for parsing and serializing JSON:
 
 ```lua
 local json = require('chatterino.json')

@@ -11,6 +11,7 @@
 #include <functional>
 #include <queue>
 #include <unordered_map>
+#include <vector>
 
 namespace chatterino {
 
@@ -31,6 +32,7 @@ struct EmoteName;
 
 struct KickChannelInfo;
 struct KickPrivateChannelInfo;
+struct KickPrivateSubscriberBadgeInfo;
 
 class KickChannel : public Channel, public ChannelChatters
 {
@@ -92,6 +94,7 @@ public:
 
     std::shared_ptr<const EmoteMap> seventvEmotes() const;
     EmotePtr seventvEmote(const EmoteName &name) const;
+    EmotePtr subscriberBadgeForMonths(uint64_t months) const;
 
     void addSeventvEmote(const seventv::eventapi::EmoteAddDispatch &dispatch);
 
@@ -163,6 +166,8 @@ private:
 
     void resolveChannelInfo();
     void setUserInfo(UserInit init);
+    void setSubscriberBadges(
+        const std::vector<KickPrivateSubscriberBadgeInfo> &badges);
 
     size_t maxBurstMessages() const;
     std::chrono::milliseconds minMessageOffset() const;
@@ -192,6 +197,12 @@ private:
     QString slug_;
 
     Atomic<std::shared_ptr<const EmoteMap>> seventvEmotes_;
+
+    struct SubscriberBadge {
+        uint64_t months = 0;
+        EmotePtr emote;
+    };
+    std::vector<SubscriberBadge> subscriberBadges_;
 
     QString seventvUserID_;
     QString seventvEmoteSetID_;

@@ -48,6 +48,7 @@ private:
     void addShortcuts() override;
     void addLayout();
     void onAccountSelected();
+    void updateTopMostTitlebarButton();
     void updateBulkSelectionTitlebarButton();
     void addMenuBar();
 
@@ -56,6 +57,7 @@ private:
     SplitNotebook *notebook_;
     SvgButton *bulkClearTitlebarButton_ = nullptr;
     SvgButton *bulkDeleteTitlebarButton_ = nullptr;
+    SvgButton *topMostTitlebarButton_ = nullptr;
     AccountTitlebarButton *accountTitlebarButton_ = nullptr;
     std::shared_ptr<UpdateDialog> updateDialogHandle_;
     SvgButton *updateTitlebarButton_ = nullptr;

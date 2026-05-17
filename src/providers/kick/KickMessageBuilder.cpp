@@ -346,7 +346,21 @@ void appendKickBadges(KickMessageBuilder &builder, BoostJsonArray badges)
     for (auto badgeObj : badges)
     {
         auto ty = badgeObj["type"].toStringView();
-        auto [emote, flag] = KickBadges::lookup(ty);
+        auto [emote, flag] = [&] {
+            if (ty == "subscriber")
+            {
+                auto subscriberBadge =
+                    builder.channel()->subscriberBadgeForMonths(
+                        badgeObj["count"].toUint64());
+                if (subscriberBadge)
+                {
+                    return std::pair{subscriberBadge,
+                                     MessageElementFlag::BadgeSubscription};
+                }
+            }
+
+            return KickBadges::lookup(ty);
+        }();
         if (!emote)
         {
             continue;

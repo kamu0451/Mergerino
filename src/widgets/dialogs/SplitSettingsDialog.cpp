@@ -40,11 +40,14 @@ int indicatorModeIndex(PlatformIndicatorMode mode)
 {
     switch (mode)
     {
-        case PlatformIndicatorMode::Badge:
-            return 1;
-        case PlatformIndicatorMode::Both:
-            return 2;
         case PlatformIndicatorMode::LineColor:
+            return 1;
+        case PlatformIndicatorMode::Badge:
+            return 2;
+        case PlatformIndicatorMode::Both:
+            return 3;
+        case PlatformIndicatorMode::None:
+            return 0;
         default:
             return 0;
     }
@@ -55,10 +58,13 @@ PlatformIndicatorMode indicatorModeFromIndex(int index)
     switch (index)
     {
         case 1:
-            return PlatformIndicatorMode::Badge;
+            return PlatformIndicatorMode::LineColor;
         case 2:
+            return PlatformIndicatorMode::Badge;
+        case 3:
             return PlatformIndicatorMode::Both;
         case 0:
+            return PlatformIndicatorMode::None;
         default:
             return PlatformIndicatorMode::LineColor;
     }
@@ -348,11 +354,12 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
     auto *appearanceLayout = new QFormLayout(appearanceGroup);
 
     this->ui_.indicatorMode = new QComboBox();
+    this->ui_.indicatorMode->addItem("None");
     this->ui_.indicatorMode->addItem("Highlights");
     this->ui_.indicatorMode->addItem("Logos");
     this->ui_.indicatorMode->addItem("Both");
     const auto platformStyleTooltip =
-        QStringLiteral("Show platform color, logo, or both.");
+        QStringLiteral("Show no platform indicator, platform color, logo, or both.");
     appearanceLayout->addRow(
         createLabelWithInfo("Platform style", platformStyleTooltip, this),
         this->ui_.indicatorMode);

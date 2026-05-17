@@ -8,6 +8,7 @@
 #include "common/Common.hpp"
 #include "common/QLogging.hpp"
 #include "common/WindowDescriptors.hpp"
+#include "controllers/filters/FilterRecord.hpp"
 #include "debug/AssertInGuiThread.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Settings.hpp"
@@ -28,10 +29,108 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
+#include <QStringList>
 
 #include <algorithm>
+#include <optional>
 
 namespace chatterino {
+namespace {
+
+QStringList normalizedFilterIds(const QList<QUuid> &ids)
+{
+    QStringList out;
+    out.reserve(ids.size());
+    for (const auto &id : ids)
+    {
+        out.append(id.toString(QUuid::WithoutBraces));
+    }
+    out.sort(Qt::CaseInsensitive);
+    return out;
+}
+
+std::optional<QUuid> findAlertsFilterId()
+{
+    static const auto filterText = QStringLiteral(
+        "flags.sub_message || flags.elevated_message || flags.cheer_message");
+
+    const auto filters = getSettings()->filterRecords.readOnly();
+    for (const auto &filter : *filters)
+    {
+        if (filter && filter->getFilter() == filterText)
+        {
+            return filter->getId();
+        }
+    }
+
+    return std::nullopt;
+}
+
+QJsonObject encodeChannelSignature(IndirectChannel channel)
+{
+    QJsonObject obj;
+    WindowManager::encodeChannel(std::move(channel), obj);
+    return obj;
+}
+
+bool splitMatchesChannelAndFilters(Split *split,
+                                   const QJsonObject &channelSignature,
+                                   const QList<QUuid> &filterIds)
+{
+    if (!split)
+    {
+        return false;
+    }
+
+    return encodeChannelSignature(split->getIndirectChannel()) ==
+               channelSignature &&
+           normalizedFilterIds(split->getFilters()) ==
+               normalizedFilterIds(filterIds);
+}
+
+Split *findRestoredActivityOwner(SplitContainer *container, Split *candidate,
+                                 const QUuid &alertFilterId)
+{
+    if (!container || !candidate || candidate->isActivityPane())
+    {
+        return nullptr;
+    }
+
+    auto candidateFilters = candidate->getFilters();
+    if (!candidateFilters.contains(alertFilterId))
+    {
+        return nullptr;
+    }
+
+    auto ownerFilters = candidateFilters;
+    ownerFilters.removeAll(alertFilterId);
+
+    const auto channel = candidate->getChannel();
+    if (!channel || channel->isEmpty())
+    {
+        return nullptr;
+    }
+
+    const auto channelSignature = encodeChannelSignature(
+        candidate->getIndirectChannel());
+    for (auto *split : container->getSplits())
+    {
+        if (split == candidate || split->isActivityPane())
+        {
+            continue;
+        }
+
+        if (splitMatchesChannelAndFilters(split, channelSignature,
+                                          ownerFilters))
+        {
+            return split;
+        }
+    }
+
+    return nullptr;
+}
+
+}  // namespace
 
 SplitContainer::SplitContainer(Notebook *parent)
     : BaseWidget(parent)
@@ -891,6 +990,7 @@ void SplitContainer::applyFromDescriptor(const NodeDescriptor &rootNode)
     assert(this->baseNode_->type_ == Node::Type::EmptyRoot);
 
     this->splitsNeedingActivityFilterNormalization_.clear();
+    this->splitsNeedingActivityPaneMigration_.clear();
     this->disableLayouting_ = true;
     this->applyFromDescriptorRecursively(rootNode, this->baseNode_.get());
     this->disableLayouting_ = false;
@@ -966,6 +1066,7 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
         result.filters_ = currentNode->split_->getFilters();
         result.spellCheckOverride =
             currentNode->split_->checkSpellingOverride();
+        result.activityPane_ = currentNode->split_->isActivityPane();
         result.inputEnabled_ = currentNode->split_->inputEnabled();
         result.filterActivity_ = currentNode->split_->filterActivity();
         result.filterActivityExplicit_ =
@@ -1019,7 +1120,13 @@ void SplitContainer::applyFromDescriptorRecursively(
         split->setModerationMode(splitNode.moderationMode_);
         split->setFilters(splitNode.filters_);
         split->setCheckSpellingOverride(splitNode.spellCheckOverride);
-        split->setInputEnabled(splitNode.inputEnabled_);
+        split->setInputEnabled(splitNode.activityPane_.value_or(false)
+                                   ? false
+                                   : splitNode.inputEnabled_);
+        if (!splitNode.activityPane_)
+        {
+            this->splitsNeedingActivityPaneMigration_.push_back(split);
+        }
         const bool hasExplicitFilterActivity =
             splitNode.filterActivityExplicit_.has_value();
         if (splitNode.filterActivity_)
@@ -1088,7 +1195,13 @@ void SplitContainer::applyFromDescriptorRecursively(
                 split->setChannel(WindowManager::decodeChannel(splitNode));
                 split->setModerationMode(splitNode.moderationMode_);
                 split->setCheckSpellingOverride(splitNode.spellCheckOverride);
-                split->setInputEnabled(splitNode.inputEnabled_);
+                split->setInputEnabled(splitNode.activityPane_.value_or(false)
+                                           ? false
+                                           : splitNode.inputEnabled_);
+                if (!splitNode.activityPane_)
+                {
+                    this->splitsNeedingActivityPaneMigration_.push_back(split);
+                }
                 const bool hasExplicitFilterActivity =
                     splitNode.filterActivityExplicit_.has_value();
                 if (splitNode.filterActivity_)
@@ -1157,6 +1270,28 @@ void SplitContainer::applyFromDescriptorRecursively(
 
 void SplitContainer::normalizeRestoredActivityFiltering()
 {
+    if (const auto alertFilterId = findAlertsFilterId())
+    {
+        for (auto *split : this->splitsNeedingActivityPaneMigration_)
+        {
+            auto *owner =
+                findRestoredActivityOwner(this, split, *alertFilterId);
+            if (!owner)
+            {
+                continue;
+            }
+
+            split->setInputEnabled(false);
+            split->setFilterActivity(false);
+            split->setSlowerChatEnabled(false);
+            split->setPlatformIndicatorMode(
+                getSettings()->mergedPlatformIndicatorMode.getEnum());
+            owner->setFilterActivity(true);
+        }
+    }
+
+    this->splitsNeedingActivityPaneMigration_.clear();
+
     for (auto *split : this->splitsNeedingActivityFilterNormalization_)
     {
         if (!split || split->isActivityPane())

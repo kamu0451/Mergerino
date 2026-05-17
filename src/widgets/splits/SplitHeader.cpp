@@ -909,27 +909,36 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
 
         if (!browserUrls.empty())
         {
-            auto *streamMenu = new QMenu(
-                hasLiveStreams ? "Open stream in browser"
-                               : "Open channel in browser",
-                menu.get());
-            for (const auto &browserUrl : browserUrls)
+            const auto actionText = hasLiveStreams ? "Open stream in browser"
+                                                   : "Open channel in browser";
+            if (browserUrls.size() == 1)
             {
-                streamMenu->addAction(browserUrl.platformName, this,
-                                      [url = browserUrl.url] {
-                                          openUrlInBrowser(url);
-                                      });
+                const auto url = browserUrls.front().url;
+                menu->addAction(actionText, this, [url] {
+                    openUrlInBrowser(url);
+                });
             }
+            else
+            {
+                auto *streamMenu = new QMenu(actionText, menu.get());
+                for (const auto &browserUrl : browserUrls)
+                {
+                    streamMenu->addAction(browserUrl.platformName, this,
+                                          [url = browserUrl.url] {
+                                              openUrlInBrowser(url);
+                                          });
+                }
 
-            auto *streamAction = menu->addMenu(streamMenu);
-            const auto defaultUrl = browserUrls.front().url;
-            auto openDefault = [defaultUrl] {
-                openUrlInBrowser(defaultUrl);
-            };
-            QObject::connect(streamAction, &QAction::triggered, this,
-                             openDefault);
-            menu->installEventFilter(new ClickableSubmenuActionFilter(
-                menu.get(), streamAction, std::move(openDefault)));
+                auto *streamAction = menu->addMenu(streamMenu);
+                const auto defaultUrl = browserUrls.front().url;
+                auto openDefault = [defaultUrl] {
+                    openUrlInBrowser(defaultUrl);
+                };
+                QObject::connect(streamAction, &QAction::triggered, this,
+                                 openDefault);
+                menu->installEventFilter(new ClickableSubmenuActionFilter(
+                    menu.get(), streamAction, std::move(openDefault)));
+            }
             menu->addSeparator();
         }
     }

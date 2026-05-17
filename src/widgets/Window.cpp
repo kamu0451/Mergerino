@@ -94,6 +94,22 @@ QString providerIconPath(ProviderId provider)
     }
 }
 
+SvgButton::Src topMostDisabledSource()
+{
+    return {
+        .dark = ":/buttons/pinDisabled-darkMode.svg",
+        .light = ":/buttons/pinDisabled-lightMode.svg",
+    };
+}
+
+SvgButton::Src topMostEnabledSource()
+{
+    return {
+        .dark = ":/buttons/pinEnabled.svg",
+        .light = ":/buttons/pinEnabled.svg",
+    };
+}
+
 QString providerAccountLabel(ProviderId provider)
 {
     if (provider == ProviderId::Kick)
@@ -418,6 +434,20 @@ void Window::addCustomTitlebarButtons()
         });
     this->updateBulkSelectionTitlebarButton();
 
+    this->topMostTitlebarButton_ = this->addTitleBarButton<SvgButton>(
+        [this] {
+            this->setTopMost(!this->isTopMost());
+        },
+        topMostDisabledSource(), this);
+    this->topMostTitlebarButton_->setPadding({0, 0});
+    this->topMostTitlebarButton_->setContentSize(QSize{14, 14});
+    this->topMostTitlebarButton_->setToolTip("Pin Application");
+    QObject::connect(this, &BaseWindow::topMostChanged, this,
+                     [this](bool) {
+                         this->updateTopMostTitlebarButton();
+                     });
+    this->updateTopMostTitlebarButton();
+
     this->accountTitlebarButton_ = this->addTitleBarButton<AccountTitlebarButton>(
         openAccountPopup,
         getApp()->getWindows()->activeAccountProvider());
@@ -456,6 +486,17 @@ void Window::addCustomTitlebarButtons()
                                            this->updateTitlebarUpdateButton();
                                        });
     this->updateTitlebarUpdateButton();
+}
+
+void Window::updateTopMostTitlebarButton()
+{
+    if (!this->topMostTitlebarButton_)
+    {
+        return;
+    }
+
+    this->topMostTitlebarButton_->setSource(
+        this->isTopMost() ? topMostEnabledSource() : topMostDisabledSource());
 }
 
 void Window::showUpdateDialog()

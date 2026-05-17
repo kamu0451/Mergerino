@@ -563,9 +563,9 @@ void GeneralPage::initLayout(GeneralPageView &layout)
     SettingWidget::dropdown("Merged platform indicator",
                             s.mergedPlatformIndicatorMode)
         ->setTooltip("Use platform-colored merged rows, platform logo badges, "
-                     "or both together.")
+                     "both together, or neither.")
         ->addKeywords({"merged", "platform", "badge", "line color",
-                       "logo", "both", "twitch", "kick", "youtube"})
+                       "logo", "both", "none", "twitch", "kick", "youtube"})
         ->addTo(layout);
 
     SettingWidget::dropdown("Platform event/alert highlight style",

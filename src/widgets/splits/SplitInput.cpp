@@ -133,14 +133,15 @@ bool containsPlatform(const std::vector<MessagePlatform> &platforms,
     return std::ranges::find(platforms, platform) != platforms.end();
 }
 
-std::vector<MessagePlatform> orderedPlatformIntersection(
+std::vector<MessagePlatform> platformSelectionIntersection(
     const std::vector<MessagePlatform> &availablePlatforms,
     const std::vector<MessagePlatform> &selectedPlatforms)
 {
     std::vector<MessagePlatform> result;
-    for (const auto platform : availablePlatforms)
+    for (const auto platform : selectedPlatforms)
     {
-        if (containsPlatform(selectedPlatforms, platform))
+        if (containsPlatform(availablePlatforms, platform) &&
+            !containsPlatform(result, platform))
         {
             result.push_back(platform);
         }
@@ -789,6 +790,19 @@ std::vector<MessagePlatform> SplitInput::availableSendPlatforms() const
     return platforms;
 }
 
+std::vector<MessagePlatform> SplitInput::cycleSendPlatforms(
+    const std::vector<MessagePlatform> &availablePlatforms) const
+{
+    if (this->enabledSendPlatforms_.empty())
+    {
+        return availablePlatforms;
+    }
+
+    const auto enabledPlatforms = platformSelectionIntersection(
+        availablePlatforms, this->enabledSendPlatforms_);
+    return enabledPlatforms.empty() ? availablePlatforms : enabledPlatforms;
+}
+
 std::optional<MessagePlatform> SplitInput::replySendPlatform() const
 {
     if (!this->replyTarget_)
@@ -826,25 +840,27 @@ std::vector<MessagePlatform> SplitInput::selectedSendPlatforms() const
         return {};
     }
 
+    const auto cyclePlatforms = this->cycleSendPlatforms(platforms);
+
     if (!this->customSelectedSendPlatforms_.empty())
     {
-        auto selectedPlatforms = orderedPlatformIntersection(
-            platforms, this->customSelectedSendPlatforms_);
+        auto selectedPlatforms = platformSelectionIntersection(
+            cyclePlatforms, this->customSelectedSendPlatforms_);
         if (!selectedPlatforms.empty())
         {
             return selectedPlatforms;
         }
     }
 
-    if (this->selectedSendAllPlatforms_ && platforms.size() > 1)
+    if (this->selectedSendAllPlatforms_ && cyclePlatforms.size() > 1)
     {
-        return platforms;
+        return cyclePlatforms;
     }
 
-    if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
-        platforms.end())
+    if (std::ranges::find(cyclePlatforms, this->selectedSendPlatform_) ==
+        cyclePlatforms.end())
     {
-        return {platforms.front()};
+        return {cyclePlatforms.front()};
     }
 
     return {this->selectedSendPlatform_};
@@ -912,6 +928,7 @@ void SplitInput::updatePlatformSelector(bool animate)
     }
 
     this->normalizeSelectedSendPlatforms(platforms);
+    const auto cyclePlatforms = this->cycleSendPlatforms(platforms);
 
     const auto selectedPlatforms = this->selectedSendPlatforms();
     if (selectedPlatforms.empty())
@@ -923,47 +940,50 @@ void SplitInput::updatePlatformSelector(bool animate)
     const bool replyLocked = this->replySendPlatform().has_value();
     const auto targetCount =
         replyLocked ? selectedPlatforms.size()
-                    : platforms.size() + (platforms.size() > 1 ? 1 : 0);
+                    : cyclePlatforms.size() +
+                          (cyclePlatforms.size() > 1 ? 1 : 0);
+    const bool canChoosePlatforms = !replyLocked && platforms.size() >= 3;
 
     this->updatePlatformButtonLayout(static_cast<int>(selectedPlatforms.size()));
     this->ui_.platformButton->show();
-    this->ui_.platformButton->setEnabled(!replyLocked && targetCount > 1);
+    this->ui_.platformButton->setEnabled(
+        !replyLocked && (canChoosePlatforms || targetCount > 1));
     this->ui_.platformButton->setPlatforms(selectedPlatforms,
                                            animate && targetCount > 1);
 
     auto tooltip =
         QString(replyLocked ? u"Replying on %1"_s : u"Sending to %1"_s)
             .arg(platformDisplayName(selectedPlatforms));
-    if (!replyLocked && targetCount > 1)
+    if (canChoosePlatforms)
     {
-        if (platforms.size() >= 3)
+        tooltip += u". Click to choose platforms"_s;
+        if (targetCount > 1)
         {
-            tooltip +=
-                u". Click to choose platforms. Press Ctrl+D to cycle targets"_s;
+            tooltip += u". Press Ctrl+D to cycle targets"_s;
+        }
+    }
+    else if (!replyLocked && targetCount > 1)
+    {
+        QString nextTarget;
+        if (this->selectedSendAllPlatforms_)
+        {
+            nextTarget = platformDisplayName(cyclePlatforms.front());
         }
         else
         {
-            QString nextTarget;
-            if (this->selectedSendAllPlatforms_)
+            auto it =
+                std::ranges::find(cyclePlatforms, this->selectedSendPlatform_);
+            if (it != cyclePlatforms.end() && ++it != cyclePlatforms.end())
             {
-                nextTarget = platformDisplayName(platforms.front());
+                nextTarget = platformDisplayName(*it);
             }
             else
             {
-                auto it =
-                    std::ranges::find(platforms, this->selectedSendPlatform_);
-                if (it != platforms.end() && ++it != platforms.end())
-                {
-                    nextTarget = platformDisplayName(*it);
-                }
-                else
-                {
-                    nextTarget = platformDisplayName(platforms);
-                }
+                nextTarget = platformDisplayName(cyclePlatforms);
             }
-            tooltip += QString(u". Click or press Ctrl+D to switch to %1"_s)
-                           .arg(nextTarget);
         }
+        tooltip += QString(u". Click or press Ctrl+D to switch to %1"_s)
+                       .arg(nextTarget);
     }
     this->ui_.platformButton->setToolTip(tooltip);
     this->updateEmotePopupChannel();
@@ -988,9 +1008,11 @@ void SplitInput::applyActiveAccountProviderDefault()
 
     const bool changed = this->selectedSendAllPlatforms_ ||
                          !this->customSelectedSendPlatforms_.empty() ||
+                         !this->enabledSendPlatforms_.empty() ||
                          this->selectedSendPlatform_ != selectedPlatform;
     this->selectedSendAllPlatforms_ = false;
     this->customSelectedSendPlatforms_.clear();
+    this->enabledSendPlatforms_.clear();
     this->selectedSendPlatform_ = selectedPlatform;
     this->updatePlatformSelector(changed);
 
@@ -1013,7 +1035,8 @@ std::optional<MessagePlatform> SplitInput::selectedSendPlatform() const
         return std::nullopt;
     }
 
-    const auto platforms = this->availableSendPlatforms();
+    const auto platforms =
+        this->cycleSendPlatforms(this->availableSendPlatforms());
     if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
         platforms.end())
     {
@@ -1074,7 +1097,10 @@ QString SplitInput::selectedSendAccountName() const
 
 void SplitInput::selectSendPlatform(MessagePlatform platform)
 {
-    if (!this->canSendToPlatform(platform))
+    const auto platforms =
+        this->cycleSendPlatforms(this->availableSendPlatforms());
+    if (!containsPlatform(platforms, platform) ||
+        !this->canSendToPlatform(platform))
     {
         return;
     }
@@ -1097,8 +1123,9 @@ void SplitInput::selectSendPlatform(MessagePlatform platform)
 
 void SplitInput::selectAllSendPlatforms()
 {
-    const auto availablePlatforms = this->availableSendPlatforms();
-    if (availablePlatforms.size() < 2)
+    const auto platforms =
+        this->cycleSendPlatforms(this->availableSendPlatforms());
+    if (platforms.size() < 2)
     {
         return;
     }
@@ -1111,7 +1138,7 @@ void SplitInput::selectAllSendPlatforms()
 
     this->selectedSendAllPlatforms_ = true;
     this->customSelectedSendPlatforms_.clear();
-    this->selectedSendPlatform_ = availablePlatforms.front();
+    this->selectedSendPlatform_ = platforms.front();
     this->updatePlatformSelector(true);
     this->sendPlatformChanged.invoke();
 }
@@ -1123,26 +1150,44 @@ void SplitInput::normalizeSelectedSendPlatforms(
     {
         this->selectedSendAllPlatforms_ = false;
         this->customSelectedSendPlatforms_.clear();
+        this->enabledSendPlatforms_.clear();
         return;
     }
 
+    if (!this->enabledSendPlatforms_.empty())
+    {
+        auto enabledPlatforms = platformSelectionIntersection(
+            availablePlatforms, this->enabledSendPlatforms_);
+        if (enabledPlatforms.empty() ||
+            enabledPlatforms.size() == availablePlatforms.size())
+        {
+            this->enabledSendPlatforms_.clear();
+        }
+        else
+        {
+            this->enabledSendPlatforms_ = std::move(enabledPlatforms);
+        }
+    }
+
+    const auto cyclePlatforms = this->cycleSendPlatforms(availablePlatforms);
+
     if (!this->customSelectedSendPlatforms_.empty())
     {
-        auto selectedPlatforms = orderedPlatformIntersection(
-            availablePlatforms, this->customSelectedSendPlatforms_);
+        auto selectedPlatforms = platformSelectionIntersection(
+            cyclePlatforms, this->customSelectedSendPlatforms_);
         if (selectedPlatforms.empty())
         {
             this->customSelectedSendPlatforms_.clear();
             this->selectedSendAllPlatforms_ = false;
-            this->selectedSendPlatform_ = availablePlatforms.front();
+            this->selectedSendPlatform_ = cyclePlatforms.front();
             return;
         }
 
-        if (selectedPlatforms.size() == availablePlatforms.size())
+        if (selectedPlatforms.size() == cyclePlatforms.size())
         {
             this->customSelectedSendPlatforms_.clear();
-            this->selectedSendAllPlatforms_ = availablePlatforms.size() > 1;
-            this->selectedSendPlatform_ = availablePlatforms.front();
+            this->selectedSendAllPlatforms_ = cyclePlatforms.size() > 1;
+            this->selectedSendPlatform_ = cyclePlatforms.front();
             return;
         }
 
@@ -1160,14 +1205,14 @@ void SplitInput::normalizeSelectedSendPlatforms(
         return;
     }
 
-    if (this->selectedSendAllPlatforms_ && availablePlatforms.size() < 2)
+    if (this->selectedSendAllPlatforms_ && cyclePlatforms.size() < 2)
     {
         this->selectedSendAllPlatforms_ = false;
     }
 
-    if (!containsPlatform(availablePlatforms, this->selectedSendPlatform_))
+    if (!containsPlatform(cyclePlatforms, this->selectedSendPlatform_))
     {
-        this->selectedSendPlatform_ = availablePlatforms.front();
+        this->selectedSendPlatform_ = cyclePlatforms.front();
     }
 }
 
@@ -1180,31 +1225,47 @@ void SplitInput::setSelectedSendPlatforms(
         return;
     }
 
+    const auto previousPlatforms = this->selectedSendPlatforms();
     auto selectedPlatforms =
-        orderedPlatformIntersection(availablePlatforms, platforms);
+        platformSelectionIntersection(availablePlatforms, platforms);
     if (selectedPlatforms.empty())
     {
         return;
     }
 
-    const auto previousPlatforms = this->selectedSendPlatforms();
+    if (previousPlatforms.size() == 1 && selectedPlatforms.size() > 1)
+    {
+        const auto previousPlatform = previousPlatforms.front();
+        auto it = std::ranges::find(selectedPlatforms, previousPlatform);
+        if (it != selectedPlatforms.end())
+        {
+            selectedPlatforms.erase(it);
+            selectedPlatforms.insert(selectedPlatforms.begin(),
+                                     previousPlatform);
+        }
+    }
+
     if (selectedPlatforms.size() == availablePlatforms.size())
     {
-        this->selectedSendAllPlatforms_ = availablePlatforms.size() > 1;
-        this->customSelectedSendPlatforms_.clear();
-        this->selectedSendPlatform_ = availablePlatforms.front();
-    }
-    else if (selectedPlatforms.size() == 1)
-    {
-        this->selectedSendAllPlatforms_ = false;
-        this->customSelectedSendPlatforms_.clear();
-        this->selectedSendPlatform_ = selectedPlatforms.front();
+        this->enabledSendPlatforms_.clear();
     }
     else
     {
+        this->enabledSendPlatforms_ = selectedPlatforms;
+    }
+
+    const auto cyclePlatforms = this->cycleSendPlatforms(availablePlatforms);
+    if (cyclePlatforms.size() == 1)
+    {
         this->selectedSendAllPlatforms_ = false;
-        this->customSelectedSendPlatforms_ = std::move(selectedPlatforms);
-        this->selectedSendPlatform_ = this->customSelectedSendPlatforms_.front();
+        this->customSelectedSendPlatforms_.clear();
+        this->selectedSendPlatform_ = cyclePlatforms.front();
+    }
+    else
+    {
+        this->selectedSendAllPlatforms_ = true;
+        this->customSelectedSendPlatforms_.clear();
+        this->selectedSendPlatform_ = cyclePlatforms.front();
     }
 
     const auto currentPlatforms = this->selectedSendPlatforms();
@@ -1226,13 +1287,14 @@ void SplitInput::showPlatformSelectionMenu()
     }
 
     QMenu menu(this);
+    const auto enabledPlatforms = this->cycleSendPlatforms(availablePlatforms);
     for (const auto platform : availablePlatforms)
     {
         auto *action = new QWidgetAction(&menu);
         auto *checkBox = new QCheckBox(platformDisplayName(platform), &menu);
         checkBox->setIcon(QIcon(platformIconPath(platform)));
         checkBox->setChecked(
-            containsPlatform(this->selectedSendPlatforms(), platform));
+            containsPlatform(enabledPlatforms, platform));
         checkBox->setFocusPolicy(Qt::NoFocus);
         action->setDefaultWidget(checkBox);
         menu.addAction(action);
@@ -1240,7 +1302,8 @@ void SplitInput::showPlatformSelectionMenu()
         QObject::connect(checkBox, &QCheckBox::toggled, this,
                          [this, checkBox, platform](bool checked) {
                              auto selectedPlatforms =
-                                 this->selectedSendPlatforms();
+                                 this->cycleSendPlatforms(
+                                     this->availableSendPlatforms());
                              if (checked)
                              {
                                  if (!containsPlatform(selectedPlatforms,
@@ -1273,7 +1336,8 @@ bool SplitInput::tryCycleSendPlatform()
 {
     this->updatePlatformSelector();
 
-    const auto platforms = this->availableSendPlatforms();
+    const auto platforms =
+        this->cycleSendPlatforms(this->availableSendPlatforms());
     const auto targetCount = platforms.size() + (platforms.size() > 1 ? 1 : 0);
     if (this->replySendPlatform().has_value() || targetCount < 2)
     {
@@ -1286,7 +1350,8 @@ bool SplitInput::tryCycleSendPlatform()
 
 void SplitInput::cycleSendPlatform()
 {
-    const auto platforms = this->availableSendPlatforms();
+    const auto platforms =
+        this->cycleSendPlatforms(this->availableSendPlatforms());
     const auto targetCount = platforms.size() + (platforms.size() > 1 ? 1 : 0);
     if (targetCount < 2)
     {
@@ -1300,7 +1365,7 @@ void SplitInput::cycleSendPlatform()
     }
     if (!this->customSelectedSendPlatforms_.empty())
     {
-        this->setSelectedSendPlatforms({platforms.front()});
+        this->selectSendPlatform(platforms.front());
         return;
     }
 

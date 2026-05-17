@@ -169,6 +169,14 @@ KickPrivateChatroomInfo::KickPrivateChatroomInfo(BoostJsonObject obj)
     }
 }
 
+KickPrivateSubscriberBadgeInfo::KickPrivateSubscriberBadgeInfo(
+    BoostJsonObject obj)
+    : months(obj["months"].toUint64())
+{
+    auto badgeImage = obj["badge_image"].toObject();
+    this->imageUrl = badgeImage["src"].toQString();
+}
+
 KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
     : channelID(obj["id"].toUint64())
     , followersCount(obj["followers_count"].toUint64())
@@ -176,6 +184,16 @@ KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
     , user(obj["user"].toObject())
     , chatroom(obj["chatroom"].toObject())
 {
+    auto badgeArray = obj["subscriber_badges"].toArray();
+    this->subscriberBadges.reserve(badgeArray.size());
+    for (auto badgeValue : badgeArray)
+    {
+        if (badgeValue.isObject())
+        {
+            this->subscriberBadges.emplace_back(badgeValue.toObject());
+        }
+    }
+
     auto livestream = obj["livestream"];
     if (!livestream.isObject())
     {

@@ -55,7 +55,7 @@ struct CompletionList {
     QStringList values;
 
     /**
-     * @lua@field hide_others boolean Whether other completions from Chatterino should be hidden/ignored.
+     * @lua@field hide_others boolean Whether other completions from Mergerino should be hidden/ignored.
      */
     bool hideOthers{};
 };
@@ -123,7 +123,7 @@ void c2_register_callback(ThisPluginState L, EventType evtType,
                           sol::protected_function callback);
 
 /**
- * Writes a message to the Chatterino log.
+ * Writes a message to the Mergerino log.
  *
  * @lua@param level c2.LogLevel The desired level.
  * @lua@param ... any Values to log. Should be convertible to a string with `tostring()`.
@@ -132,7 +132,7 @@ void c2_register_callback(ThisPluginState L, EventType evtType,
 void c2_log(ThisPluginState L, LogLevel lvl, sol::variadic_args args);
 
 /**
- * Calls callback around msec milliseconds later. Does not freeze Chatterino.
+ * Calls callback around msec milliseconds later. Does not freeze Mergerino.
  *
  * @lua@param callback fun() The callback that will be called.
  * @lua@param msec number How long to wait.

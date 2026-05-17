@@ -1579,7 +1579,8 @@ bool ChannelView::shouldQueueSlowChatMessages() const
 
 bool ChannelView::shouldAnimateMessageAnimations() const
 {
-    return this->split_ != nullptr && !this->isActivityPaneView() &&
+    return this->split_ != nullptr && this->context_ != Context::Search &&
+           !this->isActivityPaneView() &&
            this->split_->slowerChatMessageAnimations();
 }
 

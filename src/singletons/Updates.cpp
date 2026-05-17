@@ -158,19 +158,6 @@ bool Updates::isDowngradeOf(const QString &online, const QString &current)
 
 void Updates::deleteOldFiles()
 {
-    const auto updateArchivePath = combinePath(this->paths.miscDirectory,
-                                              "update.zip");
-    const auto installScriptPath = combinePath(this->paths.miscDirectory,
-                                              "install-update.ps1");
-    const bool hasUpdateArtifacts =
-        QFile::exists(updateArchivePath) || QFile::exists(installScriptPath);
-    if (hasUpdateArtifacts &&
-        this->settings_.currentVersion.getValue() != CHATTERINO_VERSION)
-    {
-        this->settings_.pendingPostUpdateVersion = CHATTERINO_VERSION;
-        std::ignore = this->settings_.requestSave();
-    }
-
     std::ignore = QtConcurrent::run([dir{this->paths.miscDirectory}] {
         {
             auto path = combinePath(dir, "Update.exe");

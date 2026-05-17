@@ -38,6 +38,13 @@ struct KickPrivateChatroomInfo {
     std::optional<std::chrono::minutes> followersModeDuration;
 };
 
+struct KickPrivateSubscriberBadgeInfo {
+    KickPrivateSubscriberBadgeInfo(BoostJsonObject obj);
+
+    uint64_t months = 0;
+    QString imageUrl;
+};
+
 struct KickPrivateChannelInfo {
     KickPrivateChannelInfo(BoostJsonObject obj);
 
@@ -52,6 +59,7 @@ struct KickPrivateChannelInfo {
     uint64_t viewerCount = 0;
     QDateTime startTime;
     QString thumbnailUrl;
+    std::vector<KickPrivateSubscriberBadgeInfo> subscriberBadges;
 };
 
 struct KickPrivateUserInChannelInfo {

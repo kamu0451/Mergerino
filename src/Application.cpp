@@ -434,25 +434,18 @@ void Application::initialize(Settings &settings, const Paths &paths)
             settings.pendingPostUpdateVersion.getValue();
         const bool pendingPostUpdateForThisVersion =
             !pendingPostUpdateVersion.isEmpty() &&
-            pendingPostUpdateVersion == CHATTERINO_VERSION;
-        const bool versionChanged =
-            !previousVersion.isEmpty() &&
+            pendingPostUpdateVersion == CHATTERINO_VERSION &&
             previousVersion != CHATTERINO_VERSION;
 
-        if (pendingPostUpdateForThisVersion || versionChanged)
+        if (pendingPostUpdateForThisVersion)
         {
             this->previousVersionForPatchNotes_ =
                 previousVersion.isEmpty() ? pendingPostUpdateVersion
                                           : previousVersion;
         }
-        if (versionChanged)
+        else if (!pendingPostUpdateVersion.isEmpty())
         {
-            settings.pendingPostUpdateVersion = CHATTERINO_VERSION;
-        }
-        else if (!pendingPostUpdateVersion.isEmpty() &&
-                 pendingPostUpdateVersion != CHATTERINO_VERSION &&
-                 previousVersion == CHATTERINO_VERSION)
-        {
+            // Only an explicit updater handoff should show post-update notes.
             settings.pendingPostUpdateVersion = "";
         }
         settings.currentVersion.setValue(CHATTERINO_VERSION);

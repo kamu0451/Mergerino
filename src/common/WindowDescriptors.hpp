@@ -49,6 +49,7 @@ struct SplitDescriptor {
 
     // Whether "Moderation Mode" (the sword icon) is enabled in this split or not
     bool moderationMode_{false};
+    std::optional<bool> activityPane_;
     bool inputEnabled_{true};
     std::optional<bool> filterActivity_;
     std::optional<bool> filterActivityExplicit_;

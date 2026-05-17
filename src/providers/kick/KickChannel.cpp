@@ -6,6 +6,7 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/emotes/EmoteController.hpp"
 #include "messages/Emote.hpp"
+#include "messages/Image.hpp"
 #include "messages/Link.hpp"
 #include "messages/Message.hpp"
 #include "messages/MessageBuilder.hpp"
@@ -247,6 +248,40 @@ EmotePtr KickChannel::seventvEmote(const EmoteName &name) const
         return it->second;
     }
     return nullptr;
+}
+
+EmotePtr KickChannel::subscriberBadgeForMonths(uint64_t months) const
+{
+    if (this->subscriberBadges_.empty())
+    {
+        return nullptr;
+    }
+
+    const SubscriberBadge *best = nullptr;
+    for (const auto &badge : this->subscriberBadges_)
+    {
+        if (!badge.emote)
+        {
+            continue;
+        }
+
+        if (months == 0)
+        {
+            return badge.emote;
+        }
+
+        if (!best || badge.months <= months)
+        {
+            best = &badge;
+        }
+
+        if (badge.months > months)
+        {
+            break;
+        }
+    }
+
+    return best ? best->emote : nullptr;
 }
 
 void KickChannel::addSeventvEmote(
@@ -633,6 +668,7 @@ void KickChannel::resolveChannelInfo()
             }
 
             self->slug_ = res->slug;
+            self->setSubscriberBadges(res->subscriberBadges);
             self->setUserInfo(UserInit{
                 .roomID = res->chatroom.roomID,
                 .userID = res->user.userID,
@@ -653,6 +689,45 @@ void KickChannel::resolveChannelInfo()
             });
             self->updateStreamData(*res);
         });
+}
+
+void KickChannel::setSubscriberBadges(
+    const std::vector<KickPrivateSubscriberBadgeInfo> &badges)
+{
+    this->subscriberBadges_.clear();
+    this->subscriberBadges_.reserve(badges.size());
+
+    for (const auto &badge : badges)
+    {
+        if (badge.imageUrl.isEmpty())
+        {
+            continue;
+        }
+
+        QString tooltip = u"Subscriber"_s;
+        if (badge.months > 0)
+        {
+            tooltip = u"Subscriber ("_s % QString::number(badge.months) %
+                      (badge.months == 1 ? u" month)"_s : u" months)"_s);
+        }
+
+        auto emote = std::make_shared<const Emote>(Emote{
+            .name = {u"Subscriber"_s},
+            .images = ImageSet(
+                Image::fromAutoscaledUrl({badge.imageUrl}, 18)),
+            .tooltip = Tooltip{std::move(tooltip)},
+            .homePage = {u"https://kick.com/" % this->slug_},
+        });
+        this->subscriberBadges_.push_back(SubscriberBadge{
+            .months = badge.months,
+            .emote = std::move(emote),
+        });
+    }
+
+    std::sort(this->subscriberBadges_.begin(), this->subscriberBadges_.end(),
+              [](const auto &lhs, const auto &rhs) {
+                  return lhs.months < rhs.months;
+              });
 }
 
 void KickChannel::setUserInfo(UserInit init)

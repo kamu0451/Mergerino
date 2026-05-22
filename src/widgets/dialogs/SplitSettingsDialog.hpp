@@ -20,6 +20,7 @@ class QWidget;
 
 namespace chatterino {
 
+enum class ActivityTimeDisplayMode : std::uint8_t;
 enum class PlatformIndicatorMode : std::uint8_t;
 
 class SplitSettingsDialog final : public BaseWindow
@@ -39,6 +40,8 @@ public:
 
     void setActivityMessageScale(qreal scale);
     qreal activityMessageScale() const;
+    void setActivityTimeDisplayMode(ActivityTimeDisplayMode mode);
+    ActivityTimeDisplayMode activityTimeDisplayMode() const;
     void setSlowerChatEnabled(bool enabled);
     bool slowerChatEnabled() const;
     void setSlowerChatMessagesPerSecond(qreal value);
@@ -66,6 +69,7 @@ private:
         QComboBox *indicatorMode{};
         QCheckBox *filterActivity{};
         QComboBox *activityScale{};
+        QComboBox *activityTimeDisplayMode{};
         QCheckBox *slowerChat{};
         QDoubleSpinBox *slowerChatRate{};
         QCheckBox *messageAnimations{};

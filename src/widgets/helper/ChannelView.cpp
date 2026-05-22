@@ -63,6 +63,7 @@
 #include <QClipboard>
 #include <QColor>
 #include <QDate>
+#include <QDateTime>
 #include <QDebug>
 #include <QDesktopServices>
 #include <QEasingCurve>
@@ -266,8 +267,126 @@ void addEmoteContextMenuItems(QMenu *menu, const Emote &emote, QStringView kind)
     }
 }
 
+bool hasPlatformBadgeElement(const Message &message)
+{
+    return std::ranges::any_of(message.elements, [](const auto &element) {
+        return element &&
+               element->getFlags().has(MessageElementFlag::PlatformBadge);
+    });
+}
+
+void insertActivityPlatformBadge(Message &message)
+{
+    const auto badge = MergedChannel::platformBadge(message.platform);
+    if (!badge)
+    {
+        return;
+    }
+
+    auto position = message.elements.begin();
+    while (position != message.elements.end())
+    {
+        const auto &element = *position;
+        if (!element ||
+            !element->getFlags().has(MessageElementFlag::RepliedMessage))
+        {
+            break;
+        }
+
+        ++position;
+    }
+
+    message.elements.insert(
+        position,
+        std::make_unique<BadgeElement>(badge, MessageElementFlag::PlatformBadge));
+}
+
+QDateTime activityMessageTime(const Message &message)
+{
+    if (message.serverReceivedTime.isValid())
+    {
+        return message.serverReceivedTime.toLocalTime();
+    }
+
+    auto now = QDateTime::currentDateTime();
+    auto fallback = QDateTime(now.date(), message.parseTime);
+    if (fallback > now.addSecs(60))
+    {
+        fallback = fallback.addDays(-1);
+    }
+    return fallback;
+}
+
+void insertActivityTimeElement(Message &message,
+                               ActivityTimeDisplayMode timeDisplayMode)
+{
+    auto position = message.elements.begin();
+    while (position != message.elements.end())
+    {
+        const auto &element = *position;
+        if (!element ||
+            (!element->getFlags().has(MessageElementFlag::RepliedMessage) &&
+             !element->getFlags().has(MessageElementFlag::PlatformBadge)))
+        {
+            break;
+        }
+
+        ++position;
+    }
+
+    message.elements.insert(
+        position, std::make_unique<ActivityTimeElement>(
+                      activityMessageTime(message), timeDisplayMode));
+}
+
+void replaceActivityTimeElement(Message &message,
+                                ActivityTimeDisplayMode timeDisplayMode)
+{
+    for (auto &element : message.elements)
+    {
+        if (dynamic_cast<const TimestampElement *>(element.get()) == nullptr &&
+            dynamic_cast<const ActivityTimeElement *>(element.get()) == nullptr)
+        {
+            continue;
+        }
+
+        element = std::make_unique<ActivityTimeElement>(
+            activityMessageTime(message), timeDisplayMode);
+        return;
+    }
+
+    insertActivityTimeElement(message, timeDisplayMode);
+}
+
+MessagePtr prepareActivityMessage(const MessagePtr &message,
+                                  ActivityTimeDisplayMode timeDisplayMode)
+{
+    if (!message)
+    {
+        return message;
+    }
+
+    if (timeDisplayMode == ActivityTimeDisplayMode::Timestamp &&
+        hasPlatformBadgeElement(*message))
+    {
+        return message;
+    }
+
+    auto copy = message->clone();
+    if (!hasPlatformBadgeElement(*copy))
+    {
+        insertActivityPlatformBadge(*copy);
+    }
+    if (timeDisplayMode == ActivityTimeDisplayMode::Relative)
+    {
+        replaceActivityTimeElement(*copy, timeDisplayMode);
+    }
+    return copy;
+}
+
 MessagePtr makeActivityCompactMessage(const MessagePtr &message,
-                                      const QString &text)
+                                      const QString &text,
+                                      ActivityTimeDisplayMode timeDisplayMode)
 {
     auto compact = message->clone();
     compact->messageText = text;
@@ -275,24 +394,9 @@ MessagePtr makeActivityCompactMessage(const MessagePtr &message,
     compact->flags.unset(MessageFlag::Collapsed);
     compact->elements.clear();
 
-    bool copiedTimestamp = false;
-    for (const auto &element : message->elements)
-    {
-        if (dynamic_cast<const TimestampElement *>(element.get()) == nullptr)
-        {
-            continue;
-        }
-
-        compact->elements.emplace_back(element->clone());
-        copiedTimestamp = true;
-        break;
-    }
-
-    if (!copiedTimestamp)
-    {
-        compact->elements.emplace_back(
-            std::make_unique<TimestampElement>(message->parseTime));
-    }
+    insertActivityPlatformBadge(*compact);
+    compact->elements.emplace_back(std::make_unique<ActivityTimeElement>(
+        activityMessageTime(*message), timeDisplayMode));
 
     compact->elements.emplace_back(std::make_unique<TextElement>(
         text, MessageElementFlag::Text, MessageColor::System));
@@ -580,6 +684,18 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
     QObject::connect(&this->slowChatTimer_, &QTimer::timeout, this, [this] {
         this->drainSlowChatQueue();
     });
+
+    this->activityTimeRefreshTimer_.setInterval(1000);
+    QObject::connect(&this->activityTimeRefreshTimer_, &QTimer::timeout, this,
+                     [this] {
+                         if (!this->shouldRefreshActivityTime())
+                         {
+                             this->activityTimeRefreshTimer_.stop();
+                             return;
+                         }
+
+                         this->invalidateBuffers();
+                     });
 
     this->messageLayoutShiftAnimationTimer_.setInterval(16);
     QObject::connect(&this->messageLayoutShiftAnimationTimer_, &QTimer::timeout,
@@ -902,6 +1018,13 @@ void ChannelView::refreshPlatformIndicatorMode()
     this->queueUpdate();
 }
 
+void ChannelView::refreshActivityTimeDisplayMode()
+{
+    this->messagesUpdated();
+    this->updateActivityTimeRefreshTimer();
+    this->queueUpdate();
+}
+
 void ChannelView::setIsOverlay(bool isOverlay)
 {
     this->isOverlay_ = isOverlay;
@@ -963,6 +1086,7 @@ void ChannelView::showEvent(QShowEvent * /*event*/)
     {
         this->performLayout(false, true);
     }
+    this->updateActivityTimeRefreshTimer();
 }
 
 void ChannelView::performLayout(bool causedByScrollbar, bool causedByShow)
@@ -1301,6 +1425,27 @@ bool ChannelView::isActivityPaneView() const
     return this->split_ != nullptr && this->split_->isActivityPane();
 }
 
+bool ChannelView::shouldRefreshActivityTime() const
+{
+    return this->isVisible() && this->isActivityPaneView() &&
+           this->resolvedActivityTimeDisplayMode() ==
+               ActivityTimeDisplayMode::Relative;
+}
+
+void ChannelView::updateActivityTimeRefreshTimer()
+{
+    if (this->shouldRefreshActivityTime())
+    {
+        if (!this->activityTimeRefreshTimer_.isActive())
+        {
+            this->activityTimeRefreshTimer_.start();
+        }
+        return;
+    }
+
+    this->activityTimeRefreshTimer_.stop();
+}
+
 const MessageColors &ChannelView::effectiveMessageColors() const
 {
     return this->isActivityPaneView() ? this->activityMessageColors_
@@ -1330,6 +1475,16 @@ PlatformIndicatorMode ChannelView::resolvedPlatformIndicatorMode() const
     }
 
     return getSettings()->mergedPlatformIndicatorMode.getEnum();
+}
+
+ActivityTimeDisplayMode ChannelView::resolvedActivityTimeDisplayMode() const
+{
+    if (this->split_ != nullptr)
+    {
+        return this->split_->activityTimeDisplayMode();
+    }
+
+    return ActivityTimeDisplayMode::Relative;
 }
 
 ScrollbarHighlight ChannelView::scrollbarHighlightForMessage(
@@ -1382,7 +1537,8 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
 
         pendingGiftRecipients = std::max(0, *recipientCount);
         return makeActivityCompactMessage(message,
-                                          compactActivityGiftBombText(*message));
+                                          compactActivityGiftBombText(*message),
+                                          this->resolvedActivityTimeDisplayMode());
     }
 
     if (isActivityGiftRecipientMessage(*message))
@@ -1403,7 +1559,8 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         return std::nullopt;
     }
 
-    return message;
+    return prepareActivityMessage(message,
+                                  this->resolvedActivityTimeDisplayMode());
 }
 
 bool ChannelView::tryMergeActivityGiftMessage(const MessagePtr &message)
@@ -1432,7 +1589,8 @@ bool ChannelView::tryMergeActivityGiftMessage(const MessagePtr &message)
     const auto mergedCount = previousSummary->count + currentSummary->count;
     auto mergedMessage = makeActivityCompactMessage(
         previousMessage,
-        activityMergedGiftSummaryText(*previousSummary, mergedCount));
+        activityMergedGiftSummaryText(*previousSummary, mergedCount),
+        this->resolvedActivityTimeDisplayMode());
     auto mergedLayout = std::make_shared<MessageLayout>(mergedMessage);
 
     if ((*lastLayout)->flags.has(MessageLayoutFlag::AlternateBackground))
@@ -2024,6 +2182,7 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
         this->scrollBar_->scrollToBottom();
     }
     this->queueUpdate();
+    this->updateActivityTimeRefreshTimer();
 
     // Notifications
     auto *twitchChannel =
@@ -4246,6 +4405,8 @@ void ChannelView::mouseDoubleClickEvent(QMouseEvent *event)
 
 void ChannelView::hideEvent(QHideEvent * /*event*/)
 {
+    this->activityTimeRefreshTimer_.stop();
+
     for (const auto &layout : this->messagesOnScreen_)
     {
         layout->deleteBuffer();

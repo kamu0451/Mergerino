@@ -70,6 +70,30 @@ PlatformIndicatorMode indicatorModeFromIndex(int index)
     }
 }
 
+int activityTimeDisplayModeIndex(ActivityTimeDisplayMode mode)
+{
+    switch (mode)
+    {
+        case ActivityTimeDisplayMode::Relative:
+            return 0;
+        case ActivityTimeDisplayMode::Timestamp:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+ActivityTimeDisplayMode activityTimeDisplayModeFromIndex(int index)
+{
+    switch (index)
+    {
+        case 1:
+            return ActivityTimeDisplayMode::Timestamp;
+        default:
+            return ActivityTimeDisplayMode::Relative;
+    }
+}
+
 struct ActivityScaleOption {
     const char *label;
     qreal scale;
@@ -421,6 +445,16 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
             createLabelWithInfo("Chat line size", activityScaleTooltip, this),
             this->ui_.activityScale);
 
+        this->ui_.activityTimeDisplayMode = new QComboBox();
+        this->ui_.activityTimeDisplayMode->addItem("Relative");
+        this->ui_.activityTimeDisplayMode->addItem("Timestamp");
+        const auto activityTimeDisplayTooltip = QStringLiteral(
+            "Show activity times as 37s ago/1m ago, or as normal timestamps.");
+        appearanceLayout->addRow(
+            createLabelWithInfo("Time display", activityTimeDisplayTooltip,
+                                this),
+            this->ui_.activityTimeDisplayMode);
+
         if (this->showTwitchBitsMinimum_)
         {
             this->ui_.twitchBitsMinimum = new QSpinBox();
@@ -538,6 +572,27 @@ qreal SplitSettingsDialog::activityMessageScale() const
     }
 
     return this->ui_.activityScale->currentData().toDouble();
+}
+
+void SplitSettingsDialog::setActivityTimeDisplayMode(
+    ActivityTimeDisplayMode mode)
+{
+    if (this->ui_.activityTimeDisplayMode)
+    {
+        this->ui_.activityTimeDisplayMode->setCurrentIndex(
+            activityTimeDisplayModeIndex(mode));
+    }
+}
+
+ActivityTimeDisplayMode SplitSettingsDialog::activityTimeDisplayMode() const
+{
+    if (this->ui_.activityTimeDisplayMode == nullptr)
+    {
+        return ActivityTimeDisplayMode::Relative;
+    }
+
+    return activityTimeDisplayModeFromIndex(
+        this->ui_.activityTimeDisplayMode->currentIndex());
 }
 
 void SplitSettingsDialog::setSlowerChatEnabled(bool enabled)
@@ -675,6 +730,10 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     if (this->ui_.activityScale)
     {
         this->ui_.activityScale->setFont(uiFont);
+    }
+    if (this->ui_.activityTimeDisplayMode)
+    {
+        this->ui_.activityTimeDisplayMode->setFont(uiFont);
     }
     if (this->ui_.slowerChat)
     {

@@ -79,6 +79,7 @@ public:
     ChannelPtr twitchChannel() const;
     ChannelPtr kickChannel() const;
     YouTubeLiveChat *youtubeLiveChat() const;
+    static EmotePtr platformBadge(MessagePlatform platform);
 
     pajlada::Signals::NoArgSignal streamStatusChanged;
 
@@ -115,7 +116,6 @@ private:
 
     static bool shouldMirrorSourceMessage(const MessagePtr &message);
     static QColor platformAccent(MessagePlatform platform);
-    static EmotePtr platformBadge(MessagePlatform platform);
     static QString messageKey(const MessagePtr &message,
                               MessagePlatform platform);
 

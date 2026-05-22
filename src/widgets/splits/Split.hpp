@@ -30,6 +30,7 @@ class SplitOverlay;
 class SelectChannelDialog;
 class OverlayWindow;
 class SplitSettingsDialog;
+enum class ActivityTimeDisplayMode : std::uint8_t;
 enum class PlatformIndicatorMode : std::uint8_t;
 
 // Each ChatWidget consists of three sub-elements that handle their own part of
@@ -65,6 +66,7 @@ public:
     bool hasLinkedActivityPane();
     QString activityPaneTitle() const;
     qreal activityMessageScale() const;
+    ActivityTimeDisplayMode activityTimeDisplayMode() const;
     bool slowerChatEnabled() const;
     qreal slowerChatMessagesPerSecond() const;
     bool slowerChatMessageAnimations() const;
@@ -86,6 +88,7 @@ public:
     bool getModerationMode() const;
     void setInputEnabled(bool enabled);
     void setActivityMessageScale(qreal value);
+    void setActivityTimeDisplayMode(ActivityTimeDisplayMode value);
     void setSlowerChatEnabled(bool value);
     void setSlowerChatMessagesPerSecond(qreal value);
     void setSlowerChatMessageAnimations(bool value);
@@ -195,6 +198,7 @@ private:
     bool filterActivity_{false};
     bool filterActivityExplicit_{false};
     qreal activityMessageScale_{0.9};
+    ActivityTimeDisplayMode activityTimeDisplayMode_;
     bool slowerChatEnabled_{false};
     qreal slowerChatMessagesPerSecond_{5.0};
     bool slowerChatMessageAnimations_{true};

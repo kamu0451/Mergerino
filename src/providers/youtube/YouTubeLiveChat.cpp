@@ -147,6 +147,7 @@ QJsonObject makeYoutubeClientContext(const QString &clientVersion)
 
 const QString YOUTUBE_BOOTSTRAP_URL = "https://www.youtube.com/embed/jNQXAC9IVRw";
 const QColor YOUTUBE_PLATFORM_ACCENT(255, 48, 64, 60);
+const QColor YOUTUBE_MEMBER_NAME_COLOR(43, 166, 64);
 constexpr int YOUTUBE_RECONNECT_DELAY_MS = 3000;
 constexpr int YOUTUBE_BLOCKED_RETRY_DELAY_MS = 60000;
 constexpr int YOUTUBE_SESSION_REFRESH_MS = 10 * 60 * 1000;
@@ -229,9 +230,9 @@ QString normalizeYouTubeImageUrl(QString url)
     return url;
 }
 
-QString youtubeEmojiImageUrl(const QJsonObject &emoji)
+QString youtubeBestThumbnailUrl(const QJsonObject &image)
 {
-    const auto thumbnails = emoji["image"].toObject()["thumbnails"].toArray();
+    const auto thumbnails = image["thumbnails"].toArray();
 
     QString bestUrl;
     int bestWidth = -1;
@@ -253,6 +254,11 @@ QString youtubeEmojiImageUrl(const QJsonObject &emoji)
     }
 
     return bestUrl;
+}
+
+QString youtubeEmojiImageUrl(const QJsonObject &emoji)
+{
+    return youtubeBestThumbnailUrl(emoji["image"].toObject());
 }
 
 EmotePtr makeYouTubeEmojiEmote(const QJsonObject &emoji)
@@ -289,6 +295,203 @@ EmotePtr makeYouTubeEmojiEmote(const QJsonObject &emoji)
         .tooltip = {std::move(tooltip)},
         .id = {std::move(id)},
     });
+}
+
+QString youtubeAccessibilityLabel(const QJsonObject &object)
+{
+    return object["accessibility"]
+        .toObject()["accessibilityData"]
+        .toObject()["label"]
+        .toString()
+        .trimmed();
+}
+
+QString youtubeAuthorBadgeTooltip(const QJsonObject &badgeRenderer)
+{
+    auto tooltip = badgeRenderer["tooltip"].toString().trimmed();
+    if (!tooltip.isEmpty())
+    {
+        return tooltip;
+    }
+
+    tooltip = youtubeAccessibilityLabel(badgeRenderer);
+    if (!tooltip.isEmpty())
+    {
+        return tooltip;
+    }
+
+    return youtubeAccessibilityLabel(
+        badgeRenderer["customThumbnail"].toObject());
+}
+
+bool isYouTubeMembershipBadgeRenderer(const QJsonObject &badgeRenderer)
+{
+    if (badgeRenderer.isEmpty())
+    {
+        return false;
+    }
+
+    if (!badgeRenderer["customThumbnail"]
+             .toObject()["thumbnails"]
+             .toArray()
+             .isEmpty())
+    {
+        return true;
+    }
+
+    const auto iconType =
+        badgeRenderer["icon"].toObject()["iconType"].toString();
+    if (iconType.contains(QStringLiteral("sponsor"), Qt::CaseInsensitive) ||
+        iconType.contains(QStringLiteral("member"), Qt::CaseInsensitive))
+    {
+        return true;
+    }
+
+    const auto tooltip = youtubeAuthorBadgeTooltip(badgeRenderer);
+    return tooltip.contains(QStringLiteral("sponsor"), Qt::CaseInsensitive) ||
+           tooltip.contains(QStringLiteral("member"), Qt::CaseInsensitive) ||
+           tooltip.contains(QStringLiteral("membership"),
+                            Qt::CaseInsensitive);
+}
+
+EmotePtr makeYouTubeMembershipBadgeEmote(const QJsonObject &badgeRenderer)
+{
+    // YouTube sends channel membership badges as custom thumbnails.
+    // Built-in badges like moderator/owner are icon-based instead.
+    const auto imageUrl =
+        youtubeBestThumbnailUrl(badgeRenderer["customThumbnail"].toObject());
+    if (imageUrl.isEmpty())
+    {
+        return nullptr;
+    }
+
+    auto tooltip = youtubeAuthorBadgeTooltip(badgeRenderer);
+    if (tooltip.isEmpty())
+    {
+        tooltip = QStringLiteral("YouTube Member");
+    }
+
+    return std::make_shared<const Emote>(Emote{
+        .name = {tooltip},
+        .images = ImageSet(Image::fromAutoscaledUrl({imageUrl}, 18)),
+        .tooltip = {tooltip},
+        .id = {imageUrl},
+    });
+}
+
+void appendYouTubeMembershipBadges(MessageBuilder &builder,
+                                   const QJsonObject &authorSource)
+{
+    for (const auto &badgeValue : authorSource["authorBadges"].toArray())
+    {
+        const auto badgeRenderer =
+            badgeValue.toObject()["liveChatAuthorBadgeRenderer"].toObject();
+        if (badgeRenderer.isEmpty())
+        {
+            continue;
+        }
+
+        if (const auto badge = makeYouTubeMembershipBadgeEmote(badgeRenderer))
+        {
+            builder.emplace<BadgeElement>(
+                badge, MessageElementFlag::BadgeSubscription);
+        }
+    }
+}
+
+bool youtubeAuthorHasMembershipBadge(const QJsonObject &authorSource)
+{
+    for (const auto &badgeValue : authorSource["authorBadges"].toArray())
+    {
+        const auto badgeRenderer =
+            badgeValue.toObject()["liveChatAuthorBadgeRenderer"].toObject();
+        if (isYouTubeMembershipBadgeRenderer(badgeRenderer))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::optional<QColor> parseYouTubeColor(const QJsonValue &value)
+{
+    bool ok = false;
+    qulonglong rawColor = 0;
+
+    if (value.isString())
+    {
+        const auto text = value.toString().trimmed();
+        if (text.isEmpty())
+        {
+            return std::nullopt;
+        }
+
+        const auto namedColor = QColor::fromString(text);
+        if (namedColor.isValid())
+        {
+            return namedColor;
+        }
+
+        rawColor = text.toULongLong(&ok, 0);
+    }
+    else if (value.isDouble())
+    {
+        const auto integer = value.toInteger(-1);
+        if (integer < 0)
+        {
+            return std::nullopt;
+        }
+        rawColor = static_cast<qulonglong>(integer);
+        ok = true;
+    }
+
+    if (!ok || rawColor > 0xFFFFFFFFULL)
+    {
+        return std::nullopt;
+    }
+
+    const auto rgb = static_cast<QRgb>(rawColor);
+    if (rawColor <= 0x00FFFFFFULL)
+    {
+        return QColor::fromRgb(rgb);
+    }
+
+    return QColor::fromRgba(rgb);
+}
+
+std::optional<QColor> youtubeAuthorNameColor(const QJsonObject &authorSource)
+{
+    if (auto color = parseYouTubeColor(authorSource["authorNameTextColor"]))
+    {
+        return color;
+    }
+
+    if (auto color = parseYouTubeColor(authorSource["authorTextColor"]))
+    {
+        return color;
+    }
+
+    const auto authorName = authorSource["authorName"].toObject();
+    if (auto color = parseYouTubeColor(authorName["textColor"]))
+    {
+        return color;
+    }
+
+    for (const auto &runValue : authorName["runs"].toArray())
+    {
+        if (auto color = parseYouTubeColor(runValue.toObject()["textColor"]))
+        {
+            return color;
+        }
+    }
+
+    if (youtubeAuthorHasMembershipBadge(authorSource))
+    {
+        return YOUTUBE_MEMBER_NAME_COLOR;
+    }
+
+    return std::nullopt;
 }
 
 bool appendYouTubeText(MessageBuilder &builder, const QJsonValue &value)
@@ -3459,6 +3662,7 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     QString text;
     std::vector<QJsonValue> renderedTextParts;
     QJsonValue authorNameValue = renderer["authorName"];
+    QJsonObject authorSource = renderer;
     QString authorId = renderer["authorExternalChannelId"].toString();
     MessageFlags flags;
     bool compactMembershipGift = false;
@@ -3528,6 +3732,7 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
             renderer["header"].toObject()["liveChatSponsorshipsHeaderRenderer"]
                 .toObject();
         authorNameValue = header["authorName"];
+        authorSource = header;
         const auto primaryText = header["primaryText"];
         text = parseText(primaryText);
         renderedTextParts.emplace_back(primaryText);
@@ -3556,6 +3761,7 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     {
         text = compactMembershipGiftText(text, author);
     }
+    const auto authorColor = youtubeAuthorNameColor(authorSource);
 
     MessageBuilder builder;
     builder->flags = flags;
@@ -3570,11 +3776,18 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     builder->searchText = author + ": " + text;
     builder->serverReceivedTime =
         parseTimestampUsec(renderer["timestampUsec"].toString());
+    if (authorColor)
+    {
+        builder->usernameColor = *authorColor;
+    }
     builder.emplace<TimestampElement>(
         builder->serverReceivedTime.toLocalTime().time());
+    appendYouTubeMembershipBadges(builder, authorSource);
     builder
         .emplace<TextElement>(author + ":", MessageElementFlag::Username,
-                              MessageColor::Text, FontStyle::ChatMediumBold)
+                              authorColor ? MessageColor(*authorColor)
+                                          : MessageColor::Text,
+                              FontStyle::ChatMediumBold)
         ->setLink({Link::UserInfo, author});
     if (compactMembershipGift || renderedTextParts.empty())
     {

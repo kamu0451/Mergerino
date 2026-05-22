@@ -31,6 +31,7 @@
 #include <unordered_set>
 
 namespace chatterino {
+enum class ActivityTimeDisplayMode : std::uint8_t;
 enum class HighlightState;
 enum class PlatformIndicatorMode : std::uint8_t;
 
@@ -218,6 +219,7 @@ public:
 
     void updateColorTheme();
     void refreshPlatformIndicatorMode();
+    void refreshActivityTimeDisplayMode();
 
     /// @brief Adjusts the colors this view uses
     ///
@@ -341,10 +343,13 @@ private:
     void updateID();
     void refreshMessageColors();
     bool isActivityPaneView() const;
+    bool shouldRefreshActivityTime() const;
+    void updateActivityTimeRefreshTimer();
     const MessageColors &effectiveMessageColors() const;
     float activityMessageScale() const;
     float activityMessageImageScale() const;
     PlatformIndicatorMode resolvedPlatformIndicatorMode() const;
+    ActivityTimeDisplayMode resolvedActivityTimeDisplayMode() const;
     ScrollbarHighlight scrollbarHighlightForMessage(
         const MessagePtr &message) const;
     std::optional<MessagePtr> transformActivityMessage(
@@ -411,6 +416,7 @@ private:
     bool pausable_ = false;
     QTimer pauseTimer_;
     QTimer slowChatTimer_;
+    QTimer activityTimeRefreshTimer_;
     QTimer messageLayoutShiftAnimationTimer_;
     QTimer messageArrivalAnimationTimer_;
     std::unordered_map<PauseReason, std::optional<SteadyClock::time_point>>

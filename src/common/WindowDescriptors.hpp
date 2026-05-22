@@ -35,6 +35,7 @@ namespace chatterino {
 
 // from widgets/Window.hpp
 enum class WindowType;
+enum class ActivityTimeDisplayMode : std::uint8_t;
 enum class PlatformIndicatorMode : std::uint8_t;
 
 struct SplitDescriptor {
@@ -54,6 +55,7 @@ struct SplitDescriptor {
     std::optional<bool> filterActivity_;
     std::optional<bool> filterActivityExplicit_;
     qreal activityMessageScale_{0.9};
+    std::optional<ActivityTimeDisplayMode> activityTimeDisplayMode_;
     bool slowerChatEnabled_{false};
     qreal slowerChatMessagesPerSecond_{5.0};
     bool slowerChatMessageAnimations_{true};

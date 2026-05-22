@@ -512,6 +512,9 @@ void WindowManager::initialize()
             this->mainWindow_->hide();
         }
     }
+
+    this->migrateActivityPanePlatformStyles();
+    this->migrateActivityPaneTimeDisplayModes();
 }
 
 void WindowManager::save()
@@ -746,6 +749,10 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
                        node->getSplit()->filterActivityExplicit());
             obj.insert("activityMessageScale",
                        node->getSplit()->activityMessageScale());
+            obj.insert("activityTimeDisplayMode",
+                       qmagicenum::enumNameString(
+                           node->getSplit()->activityTimeDisplayMode())
+                           .toLower());
             obj.insert("slowerChatEnabled",
                        node->getSplit()->slowerChatEnabled());
             obj.insert("slowerChatMessagesPerSecond",
@@ -979,6 +986,80 @@ void WindowManager::incGeneration()
 WindowLayout WindowManager::loadWindowLayoutFromFile() const
 {
     return WindowLayout::loadFromFile(this->windowLayoutFilePath);
+}
+
+void WindowManager::migrateActivityPanePlatformStyles()
+{
+    auto *settings = getSettings();
+    if (settings->activityPanePlatformStyleHighlightsMigrationDone)
+    {
+        return;
+    }
+
+    bool changed = false;
+    for (auto *window : this->windows_)
+    {
+        window->getNotebook().forEachSplit([&changed](Split *split) {
+            if (!split || !split->isActivityPane())
+            {
+                return;
+            }
+
+            if (split->platformIndicatorMode() ==
+                PlatformIndicatorMode::LineColor)
+            {
+                return;
+            }
+
+            split->setPlatformIndicatorMode(PlatformIndicatorMode::LineColor);
+            changed = true;
+        });
+    }
+
+    settings->activityPanePlatformStyleHighlightsMigrationDone.setValue(true);
+    settings->requestSave();
+
+    if (changed)
+    {
+        this->save();
+    }
+}
+
+void WindowManager::migrateActivityPaneTimeDisplayModes()
+{
+    auto *settings = getSettings();
+    if (settings->activityPaneRelativeTimeMigrationDone)
+    {
+        return;
+    }
+
+    bool changed = false;
+    for (auto *window : this->windows_)
+    {
+        window->getNotebook().forEachSplit([&changed](Split *split) {
+            if (!split || !split->isActivityPane())
+            {
+                return;
+            }
+
+            if (split->activityTimeDisplayMode() ==
+                ActivityTimeDisplayMode::Relative)
+            {
+                return;
+            }
+
+            split->setActivityTimeDisplayMode(ActivityTimeDisplayMode::Relative);
+            changed = true;
+        });
+    }
+
+    settings->activityPaneRelativeTimeMigrationDone.setValue(true);
+    settings->requestSave();
+
+    if (changed)
+    {
+        this->save();
+    }
 }
 
 void WindowManager::applyWindowLayout(const WindowLayout &layout)

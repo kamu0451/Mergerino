@@ -91,7 +91,11 @@ bool isTwitchSpecialChannelType(Channel::Type type)
 
 PlatformIndicatorMode defaultPlatformIndicatorMode(bool isActivityPane)
 {
-    (void)isActivityPane;
+    if (isActivityPane)
+    {
+        return PlatformIndicatorMode::LineColor;
+    }
+
     return getSettings()->mergedPlatformIndicatorMode.getEnum();
 }
 
@@ -365,6 +369,8 @@ void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
     {
         const auto activityPlatformIndicatorMode =
             activitySplit->platformIndicatorMode();
+        const auto activityTimeDisplayMode =
+            activitySplit->activityTimeDisplayMode();
         const auto activityMessageScale = activitySplit->activityMessageScale();
         const auto tiktokActivityMinimumDiamonds =
             activitySplit->tiktokActivityMinimumDiamonds();
@@ -378,6 +384,7 @@ void syncLinkedActivityPane(Split *ownerSplit, Split *activitySplit,
         activitySplit->setFilters(ownerSplit->getFilters());
         activitySplit->setInputEnabled(false);
         activitySplit->setActivityMessageScale(activityMessageScale);
+        activitySplit->setActivityTimeDisplayMode(activityTimeDisplayMode);
         activitySplit->setTwitchActivityMinimumBits(
             twitchActivityMinimumBits);
         activitySplit->setKickActivityMinimumKicks(kickActivityMinimumKicks);
@@ -426,6 +433,7 @@ Qt::KeyboardModifiers Split::modifierStatus = Qt::NoModifier;
 Split::Split(QWidget *parent)
     : BaseWidget(parent)
     , channel_(Channel::getEmpty())
+    , activityTimeDisplayMode_(ActivityTimeDisplayMode::Relative)
     , platformIndicatorMode_(defaultPlatformIndicatorMode(false))
     , vbox_(new QVBoxLayout(this))
     , header_(new SplitHeader(this))
@@ -1162,6 +1170,11 @@ qreal Split::activityMessageScale() const
     return this->activityMessageScale_;
 }
 
+ActivityTimeDisplayMode Split::activityTimeDisplayMode() const
+{
+    return this->activityTimeDisplayMode_;
+}
+
 bool Split::slowerChatEnabled() const
 {
     return this->slowerChatEnabled_;
@@ -1253,6 +1266,18 @@ void Split::setActivityMessageScale(qreal value)
 
     this->activityMessageScale_ = clamped;
     this->view_->invalidateBuffers();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setActivityTimeDisplayMode(ActivityTimeDisplayMode value)
+{
+    if (this->activityTimeDisplayMode_ == value)
+    {
+        return;
+    }
+
+    this->activityTimeDisplayMode_ = value;
+    this->view_->refreshActivityTimeDisplayMode();
     getApp()->getWindows()->queueSave();
 }
 
@@ -1677,8 +1702,9 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
     const bool showSpecialPage =
         empty ||
         (activityOwnerSplit &&
-         isTwitchSpecialChannelType(
-             activityOwnerSplit->getIndirectChannel().getType()));
+         (activityOwnerSplit->getChannel()->isEmpty() ||
+          isTwitchSpecialChannelType(
+              activityOwnerSplit->getIndirectChannel().getType())));
 
     auto *dialog = new SelectChannelDialog(showSpecialPage, this);
     if (!empty)
@@ -1773,6 +1799,7 @@ void Split::showSettingsDialog()
     dialog->setPlatformIndicatorMode(this->platformIndicatorMode());
     dialog->setFilterActivity(this->filterActivity());
     dialog->setActivityMessageScale(this->activityMessageScale());
+    dialog->setActivityTimeDisplayMode(this->activityTimeDisplayMode());
     dialog->setSlowerChatEnabled(this->slowerChatEnabled());
     dialog->setSlowerChatMessagesPerSecond(
         this->slowerChatMessagesPerSecond());
@@ -1794,6 +1821,8 @@ void Split::showSettingsDialog()
             if (this->isActivityPane())
             {
                 this->setActivityMessageScale(dialog->activityMessageScale());
+                this->setActivityTimeDisplayMode(
+                    dialog->activityTimeDisplayMode());
                 this->setTwitchActivityMinimumBits(
                     dialog->twitchActivityMinimumBits());
                 this->setKickActivityMinimumKicks(
@@ -2061,6 +2090,7 @@ void Split::popup()
     split->setFilterActivity(this->filterActivity(),
                              this->filterActivityExplicit());
     split->setActivityMessageScale(this->activityMessageScale());
+    split->setActivityTimeDisplayMode(this->activityTimeDisplayMode());
     split->setSlowerChatEnabled(this->slowerChatEnabled());
     split->setSlowerChatMessagesPerSecond(
         this->slowerChatMessagesPerSecond());

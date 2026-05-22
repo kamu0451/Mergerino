@@ -124,6 +124,11 @@ enum class PlatformIndicatorMode : std::uint8_t {
     None,
 };
 
+enum class ActivityTimeDisplayMode : std::uint8_t {
+    Relative,
+    Timestamp,
+};
+
 constexpr std::optional<std::string_view> qmagicenumDisplayName(
     PlatformIndicatorMode value) noexcept
 {
@@ -807,6 +812,10 @@ public:
         "/misc/pendingPostUpdateVersion",
         "",
     };
+    BoolSetting activityPanePlatformStyleHighlightsMigrationDone = {
+        "/misc/activityPanePlatformStyleHighlightsMigrationDone",
+        false,
+    };
     IntSetting overlayKnowledgeLevel = {"/misc/overlayKnowledgeLevel", 0};
 
     BoolSetting loadTwitchMessageHistoryOnConnect = {
@@ -955,6 +964,11 @@ public:
     std::optional<QString> matchNickname(const QString &username);
     void mute(const QString &channelName);
     void unmute(const QString &channelName);
+
+    BoolSetting activityPaneRelativeTimeMigrationDone = {
+        "/misc/activityPaneRelativeTimeMigrationDone",
+        false,
+    };
 
 private:
     void updateModerationActions();

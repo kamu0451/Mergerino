@@ -177,6 +177,8 @@ private:
 
     // Apply a window layout for this window manager.
     void applyWindowLayout(const WindowLayout &layout);
+    void migrateActivityPanePlatformStyles();
+    void migrateActivityPaneTimeDisplayModes();
 
     // Contains the full path to the window layout file, e.g. /home/pajlada/.local/share/Chatterino/Settings/window-layout.json
     const QString windowLayoutFilePath;

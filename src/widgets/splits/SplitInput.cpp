@@ -5,6 +5,7 @@
 #include "widgets/splits/SplitInput.hpp"
 
 #include "Application.hpp"
+#include "common/ChannelChatters.hpp"
 #include "common/enums/MessageOverflow.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
@@ -2009,10 +2010,10 @@ void SplitInput::onCursorPositionChanged()
 void SplitInput::updateCompletionPopup()
 {
     auto *channel = this->split_->getChannel().get();
-    auto *tc = dynamic_cast<TwitchChannel *>(channel);
     bool showEmoteCompletion = getSettings()->emoteCompletionWithColon;
     bool showUsernameCompletion =
-        tc != nullptr && getSettings()->showUsernameCompletionMenu;
+        dynamic_cast<ChannelChatters *>(channel) != nullptr &&
+        getSettings()->showUsernameCompletionMenu;
     if (!showEmoteCompletion && !showUsernameCompletion)
     {
         this->hideCompletionPopup();

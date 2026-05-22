@@ -13,6 +13,10 @@
 #include "util/LayoutCreator.hpp"
 #include "widgets/splits/InputCompletionItem.hpp"
 
+#include <QApplication>
+#include <QMouseEvent>
+#include <QWidget>
+
 namespace chatterino {
 
 InputCompletionPopup::InputCompletionPopup(QWidget *parent)
@@ -109,16 +113,34 @@ void InputCompletionPopup::setInputAction(ActionCallback callback)
 
 bool InputCompletionPopup::eventFilter(QObject *watched, QEvent *event)
 {
+    if (this->isVisible() && event->type() == QEvent::MouseButtonPress)
+    {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton)
+        {
+            auto *widget = qobject_cast<QWidget *>(watched);
+            if (widget == nullptr ||
+                (widget != this && !this->isAncestorOf(widget)))
+            {
+                this->hide();
+            }
+
+            return false;
+        }
+    }
+
     return this->ui_.listView->eventFilter(watched, event);
 }
 
 void InputCompletionPopup::showEvent(QShowEvent * /*event*/)
 {
+    QApplication::instance()->installEventFilter(this);
     this->redrawTimer_.start();
 }
 
 void InputCompletionPopup::hideEvent(QHideEvent * /*event*/)
 {
+    QApplication::instance()->removeEventFilter(this);
     this->redrawTimer_.stop();
     this->endCompletion();
 }

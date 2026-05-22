@@ -124,6 +124,14 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
     }
     descriptor.activityMessageScale_ =
         root.value("activityMessageScale").toDouble(0.9);
+    if (auto activityTimeDisplayMode = root["activityTimeDisplayMode"];
+        activityTimeDisplayMode.isString())
+    {
+        descriptor.activityTimeDisplayMode_ =
+            qmagicenum::enumCast<ActivityTimeDisplayMode>(
+                activityTimeDisplayMode.toString(),
+                qmagicenum::CASE_INSENSITIVE);
+    }
     descriptor.slowerChatEnabled_ =
         root.value("slowerChatEnabled").toBool(false);
     descriptor.slowerChatMessagesPerSecond_ =

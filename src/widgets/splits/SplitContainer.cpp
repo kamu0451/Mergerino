@@ -262,6 +262,7 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
     clone->setFilterActivity(source->filterActivity(),
                              source->filterActivityExplicit());
     clone->setActivityMessageScale(source->activityMessageScale());
+    clone->setActivityTimeDisplayMode(source->activityTimeDisplayMode());
     clone->setSlowerChatEnabled(source->slowerChatEnabled());
     clone->setSlowerChatMessagesPerSecond(
         source->slowerChatMessagesPerSecond());
@@ -1073,6 +1074,8 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
             currentNode->split_->filterActivityExplicit();
         result.activityMessageScale_ =
             currentNode->split_->activityMessageScale();
+        result.activityTimeDisplayMode_ =
+            currentNode->split_->activityTimeDisplayMode();
         result.slowerChatEnabled_ = currentNode->split_->slowerChatEnabled();
         result.slowerChatMessagesPerSecond_ =
             currentNode->split_->slowerChatMessagesPerSecond();
@@ -1140,6 +1143,9 @@ void SplitContainer::applyFromDescriptorRecursively(
             this->splitsNeedingActivityFilterNormalization_.push_back(split);
         }
         split->setActivityMessageScale(splitNode.activityMessageScale_);
+        split->setActivityTimeDisplayMode(
+            splitNode.activityTimeDisplayMode_.value_or(
+                ActivityTimeDisplayMode::Relative));
         split->setSlowerChatEnabled(splitNode.slowerChatEnabled_);
         split->setSlowerChatMessagesPerSecond(
             splitNode.slowerChatMessagesPerSecond_);
@@ -1156,8 +1162,7 @@ void SplitContainer::applyFromDescriptorRecursively(
         }
         else if (split->isActivityPane())
         {
-            split->setPlatformIndicatorMode(
-                getSettings()->mergedPlatformIndicatorMode.getEnum());
+            split->setPlatformIndicatorMode(PlatformIndicatorMode::LineColor);
         }
 
         this->insertSplit(split);
@@ -1216,6 +1221,9 @@ void SplitContainer::applyFromDescriptorRecursively(
                         split);
                 }
                 split->setActivityMessageScale(splitNode.activityMessageScale_);
+                split->setActivityTimeDisplayMode(
+                    splitNode.activityTimeDisplayMode_.value_or(
+                        ActivityTimeDisplayMode::Relative));
                 split->setSlowerChatEnabled(splitNode.slowerChatEnabled_);
                 split->setSlowerChatMessagesPerSecond(
                     splitNode.slowerChatMessagesPerSecond_);
@@ -1235,7 +1243,7 @@ void SplitContainer::applyFromDescriptorRecursively(
                 else if (split->isActivityPane())
                 {
                     split->setPlatformIndicatorMode(
-                        getSettings()->mergedPlatformIndicatorMode.getEnum());
+                        PlatformIndicatorMode::LineColor);
                 }
 
                 auto node = std::make_shared<Node>();
@@ -1284,8 +1292,7 @@ void SplitContainer::normalizeRestoredActivityFiltering()
             split->setInputEnabled(false);
             split->setFilterActivity(false);
             split->setSlowerChatEnabled(false);
-            split->setPlatformIndicatorMode(
-                getSettings()->mergedPlatformIndicatorMode.getEnum());
+            split->setPlatformIndicatorMode(PlatformIndicatorMode::LineColor);
             owner->setFilterActivity(true);
         }
     }

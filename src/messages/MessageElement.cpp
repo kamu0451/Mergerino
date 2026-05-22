@@ -21,9 +21,11 @@
 #include "util/DebugCount.hpp"
 #include "util/Variant.hpp"
 
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QLocale>
 
 #include <memory>
 
@@ -1356,6 +1358,108 @@ QJsonObject TimestampElement::toJson() const
 std::string_view TimestampElement::type() const
 {
     return std::remove_pointer_t<decltype(this)>::TYPE;
+}
+
+// ACTIVITY TIME
+ActivityTimeElement::ActivityTimeElement(QDateTime time,
+                                         ActivityTimeDisplayMode mode)
+    : MessageElement(MessageElementFlag::Timestamp)
+    , time_(time.isValid() ? time : QDateTime::currentDateTime())
+    , mode_(mode)
+{
+    this->updateTextElement();
+}
+
+void ActivityTimeElement::addToContainer(MessageLayoutContainer &container,
+                                         const MessageLayoutContext &ctx)
+{
+    if (ctx.flags.hasAny(this->getFlags()))
+    {
+        this->updateTextElement();
+        this->element_->addToContainer(container, ctx);
+    }
+}
+
+MessageElement *ActivityTimeElement::setLink(const Link &link)
+{
+    MessageElement::setLink(link);
+    if (this->element_)
+    {
+        this->element_->setLink(link);
+    }
+    return this;
+}
+
+std::unique_ptr<MessageElement> ActivityTimeElement::clone() const
+{
+    auto el = std::make_unique<ActivityTimeElement>(this->time_, this->mode_);
+    el->cloneFrom(*this);
+    return el;
+}
+
+QJsonObject ActivityTimeElement::toJson() const
+{
+    auto base = MessageElement::toJson();
+    base["type"_L1] = u"ActivityTimeElement"_s;
+    base["time"_L1] = this->time_.toString(Qt::ISODate);
+    base["mode"_L1] =
+        this->mode_ == ActivityTimeDisplayMode::Relative ? u"relative"_s
+                                                         : u"timestamp"_s;
+    base["text"_L1] = this->text_;
+
+    return base;
+}
+
+std::string_view ActivityTimeElement::type() const
+{
+    return std::remove_pointer_t<decltype(this)>::TYPE;
+}
+
+QString ActivityTimeElement::formatTime() const
+{
+    if (this->mode_ == ActivityTimeDisplayMode::Timestamp)
+    {
+        static QLocale locale("en_US");
+        return locale.toString(this->time_.time(), getSettings()->timestampFormat);
+    }
+
+    const auto now = this->time_.timeSpec() == Qt::UTC
+                         ? QDateTime::currentDateTimeUtc()
+                         : QDateTime::currentDateTime();
+    const qint64 seconds = std::max<qint64>(0, this->time_.secsTo(now));
+    if (seconds < 60)
+    {
+        return QString::number(seconds) + "s";
+    }
+    if (seconds < 3600)
+    {
+        return QString::number(seconds / 60) + "m";
+    }
+    if (seconds < 86400)
+    {
+        return QString::number(seconds / 3600) + "h";
+    }
+    return QString::number(seconds / 86400) + "d";
+}
+
+void ActivityTimeElement::updateTextElement()
+{
+    const auto text = this->formatTime();
+    const auto color = getTheme()->messages.textColors.system;
+    if (this->element_ && this->text_ == text && this->color_ == color)
+    {
+        this->element_->setLink(this->getLink());
+        this->element_->setTooltip(this->getTooltip());
+        return;
+    }
+
+    this->text_ = text;
+    this->color_ = color;
+    this->element_ = std::make_unique<TextElement>(
+        text, MessageElementFlag::Timestamp, MessageColor(color),
+        FontStyle::TimestampMedium);
+    this->element_->setLink(this->getLink());
+    this->element_->setTooltip(this->getTooltip());
 }
 
 // TWITCH MODERATION

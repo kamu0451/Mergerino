@@ -1,5 +1,12 @@
 Patch Notes
 
+22/05/2026
+- Added membership badges and colours to YouTube chat
+- Added relative time display option to activity tabs
+- Fixed a bug causing logos to not appear on activity tab
+- Fixed a bug causing mention menu to not appear
+- Fixed a bug causing split tab settings not showing
+
 17/05/2026
 - Added custom channel subscriber badges to Kick
 - Added 'None' to platform style options

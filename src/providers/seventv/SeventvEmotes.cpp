@@ -386,7 +386,8 @@ void SeventvEmotes::loadChannelEmotes(
             }
             else
             {
-                // TODO: Auto retry in case of a timeout, with a delay
+                // Transient failures (e.g. timeouts) are already retried with a
+                // delay in SeventvAPI before reaching this point.
                 auto errorString = result.formatError();
                 qCWarning(chatterinoSeventv)
                     << "Error fetching 7TV emotes for channel" << channelId
@@ -488,7 +489,8 @@ void SeventvEmotes::loadKickChannelEmotes(
             }
             else
             {
-                // TODO: Auto retry in case of a timeout, with a delay
+                // Transient failures (e.g. timeouts) are already retried with a
+                // delay in SeventvAPI before reaching this point.
                 auto errorString = result.formatError();
                 qCWarning(chatterinoSeventv)
                     << "Error fetching 7TV emotes for channel" << userID

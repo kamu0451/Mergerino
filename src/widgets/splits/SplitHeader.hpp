@@ -77,6 +77,7 @@ private:
 
     Split *const split_{};
     QString tooltipText_{};
+    QString viewerCountTooltipText_{};
     TooltipWidget *const tooltipWidget_{};
     bool isLive_{false};
     QString thumbnail_;
@@ -88,6 +89,9 @@ private:
     // ui
     DrawnButton *dropdownButton_{};
     Label *titleLabel_{};
+    BaseWidget *viewerCountContainer_{};
+    BaseWidget *viewerCountIcon_{};
+    Label *viewerCountLabel_{};
 
     LabelButton *modeButton_{};
     Label *queuedSlowChatCountLabel_{};

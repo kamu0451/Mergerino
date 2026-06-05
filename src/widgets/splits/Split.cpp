@@ -1122,6 +1122,21 @@ bool Split::filterActivityExplicit() const
     return this->filterActivityExplicit_;
 }
 
+bool Split::viewerCountEnabled() const
+{
+    if (getSettings()->headerViewerCount.getValue())
+    {
+        return true;
+    }
+
+    return this->viewerCountEnabledOverride_.value_or(false);
+}
+
+std::optional<bool> Split::viewerCountEnabledOverride() const
+{
+    return this->viewerCountEnabledOverride_;
+}
+
 QString Split::activityPaneTitle() const
 {
     if (auto *merged = dynamic_cast<MergedChannel *>(this->getChannel().get()))
@@ -1364,6 +1379,23 @@ void Split::setTikTokActivityMinimumDiamonds(uint32_t value)
 
     this->tiktokActivityMinimumDiamonds_ = value;
     this->view_->refreshMessages();
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setViewerCountEnabled(bool value)
+{
+    this->setViewerCountEnabledOverride(value);
+}
+
+void Split::setViewerCountEnabledOverride(std::optional<bool> value)
+{
+    if (this->viewerCountEnabledOverride_ == value)
+    {
+        return;
+    }
+
+    this->viewerCountEnabledOverride_ = value;
+    this->header_->updateChannelText();
     getApp()->getWindows()->queueSave();
 }
 
@@ -1734,6 +1766,9 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
     dialog->setSlowerChatMessageAnimations(
         activityOwnerSplit ? activityOwnerSplit->slowerChatMessageAnimations()
                            : this->slowerChatMessageAnimations());
+    dialog->setViewerCountEnabled(activityOwnerSplit
+                                      ? activityOwnerSplit->viewerCountEnabled()
+                                      : this->viewerCountEnabled());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(dialogTitle);
     dialog->show();
@@ -1762,6 +1797,8 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
                 dialog->slowerChatMessagesPerSecond());
             activityOwnerSplit->setSlowerChatMessageAnimations(
                 dialog->slowerChatMessageAnimations());
+            activityOwnerSplit->setViewerCountEnabled(
+                dialog->viewerCountEnabled());
         }
 
         callback(acceptedChanges);
@@ -1805,6 +1842,7 @@ void Split::showSettingsDialog()
         this->slowerChatMessagesPerSecond());
     dialog->setSlowerChatMessageAnimations(
         this->slowerChatMessageAnimations());
+    dialog->setViewerCountEnabled(this->viewerCountEnabled());
     dialog->setTwitchActivityMinimumBits(this->twitchActivityMinimumBits());
     dialog->setKickActivityMinimumKicks(this->kickActivityMinimumKicks());
     dialog->setTikTokActivityMinimumDiamonds(
@@ -1847,6 +1885,7 @@ void Split::showSettingsDialog()
                     dialog->slowerChatMessagesPerSecond());
                 this->setSlowerChatMessageAnimations(
                     dialog->slowerChatMessageAnimations());
+                this->setViewerCountEnabled(dialog->viewerCountEnabled());
             }
         }
     });
@@ -2096,6 +2135,7 @@ void Split::popup()
         this->slowerChatMessagesPerSecond());
     split->setSlowerChatMessageAnimations(
         this->slowerChatMessageAnimations());
+    split->setViewerCountEnabledOverride(this->viewerCountEnabledOverride());
     split->setTwitchActivityMinimumBits(this->twitchActivityMinimumBits());
     split->setKickActivityMinimumKicks(this->kickActivityMinimumKicks());
     split->setTikTokActivityMinimumDiamonds(

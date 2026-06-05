@@ -192,6 +192,11 @@ QString importedPlatformIndicatorMode(const ImportOptions &options)
         .toLower();
 }
 
+QJsonObject importedAccounts(const QJsonObject &root)
+{
+    return root.value("accounts").toObject();
+}
+
 QString twitchChannelNameFromSplitData(const QJsonObject &data)
 {
     auto channelName = data.value("channel").toString().trimmed();
@@ -368,6 +373,7 @@ ExpectedStr<void> patchImportedSettingsFile(const QString &path,
     }
 
     auto root = document->object();
+    root.insert("accounts", importedAccounts(root));
     if (options.startupPromptAcknowledged.has_value())
     {
         setNestedValue(root, {"behaviour", "startupPromptAcknowledged"},

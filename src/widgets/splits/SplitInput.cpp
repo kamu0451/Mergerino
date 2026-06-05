@@ -426,6 +426,10 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
         this->ui_.textEdit->setCompleter(completer);
         this->inputHighlighter->setChannel(this->split_->getChannel());
         this->updatePlatformSelector();
+        this->updateEmotePopupChannel();
+    });
+    this->signalHolder_.managedConnect(this->sendPlatformChanged, [this] {
+        this->updateEmotePopupChannel();
     });
 
     getSettings()->enableSpellChecking.connect(
@@ -928,6 +932,10 @@ void SplitInput::updatePlatformSelector(bool animate)
         return;
     }
 
+    const auto previousSelectedPlatforms =
+        this->emotePopup_ ? this->selectedSendPlatforms()
+                          : std::vector<MessagePlatform>{};
+
     this->normalizeSelectedSendPlatforms(platforms);
     const auto cyclePlatforms = this->cycleSendPlatforms(platforms);
 
@@ -987,7 +995,11 @@ void SplitInput::updatePlatformSelector(bool animate)
                        .arg(nextTarget);
     }
     this->ui_.platformButton->setToolTip(tooltip);
-    this->updateEmotePopupChannel();
+
+    if (this->emotePopup_ && previousSelectedPlatforms != selectedPlatforms)
+    {
+        this->updateEmotePopupChannel();
+    }
 }
 
 void SplitInput::applyActiveAccountProviderDefault()

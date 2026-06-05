@@ -29,6 +29,7 @@ namespace {
 constexpr int REFRESH_WITH_ACTIVE_MS = 15 * 1000;
 constexpr int REFRESH_WHEN_IDLE_MS = 60 * 1000;
 constexpr int REFRESH_WAIT_FOR_ROOM_ID_MS = 2 * 1000;
+constexpr int REFRESH_AFTER_LOCAL_CHANGE_MS = 2 * 1000;
 
 QColor withAlpha(QColor color, int alpha)
 {
@@ -246,13 +247,35 @@ void TwitchPollsAndPredictionsBar::setChannel(const ChannelPtr &channel)
     this->pendingPoll_.reset();
     this->pendingPrediction_.reset();
     this->refreshTimer_.stop();
+    this->channelSignalHolder_.clear();
     this->twitchChannel_ = resolveTwitchChannel(channel);
     this->clearItems();
 
-    if (!this->twitchChannel_.expired())
+    if (auto twitch = this->twitchChannel_.lock())
     {
+        this->channelSignalHolder_.managedConnect(
+            twitch->streamStatusChanged, [this] {
+                this->refreshNow();
+            });
         this->scheduleRefresh(250);
     }
+}
+
+void TwitchPollsAndPredictionsBar::refreshNow()
+{
+    auto twitch = this->twitchChannel_.lock();
+    if (!twitch)
+    {
+        return;
+    }
+
+    this->scheduleRefresh(0);
+    QTimer::singleShot(REFRESH_AFTER_LOCAL_CHANGE_MS, this, [this, twitch] {
+        if (this->twitchChannel_.lock() == twitch)
+        {
+            this->scheduleRefresh(0);
+        }
+    });
 }
 
 QSize TwitchPollsAndPredictionsBar::sizeHint() const

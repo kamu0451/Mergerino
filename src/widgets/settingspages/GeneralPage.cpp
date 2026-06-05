@@ -104,8 +104,9 @@ void importChatterinoFromSettings(QWidget *parent)
     const auto reply = QMessageBox::question(
         parent, "Import from Chatterino",
         "Import Chatterino settings, ping alerts, commands, user data, and "
-        "channel tabs into Mergerino?\n\nMergerino will restart. Current "
-        "Mergerino settings files will be backed up before they are replaced.",
+        "accounts, and channel tabs into Mergerino?\n\nMergerino will "
+        "restart. Current Mergerino settings files will be backed up before "
+        "they are replaced.",
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (reply != QMessageBox::Yes)
     {
@@ -1029,7 +1030,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
     layout.addSubtitle("Chatterino Import");
     layout.addDescription(
         "Import Chatterino settings, ping alerts, commands, user data, and "
-        "channel tabs. Mergerino restarts to finish the import.");
+        "accounts, and channel tabs. Mergerino restarts to finish the import.");
     layout.addButton("Import from Chatterino", [&layout] {
         importChatterinoFromSettings(layout.window());
     });
@@ -1099,18 +1100,25 @@ void GeneralPage::initLayout(GeneralPageView &layout)
     layout.addTitle("Advanced");
 
     layout.addSubtitle("Chat title");
-    layout.addDescription("In live channels show:");
+    layout.addDescription("In live channels show in the title:");
     SettingWidget::checkbox("Uptime", s.headerUptime)
         ->setTooltip("Show how long the channel has been live")
-        ->addTo(layout);
-    SettingWidget::checkbox("Viewer count", s.headerViewerCount)
-        ->setTooltip("Show how many users are watching")
         ->addTo(layout);
     SettingWidget::checkbox("Category", s.headerGame)
         ->setTooltip("Show what Category the stream is listed under")
         ->addTo(layout);
     SettingWidget::checkbox("Title", s.headerStreamTitle)
         ->setTooltip("Show the stream title")
+        ->addTo(layout);
+
+    layout.addSubtitle("Viewer count");
+    SettingWidget::checkbox("Show viewer count", s.headerViewerCount)
+        ->setTooltip(
+            "Show a compact viewer count with an icon in the split header")
+        ->addTo(layout);
+    SettingWidget::dropdown("Viewer count source", headerViewerCountModeSetting())
+        ->setTooltip("Choose which platform viewer count is shown")
+        ->conditionallyEnabledBy(s.headerViewerCount)
         ->addTo(layout);
 
     layout.addSubtitle("R9K");

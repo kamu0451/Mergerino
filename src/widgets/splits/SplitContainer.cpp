@@ -268,6 +268,7 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
         source->slowerChatMessagesPerSecond());
     clone->setSlowerChatMessageAnimations(
         source->slowerChatMessageAnimations());
+    clone->setViewerCountEnabledOverride(source->viewerCountEnabledOverride());
     clone->setTwitchActivityMinimumBits(source->twitchActivityMinimumBits());
     clone->setKickActivityMinimumKicks(source->kickActivityMinimumKicks());
     clone->setTikTokActivityMinimumDiamonds(
@@ -1081,6 +1082,8 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
             currentNode->split_->slowerChatMessagesPerSecond();
         result.slowerChatMessageAnimations_ =
             currentNode->split_->slowerChatMessageAnimations();
+        result.viewerCountEnabled_ =
+            currentNode->split_->viewerCountEnabledOverride();
         result.twitchActivityMinimumBits_ =
             currentNode->split_->twitchActivityMinimumBits();
         result.kickActivityMinimumKicks_ =
@@ -1151,6 +1154,7 @@ void SplitContainer::applyFromDescriptorRecursively(
             splitNode.slowerChatMessagesPerSecond_);
         split->setSlowerChatMessageAnimations(
             splitNode.slowerChatMessageAnimations_);
+        split->setViewerCountEnabledOverride(splitNode.viewerCountEnabled_);
         split->setTwitchActivityMinimumBits(
             splitNode.twitchActivityMinimumBits_);
         split->setKickActivityMinimumKicks(splitNode.kickActivityMinimumKicks_);
@@ -1229,6 +1233,8 @@ void SplitContainer::applyFromDescriptorRecursively(
                     splitNode.slowerChatMessagesPerSecond_);
                 split->setSlowerChatMessageAnimations(
                     splitNode.slowerChatMessageAnimations_);
+                split->setViewerCountEnabledOverride(
+                    splitNode.viewerCountEnabled_);
                 split->setTwitchActivityMinimumBits(
                     splitNode.twitchActivityMinimumBits_);
                 split->setKickActivityMinimumKicks(

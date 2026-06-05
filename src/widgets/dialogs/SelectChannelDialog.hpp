@@ -53,6 +53,7 @@ public:
     void setSlowerChatEnabled(bool enabled);
     void setSlowerChatMessagesPerSecond(qreal value);
     void setSlowerChatMessageAnimations(bool enabled);
+    void setViewerCountEnabled(bool enabled);
     IndirectChannel getSelectedChannel() const;
     bool activityPaneEnabled() const;
     bool filterActivity() const;
@@ -60,6 +61,7 @@ public:
     bool slowerChatEnabled() const;
     qreal slowerChatMessagesPerSecond() const;
     bool slowerChatMessageAnimations() const;
+    bool viewerCountEnabled() const;
     bool hasSeletedChannel() const;
 
     pajlada::Signals::NoArgSignal closed;
@@ -89,6 +91,7 @@ private:
         QCheckBox *slowerChat{};
         QDoubleSpinBox *slowerChatRate{};
         QCheckBox *messageAnimations{};
+        QCheckBox *viewerCount{};
         QWidget *slowerChatRateLabel{};
         QWidget *slowerChatRateField{};
         QWidget *messageAnimationsRow{};

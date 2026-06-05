@@ -759,6 +759,11 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
                        node->getSplit()->slowerChatMessagesPerSecond());
             obj.insert("slowerChatMessageAnimations",
                        node->getSplit()->slowerChatMessageAnimations());
+            if (const auto viewerCountEnabled =
+                    node->getSplit()->viewerCountEnabledOverride())
+            {
+                obj.insert("viewerCountEnabled", *viewerCountEnabled);
+            }
             obj.insert("twitchActivityMinimumBits",
                        static_cast<qint64>(
                            node->getSplit()->twitchActivityMinimumBits()));

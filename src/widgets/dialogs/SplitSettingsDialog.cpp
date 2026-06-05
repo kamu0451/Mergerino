@@ -384,18 +384,34 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
     this->ui_.indicatorMode->addItem("Both");
     const auto platformStyleTooltip =
         QStringLiteral("Show no platform indicator, platform color, logo, or both.");
-    appearanceLayout->addRow(
-        createLabelWithInfo("Platform style", platformStyleTooltip, this),
-        this->ui_.indicatorMode);
+    const auto addPlatformStyleRow = [this, appearanceLayout,
+                                      platformStyleTooltip] {
+        appearanceLayout->addRow(
+            createLabelWithInfo("Platform style", platformStyleTooltip, this),
+            this->ui_.indicatorMode);
+    };
 
-    if (!this->isActivityPane_)
+    if (this->isActivityPane_)
     {
+        addPlatformStyleRow();
+    }
+    else
+    {
+        addPlatformStyleRow();
+
         this->ui_.filterActivity = new QCheckBox("Filter activity");
         const auto filterActivityTooltip = QStringLiteral(
             "Hide activity alerts from this chat.");
         appearanceLayout->addRow(createCheckboxRow(this->ui_.filterActivity,
                                                    filterActivityTooltip,
                                                    this));
+
+        this->ui_.messageAnimations = new QCheckBox("Message animations");
+        const auto messageAnimationsTooltip =
+            QStringLiteral("Smoothly animate messages.");
+        this->ui_.messageAnimationsRow = createCheckboxRow(
+            this->ui_.messageAnimations, messageAnimationsTooltip, this);
+        appearanceLayout->addRow(this->ui_.messageAnimationsRow);
 
         this->ui_.slowerChat = new QCheckBox("Slower chat");
         const auto slowerChatTooltip = QStringLiteral(
@@ -419,12 +435,11 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
         appearanceLayout->addRow(this->ui_.slowerChatRateLabel,
                                  this->ui_.slowerChatRateField);
 
-        this->ui_.messageAnimations = new QCheckBox("Message animations");
-        const auto messageAnimationsTooltip =
-            QStringLiteral("Smoothly animate messages.");
-        this->ui_.messageAnimationsRow = createCheckboxRow(
-            this->ui_.messageAnimations, messageAnimationsTooltip, this);
-        appearanceLayout->addRow(this->ui_.messageAnimationsRow);
+        this->ui_.viewerCount = new QCheckBox("Viewer count");
+        const auto viewerCountTooltip = QStringLiteral(
+            "Show the viewer count in this split header.");
+        appearanceLayout->addRow(createCheckboxRow(this->ui_.viewerCount,
+                                                   viewerCountTooltip, this));
 
         QObject::connect(this->ui_.slowerChat, &QCheckBox::toggled, this,
                          [this] {
@@ -641,6 +656,19 @@ bool SplitSettingsDialog::slowerChatMessageAnimations() const
            this->ui_.messageAnimations->isChecked();
 }
 
+void SplitSettingsDialog::setViewerCountEnabled(bool enabled)
+{
+    if (this->ui_.viewerCount)
+    {
+        this->ui_.viewerCount->setChecked(enabled);
+    }
+}
+
+bool SplitSettingsDialog::viewerCountEnabled() const
+{
+    return this->ui_.viewerCount && this->ui_.viewerCount->isChecked();
+}
+
 void SplitSettingsDialog::setTwitchActivityMinimumBits(uint32_t value)
 {
     if (this->ui_.twitchBitsMinimum)
@@ -746,6 +774,10 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     if (this->ui_.messageAnimations)
     {
         this->ui_.messageAnimations->setFont(uiFont);
+    }
+    if (this->ui_.viewerCount)
+    {
+        this->ui_.viewerCount->setFont(uiFont);
     }
     if (this->ui_.twitchBitsMinimum)
     {

@@ -170,12 +170,22 @@ bool Settings::toggleMutedChannel(const QString &channelName)
 
 Settings *Settings::instance_ = nullptr;
 
+EnumStringSetting<SplitHeaderViewerCountMode> &headerViewerCountModeSetting()
+{
+    static auto *setting = new EnumStringSetting<SplitHeaderViewerCountMode>{
+        "/appearance/splitheader/viewerCountMode",
+        SplitHeaderViewerCountMode::Total,
+    };
+    return *setting;
+}
+
 Settings::Settings(const Args &args, const QString &settingsDirectory,
                    bool isTest)
     : prevInstance_(Settings::instance_)
     , disableSaving(args.dontSaveSettings)
 {
     QString settingsPath = settingsDirectory + "/settings.json";
+    (void)headerViewerCountModeSetting();
 
     // get global instance of the settings library
     auto settingsInstance = pajlada::Settings::SettingManager::getInstance();

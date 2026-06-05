@@ -138,6 +138,11 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
         root.value("slowerChatMessagesPerSecond").toDouble(5.0);
     descriptor.slowerChatMessageAnimations_ =
         root.value("slowerChatMessageAnimations").toBool(true);
+    if (root["viewerCountEnabled"].isBool())
+    {
+        descriptor.viewerCountEnabled_ =
+            root.value("viewerCountEnabled").toBool();
+    }
     descriptor.twitchActivityMinimumBits_ = static_cast<uint32_t>(
         root.value("twitchActivityMinimumBits").toInt(100));
     descriptor.kickActivityMinimumKicks_ = static_cast<uint32_t>(

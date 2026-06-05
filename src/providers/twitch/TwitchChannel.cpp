@@ -115,6 +115,18 @@ constexpr auto MAX_CHATTERS_TO_FETCH = 5000;
 // From Twitch docs - expected size for a badge (1x)
 constexpr QSize BASE_BADGE_SIZE(18, 18);
 
+bool isAutomaticAccountAuthError(void *caller, const QString &error)
+{
+    if (caller != nullptr)
+    {
+        return false;
+    }
+
+    return error.contains("Invalid OAuth token", Qt::CaseInsensitive) ||
+           (error.contains("user_id", Qt::CaseInsensitive) &&
+            error.contains("OAuth token", Qt::CaseInsensitive));
+}
+
 }  // namespace
 
 TwitchChannel::TwitchChannel(const QString &name)
@@ -211,9 +223,12 @@ TwitchChannel::TwitchChannel(const QString &name)
 
             if (caller == this || caller == nullptr)
             {
-                this->addSystemMessage(
-                    u"Failed to load Twitch subscriber emotes: " %
-                    result.error());
+                if (!isAutomaticAccountAuthError(caller, result.error()))
+                {
+                    this->addSystemMessage(
+                        u"Failed to load Twitch subscriber emotes: " %
+                        result.error());
+                }
             }
         });
 

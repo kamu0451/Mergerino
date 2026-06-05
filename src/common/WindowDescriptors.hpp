@@ -59,6 +59,7 @@ struct SplitDescriptor {
     bool slowerChatEnabled_{false};
     qreal slowerChatMessagesPerSecond_{5.0};
     bool slowerChatMessageAnimations_{true};
+    std::optional<bool> viewerCountEnabled_;
     uint32_t twitchActivityMinimumBits_{100};
     uint32_t kickActivityMinimumKicks_{100};
     uint32_t tiktokActivityMinimumDiamonds_{0};

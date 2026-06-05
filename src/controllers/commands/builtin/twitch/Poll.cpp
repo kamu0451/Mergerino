@@ -9,11 +9,14 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/commands/CommandContext.hpp"
 #include "controllers/commands/common/ChannelAction.hpp"
+#include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "widgets/dialogs/CreatePollDialog.hpp"
 
 #include <chrono>
+#include <memory>
 
 namespace {
 
@@ -22,12 +25,71 @@ using namespace chatterino;
 constexpr auto MIN_POLL_DURATION = std::chrono::seconds(10);
 constexpr auto MAX_POLL_DURATION = std::chrono::seconds(1800);
 
+std::shared_ptr<TwitchChannel> resolveTwitchChannel(const ChannelPtr &channel)
+{
+    if (channel == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (auto twitch = std::dynamic_pointer_cast<TwitchChannel>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto merged = std::dynamic_pointer_cast<MergedChannel>(channel))
+    {
+        return std::dynamic_pointer_cast<TwitchChannel>(
+            merged->twitchChannel());
+    }
+
+    return nullptr;
+}
+
+void notifyPollsAndPredictionsChanged(const ChannelPtr &channel)
+{
+    if (auto twitch = resolveTwitchChannel(channel))
+    {
+        twitch->streamStatusChanged.invoke();
+    }
+}
+
 }  // namespace
 
 namespace chatterino::commands {
 
 QString createPoll(const CommandContext &ctx)
 {
+    if (ctx.words.size() <= 1)
+    {
+        if (ctx.twitchChannel == nullptr)
+        {
+            const auto err = QStringLiteral(
+                "The /poll command only works in Twitch channels");
+            if (ctx.channel != nullptr)
+            {
+                ctx.channel->addSystemMessage(err);
+            }
+            else
+            {
+                qCWarning(chatterinoCommands)
+                    << "Invalid command context:" << err;
+            }
+            return "";
+        }
+
+        auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+        if (currentUser->isAnon())
+        {
+            ctx.channel->addSystemMessage(
+                "You must be logged in to create a poll!");
+            return "";
+        }
+
+        CreatePollDialog::showDialog(ctx.channel, *ctx.twitchChannel);
+        return "";
+    }
+
     const auto command = QStringLiteral("/poll");
     const auto usage = QStringLiteral(
         R"(Usage: "/poll --title "<title>" --duration <duration>[time unit] --choice "<choice1>" --choice "<choice2>" [options...]" - Creates a poll for users to vote among the defined options. Title may not exceed 60 characters. There must be between two and five poll choices. Duration must be a positive integer; time unit (optional, default=s) must be one of s, m; maximum duration is 30 minutes. Options: --points <points> to allow spending the specified channel points for each additional vote.)");
@@ -63,6 +125,7 @@ QString createPoll(const CommandContext &ctx)
         [channel = ctx.channel, poll] {
             channel->addSystemMessage(
                 QString("Created poll: '%1'").arg(poll.title));
+            notifyPollsAndPredictionsChanged(channel);
         },
         [channel = ctx.channel](const auto &error) {
             channel->addSystemMessage("Failed to create poll - " + error);
@@ -115,6 +178,8 @@ QString endPoll(const CommandContext &ctx)
             getHelix()->endPoll(
                 roomId, poll.id, false,
                 [channel](const HelixPoll &data) {
+                    notifyPollsAndPredictionsChanged(channel);
+
                     // find most popular choice
                     HelixPollChoice winner = data.choices.front();
                     int totalVotes = 0;
@@ -218,6 +283,7 @@ QString cancelPoll(const CommandContext &ctx)
                 [channel](const HelixPoll &data) {
                     channel->addSystemMessage(
                         QString("Canceled poll: '%1'").arg(data.title));
+                    notifyPollsAndPredictionsChanged(channel);
                 },
                 [channel](const auto &error) {
                     channel->addSystemMessage("Failed to cancel the poll - " +

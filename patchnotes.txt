@@ -1,5 +1,15 @@
 Patch Notes
 
+05/06/2026
+- Added improved viewer count setting
+- Added improved prediction command
+- Added improved poll command
+- Updated YouTube chat from 'Top' to 'All' displayed messages
+- Fixed a bug where truncated links showed incomplete in YouTube chat
+- Improved Chatterino import functionality
+- Improved UI menu behaviour
+- Improved YouTube chat connectivity when channels go live
+
 22/05/2026
 - Added membership badges and colours to YouTube chat
 - Added relative time display option to activity tabs

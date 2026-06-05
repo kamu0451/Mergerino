@@ -540,12 +540,24 @@ struct HelixPrediction {
     QString winningOutcomeID;
     QString status;
     std::vector<HelixPredictionOutcome> outcomes;
+    QDateTime createdAt;
+    QDateTime lockedAt;
+    QDateTime endedAt;
+    int predictionWindow;
 
     explicit HelixPrediction(const QJsonObject &jsonObject)
         : id(jsonObject.value("id").toString())
         , title(jsonObject.value("title").toString())
         , winningOutcomeID(jsonObject.value("winning_outcome_id").toString())
         , status(jsonObject.value("status").toString())
+        , outcomes()
+        , createdAt(QDateTime::fromString(
+              jsonObject.value("created_at").toString(), Qt::ISODate))
+        , lockedAt(QDateTime::fromString(
+              jsonObject.value("locked_at").toString(), Qt::ISODate))
+        , endedAt(QDateTime::fromString(
+              jsonObject.value("ended_at").toString(), Qt::ISODate))
+        , predictionWindow(jsonObject.value("prediction_window").toInt())
     {
         const auto &data = jsonObject.value("outcomes").toArray();
         this->outcomes.reserve(data.size());

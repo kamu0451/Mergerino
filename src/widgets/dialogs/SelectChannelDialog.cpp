@@ -570,6 +570,7 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     platformLayout->addRow(
         createLabelWithInfo("Platform style", platformStyleTooltip, this),
         ui.indicatorMode);
+
     ui.enableActivity = new QCheckBox("Enable activity tab");
     const auto activityTabTooltip = QStringLiteral(
         "Open a linked activity tab for this merged tab.");
@@ -580,6 +581,13 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
         "Hide activity alerts from main chat.");
     platformLayout->addRow(
         createCheckboxRow(ui.filterActivity, filterActivityTooltip, this));
+
+    ui.messageAnimations = new QCheckBox("Message animations");
+    const auto messageAnimationsTooltip =
+        QStringLiteral("Smoothly animate messages.");
+    ui.messageAnimationsRow = createCheckboxRow(ui.messageAnimations,
+                                                messageAnimationsTooltip, this);
+    platformLayout->addRow(ui.messageAnimationsRow);
 
     ui.slowerChat = new QCheckBox("Slower chat");
     const auto slowerChatTooltip = QStringLiteral(
@@ -600,12 +608,11 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     ui.slowerChatRateField = ui.slowerChatRate;
     platformLayout->addRow(ui.slowerChatRateLabel, ui.slowerChatRateField);
 
-    ui.messageAnimations = new QCheckBox("Message animations");
-    const auto messageAnimationsTooltip =
-        QStringLiteral("Smoothly animate messages.");
-    ui.messageAnimationsRow = createCheckboxRow(ui.messageAnimations,
-                                                messageAnimationsTooltip, this);
-    platformLayout->addRow(ui.messageAnimationsRow);
+    ui.viewerCount = new QCheckBox("Viewer count");
+    const auto viewerCountTooltip = QStringLiteral(
+        "Show the viewer count in this tab header.");
+    platformLayout->addRow(
+        createCheckboxRow(ui.viewerCount, viewerCountTooltip, this));
 
     mergedLayout->addWidget(platformGroup);
 
@@ -719,6 +726,8 @@ void SelectChannelDialog::setMergedDefaults()
     this->ui_.slowerChat->setChecked(false);
     this->ui_.slowerChatRate->setValue(5.0);
     this->ui_.messageAnimations->setChecked(true);
+    this->ui_.viewerCount->setChecked(
+        getSettings()->headerViewerCount.getValue());
     this->ui_.indicatorMode->setCurrentIndex(indicatorModeIndex(
         getSettings()->mergedPlatformIndicatorMode));
 }
@@ -889,6 +898,14 @@ void SelectChannelDialog::setSlowerChatMessageAnimations(bool enabled)
     }
 }
 
+void SelectChannelDialog::setViewerCountEnabled(bool enabled)
+{
+    if (this->ui_.viewerCount)
+    {
+        this->ui_.viewerCount->setChecked(enabled);
+    }
+}
+
 IndirectChannel SelectChannelDialog::getSelectedChannel() const
 {
     return this->selectedChannel_;
@@ -931,6 +948,12 @@ bool SelectChannelDialog::slowerChatMessageAnimations() const
 {
     return this->ui_.messageAnimations != nullptr &&
            this->ui_.messageAnimations->isChecked();
+}
+
+bool SelectChannelDialog::viewerCountEnabled() const
+{
+    return this->ui_.viewerCount != nullptr &&
+           this->ui_.viewerCount->isChecked();
 }
 
 bool SelectChannelDialog::hasSeletedChannel() const
@@ -1154,6 +1177,10 @@ void SelectChannelDialog::scaleChangedEvent(float newScale)
     if (this->ui_.messageAnimations)
     {
         this->ui_.messageAnimations->setFont(uiFont);
+    }
+    if (this->ui_.viewerCount)
+    {
+        this->ui_.viewerCount->setFont(uiFont);
     }
 
     this->applySlowerChatRateVisibilityProgress(

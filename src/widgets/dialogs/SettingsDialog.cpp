@@ -29,6 +29,7 @@
 #include <QDialogButtonBox>
 #include <QFile>
 #include <QLineEdit>
+#include <QShortcut>
 
 namespace chatterino {
 
@@ -90,6 +91,12 @@ void SettingsDialog::addShortcuts()
 
     this->shortcuts_ = getApp()->getHotkeys()->shortcutsForCategory(
         HotkeyCategory::PopupWindow, actions, this);
+
+    auto *cancelShortcut = new QShortcut(QKeySequence::Cancel, this);
+    cancelShortcut->setContext(Qt::WindowShortcut);
+    QObject::connect(cancelShortcut, &QShortcut::activated, this,
+                     &SettingsDialog::onCancelClicked);
+    this->shortcuts_.push_back(cancelShortcut);
 }
 void SettingsDialog::setSearchPlaceholderText()
 {

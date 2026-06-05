@@ -29,13 +29,27 @@
 
 using namespace Qt::Literals::StringLiterals;
 
+namespace {
+
+QString normalizeOAuthToken(QString token)
+{
+    token = token.trimmed();
+    if (token.startsWith("oauth:", Qt::CaseInsensitive))
+    {
+        token.remove(0, 6);
+    }
+    return token;
+}
+
+}  // namespace
+
 namespace chatterino {
 
 TwitchAccount::TwitchAccount(const QString &username, const QString &oauthToken,
                              const QString &oauthClient, const QString &userID)
     : Account(ProviderId::Twitch)
     , oauthClient_(oauthClient)
-    , oauthToken_(oauthToken)
+    , oauthToken_(normalizeOAuthToken(oauthToken))
     , userName_(username)
     , userId_(userID)
     , isAnon_(username == ANONYMOUS_USERNAME)
@@ -95,12 +109,26 @@ bool TwitchAccount::setOAuthClient(const QString &newClientID)
 
 bool TwitchAccount::setOAuthToken(const QString &newOAuthToken)
 {
-    if (this->oauthToken_.compare(newOAuthToken) == 0)
+    const auto normalizedToken = normalizeOAuthToken(newOAuthToken);
+    if (this->oauthToken_.compare(normalizedToken) == 0)
     {
         return false;
     }
 
-    this->oauthToken_ = newOAuthToken;
+    this->oauthToken_ = normalizedToken;
+
+    return true;
+}
+
+bool TwitchAccount::setUserId(const QString &newUserID)
+{
+    if (this->userId_.compare(newUserID) == 0)
+    {
+        return false;
+    }
+
+    this->userId_ = newUserID;
+    this->seventvUserID_.clear();
 
     return true;
 }

@@ -112,6 +112,7 @@ private:
     void reportModerationActionFailure(const QString &action,
                                        const QString &error);
     void updateModeratorPrivilegesFromRenderer(const QJsonObject &renderer);
+    void updateLiveViewerCount(uint64_t viewerCount);
     void setLive(bool live);
     void setStatusText(QString text, bool notifyAsSystemMessage = false);
     bool shouldResolveLiveStreamFromSource() const;
@@ -132,6 +133,7 @@ private:
                                       bool allowPageCanonical);
     static QString extractLiveOwnerChannelId(const QJsonObject &nextResponse);
     static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
+    static uint64_t extractLiveViewerCount(const QJsonValue &value);
     static QDateTime extractLiveStartTime(const QJsonObject &nextResponse);
     static bool rendererHasModeratorBadge(const QJsonObject &renderer);
     static QString parseText(const QJsonValue &value);

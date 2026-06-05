@@ -139,8 +139,9 @@ bool stageChatterinoImportAndRestart(QWidget *parent, bool autorun)
     const auto reply = QMessageBox::question(
         parent, "Import from Chatterino",
         "Import Chatterino settings, ping alerts, commands, user data, and "
-        "channel tabs into Mergerino?\n\nMergerino will restart. Current "
-        "Mergerino settings files will be backed up before they are replaced.",
+        "accounts, and channel tabs into Mergerino?\n\nMergerino will "
+        "restart. Current Mergerino settings files will be backed up before "
+        "they are replaced.",
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (reply != QMessageBox::Yes)
     {
@@ -234,7 +235,7 @@ bool maybePromptForStartup(QWidget *parent)
         auto *importBox = new QHBoxLayout;
         auto *importText = new QLabel(
             "Found Chatterino settings. Import settings, ping alerts, "
-            "commands, user data, and channel tabs.");
+            "commands, user data, accounts, and channel tabs.");
         importText->setWordWrap(true);
         auto *importButton = new QPushButton("Import from Chatterino");
         importBox->addWidget(importText, 1);

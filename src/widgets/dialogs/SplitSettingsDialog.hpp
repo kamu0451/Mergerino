@@ -48,6 +48,8 @@ public:
     qreal slowerChatMessagesPerSecond() const;
     void setSlowerChatMessageAnimations(bool enabled);
     bool slowerChatMessageAnimations() const;
+    void setViewerCountEnabled(bool enabled);
+    bool viewerCountEnabled() const;
     void setTwitchActivityMinimumBits(uint32_t value);
     uint32_t twitchActivityMinimumBits() const;
     void setKickActivityMinimumKicks(uint32_t value);
@@ -73,6 +75,7 @@ private:
         QCheckBox *slowerChat{};
         QDoubleSpinBox *slowerChatRate{};
         QCheckBox *messageAnimations{};
+        QCheckBox *viewerCount{};
         QSpinBox *twitchBitsMinimum{};
         QSpinBox *kickKicksMinimum{};
         QSpinBox *tiktokGiftMinimum{};

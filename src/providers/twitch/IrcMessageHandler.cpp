@@ -34,6 +34,7 @@
 #include <IrcMessage>
 #include <QLocale>
 #include <QStringBuilder>
+#include <QTimer>
 
 #include <memory>
 
@@ -239,8 +240,31 @@ MessagePtr parseNoticeMessage(Communi::IrcNoticeMessage *message)
         const auto linkColor = MessageColor(MessageColor::Link);
         const auto accountsLink = Link(Link::OpenAccountsPage, QString());
         const auto curUser = getApp()->getAccounts()->twitch.getCurrent();
+        const auto expiredUserName = curUser->getUserName();
+        if (!curUser->isAnon())
+        {
+            QTimer::singleShot(0, [expiredUserName] {
+                auto *app = tryGetApp();
+                if (!app)
+                {
+                    return;
+                }
+
+                auto &twitchAccounts = app->getAccounts()->twitch;
+                const auto current = twitchAccounts.getCurrent();
+                if (current->isAnon() ||
+                    current->getUserName().compare(expiredUserName,
+                                                   Qt::CaseInsensitive) != 0)
+                {
+                    return;
+                }
+
+                twitchAccounts.currentUsername = QString{};
+                getSettings()->requestSave();
+            });
+        }
         const auto expirationText = QString("Login expired for user \"%1\"!")
-                                        .arg(curUser->getUserName());
+                                        .arg(expiredUserName);
         const auto loginPromptText = QString("Try adding your account again.");
 
         MessageBuilder builder;

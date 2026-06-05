@@ -5,6 +5,7 @@
 #include "providers/youtube/YouTubeLiveChat.hpp"
 
 #include "Application.hpp"
+#include "common/LinkParser.hpp"
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
@@ -13,6 +14,7 @@
 #include "messages/Image.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
+#include "providers/links/LinkResolver.hpp"
 #include "providers/youtube/YouTubeAccount.hpp"
 
 #include <QDateTime>
@@ -79,6 +81,15 @@ bool isLikelyChannelIdValue(const QString &value)
 {
     static const QRegularExpression channelIdRegex("^UC[A-Za-z0-9_-]{22}$");
     return channelIdRegex.match(value.trimmed()).hasMatch();
+}
+
+bool isLikelyVideoIdValue(const QString &value)
+{
+    static const QRegularExpression videoIdRegex("^[A-Za-z0-9_-]{11}$");
+
+    const auto trimmed = value.trimmed();
+    return trimmed != QStringLiteral("live_stream") &&
+        videoIdRegex.match(trimmed).hasMatch();
 }
 
 QString extractFirstBrowseChannelId(const QJsonValue &value)
@@ -179,6 +190,157 @@ bool appendSimpleWords(MessageBuilder &builder, const QString &text)
     }
 
     return appended;
+}
+
+QString normalizeYouTubeTextRunUrl(QString url, bool unwrapRedirect = true)
+{
+    url = url.trimmed();
+    if (url.isEmpty())
+    {
+        return {};
+    }
+
+    if (url.startsWith("//"))
+    {
+        url.prepend("https:");
+    }
+    else if (url.startsWith('/'))
+    {
+        url.prepend("https://www.youtube.com");
+    }
+    else if (!url.contains("://") &&
+             (url.startsWith("www.", Qt::CaseInsensitive) ||
+              url.startsWith("youtube.com/", Qt::CaseInsensitive) ||
+              url.startsWith("m.youtube.com/", Qt::CaseInsensitive) ||
+              url.startsWith("studio.youtube.com/", Qt::CaseInsensitive)))
+    {
+        url.prepend("https://");
+    }
+
+    const QUrl parsed(url);
+    const auto scheme = parsed.scheme().toLower();
+    if (!parsed.isValid() || parsed.host().isEmpty() ||
+        (scheme != "http" && scheme != "https"))
+    {
+        return {};
+    }
+
+    if (unwrapRedirect && parsed.host().endsWith("youtube.com") &&
+        parsed.path() == "/redirect")
+    {
+        const QUrlQuery query(parsed);
+        const auto target = query.queryItemValue("q").trimmed();
+        if (!target.isEmpty())
+        {
+            const auto normalizedTarget =
+                normalizeYouTubeTextRunUrl(target, false);
+            if (!normalizedTarget.isEmpty())
+            {
+                return normalizedTarget;
+            }
+        }
+    }
+
+    return parsed.toString();
+}
+
+QString youtubeNavigationEndpointUrl(const QJsonObject &endpoint)
+{
+    const auto webUrl = endpoint["commandMetadata"]
+                            .toObject()["webCommandMetadata"]
+                            .toObject()["url"]
+                            .toString();
+    if (const auto url = normalizeYouTubeTextRunUrl(webUrl); !url.isEmpty())
+    {
+        return url;
+    }
+
+    const auto endpointUrl =
+        endpoint["urlEndpoint"].toObject()["url"].toString();
+    if (const auto url = normalizeYouTubeTextRunUrl(endpointUrl);
+        !url.isEmpty())
+    {
+        return url;
+    }
+
+    const auto watchEndpoint = endpoint["watchEndpoint"].toObject();
+    const auto videoId = watchEndpoint["videoId"].toString().trimmed();
+    if (isLikelyVideoIdValue(videoId))
+    {
+        return QStringLiteral("https://www.youtube.com/watch?v=%1")
+            .arg(videoId);
+    }
+
+    const auto browseEndpoint = endpoint["browseEndpoint"].toObject();
+    const auto canonicalBaseUrl =
+        browseEndpoint["canonicalBaseUrl"].toString().trimmed();
+    if (const auto url = normalizeYouTubeTextRunUrl(canonicalBaseUrl);
+        !url.isEmpty())
+    {
+        return url;
+    }
+
+    const auto browseId = browseEndpoint["browseId"].toString().trimmed();
+    if (isLikelyChannelIdValue(browseId))
+    {
+        return QStringLiteral("https://www.youtube.com/channel/%1")
+            .arg(browseId);
+    }
+
+    return {};
+}
+
+QString lowercaseDisplayedLinkText(const QString &text)
+{
+    const auto source = QStringView{text};
+    const auto parsed = linkparser::parse(source);
+    if (!parsed)
+    {
+        return text;
+    }
+
+    QString result;
+    result.reserve(text.size());
+    if (parsed->hasPrefix(source))
+    {
+        result += parsed->prefix(source).toString();
+    }
+    result += parsed->protocol.toString();
+    result += parsed->host.toString().toLower();
+    result += parsed->rest.toString();
+    if (parsed->hasSuffix(source))
+    {
+        result += parsed->suffix(source).toString();
+    }
+    return result;
+}
+
+bool appendYouTubeEndpointLink(MessageBuilder &builder, const QString &text,
+                               const QJsonObject &run)
+{
+    const auto displayText = text.trimmed();
+    if (displayText.isEmpty() || displayText.simplified().contains(' ') ||
+        !linkparser::parse(QStringView{displayText}))
+    {
+        return false;
+    }
+
+    const auto targetUrl =
+        youtubeNavigationEndpointUrl(run["navigationEndpoint"].toObject());
+    if (targetUrl.isEmpty())
+    {
+        return false;
+    }
+
+    auto *element = builder.emplace<LinkElement>(
+        LinkElement::Parsed{
+            .lowercase = lowercaseDisplayedLinkText(displayText),
+            .original = displayText,
+        },
+        targetUrl, MessageElementFlag::Text, MessageColor::Link);
+    element->setTooltip(targetUrl);
+    getApp()->getLinkResolver()->resolve(element->linkInfo());
+    return true;
 }
 
 QString youtubeEmojiShortcut(const QJsonObject &emoji)
@@ -508,6 +670,11 @@ bool appendYouTubeText(MessageBuilder &builder, const QJsonValue &value)
         const auto run = runValue.toObject();
         if (run.contains("text"))
         {
+            if (appendYouTubeEndpointLink(builder, run["text"].toString(), run))
+            {
+                appended = true;
+                continue;
+            }
             appended =
                 appendSimpleWords(builder, run["text"].toString()) || appended;
             continue;
@@ -651,6 +818,73 @@ QString formatYouTubeUptime(const QDateTime &startedAt)
            QString::number(seconds % 3600 / 60) % u"m";
 }
 
+uint64_t parseYouTubeViewerCountText(QString text)
+{
+    text = text.trimmed();
+    if (text.isEmpty())
+    {
+        return 0;
+    }
+
+    static const QRegularExpression countRegex(
+        R"((\d[\d\s,.]*)(?:\s*([kmb]))?)",
+        QRegularExpression::CaseInsensitiveOption);
+    const auto match = countRegex.match(text);
+    if (!match.hasMatch())
+    {
+        return 0;
+    }
+
+    auto number = match.captured(1);
+    number.remove(' ');
+    number.remove('\t');
+    number.remove(QChar(0x00A0));
+    number.remove(QChar(0x202F));
+
+    const auto suffix = match.captured(2).toLower();
+    if (!suffix.isEmpty())
+    {
+        number.remove(',');
+
+        bool ok = false;
+        const auto compactCount = number.toDouble(&ok);
+        if (!ok || compactCount <= 0)
+        {
+            return 0;
+        }
+
+        double multiplier = 1;
+        if (suffix == QStringLiteral("k"))
+        {
+            multiplier = 1000;
+        }
+        else if (suffix == QStringLiteral("m"))
+        {
+            multiplier = 1000000;
+        }
+        else if (suffix == QStringLiteral("b"))
+        {
+            multiplier = 1000000000;
+        }
+
+        return static_cast<uint64_t>(compactCount * multiplier + 0.5);
+    }
+
+    number.remove(',');
+    number.remove('.');
+
+    bool ok = false;
+    const auto count = number.toULongLong(&ok);
+    return ok ? count : 0;
+}
+
+bool isLiveViewerCountText(const QString &text)
+{
+    const auto lower = text.toLower();
+    return lower.contains(QStringLiteral("watching")) ||
+           lower.contains(QStringLiteral("viewer"));
+}
+
 QJsonObject extractLiveBroadcastDetails(const QJsonObject &nextResponse)
 {
     return nextResponse["microformat"]
@@ -683,9 +917,13 @@ bool containsActiveLiveMarker(const QString &text)
                "THUMBNAIL_OVERLAY_TIME_STATUS_STYLE_LIVE")) ||
            text.contains(QStringLiteral("BADGE_STYLE_TYPE_LIVE_NOW")) ||
            text.contains(QStringLiteral(R"("style":"LIVE")")) ||
+           text.contains(QStringLiteral(R"("simpleText":"LIVE")")) ||
+           text.contains(QStringLiteral(R"("label":"LIVE")")) ||
            text.contains(QStringLiteral(R"("isLive":true)")) ||
            text.contains(QStringLiteral(R"("isLiveNow":true)")) ||
-           text.contains(QStringLiteral(" watching now"), Qt::CaseInsensitive);
+           text.contains(QStringLiteral(" watching now"), Qt::CaseInsensitive) ||
+           text.contains(QStringLiteral("started streaming"),
+                         Qt::CaseInsensitive);
 }
 
 QString extractLiveLockupVideoId(const QString &html)
@@ -835,8 +1073,39 @@ bool jsonContainsLiveMarker(const QJsonValue &value)
     }
 
     const auto object = value.toObject();
+    for (const auto &key :
+         {QStringLiteral("isLive"), QStringLiteral("isLiveNow")})
+    {
+        const auto marker = object[key];
+        if (marker.isBool() && marker.toBool())
+        {
+            return true;
+        }
+    }
+
     for (auto it = object.begin(); it != object.end(); ++it)
     {
+        if (it.value().isString())
+        {
+            const auto key = it.key();
+            const auto text = it.value().toString().trimmed();
+            if ((key == QStringLiteral("style") &&
+                text == QStringLiteral("LIVE")) ||
+                ((key == QStringLiteral("simpleText") ||
+                  key == QStringLiteral("label")) &&
+                 (text.compare(QStringLiteral("LIVE"), Qt::CaseInsensitive) ==
+                      0 ||
+                  text.compare(QStringLiteral("LIVE NOW"),
+                               Qt::CaseInsensitive) == 0 ||
+                  text.contains(QStringLiteral("watching now"),
+                                Qt::CaseInsensitive) ||
+                  text.contains(QStringLiteral("started streaming"),
+                                Qt::CaseInsensitive))))
+            {
+                return true;
+            }
+        }
+
         if (jsonContainsLiveMarker(it.value()))
         {
             return true;
@@ -2261,7 +2530,12 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             {
                 this->liveStartedAt_ = {};
             }
-            if (!activeLiveRefresh)
+            const auto viewerCount = extractLiveViewerCount(json);
+            if (viewerCount > 0)
+            {
+                this->updateLiveViewerCount(viewerCount);
+            }
+            else if (!activeLiveRefresh)
             {
                 this->liveViewerCount_ = 0;
             }
@@ -2741,13 +3015,7 @@ void YouTubeLiveChat::poll()
             }
 
             auto actions = continuation["actions"].toArray();
-            const auto viewerCount = parseViewerCount(
-                continuation["viewerCount"]);
-            if (viewerCount > 0 && this->liveViewerCount_ != viewerCount)
-            {
-                this->liveViewerCount_ = viewerCount;
-                this->liveStatusChanged.invoke();
-            }
+            this->updateLiveViewerCount(extractLiveViewerCount(continuation));
 
             int deliveredMessageCount = 0;
             for (const auto &actionValue : actions)
@@ -3130,6 +3398,17 @@ void YouTubeLiveChat::updateModeratorPrivilegesFromRenderer(
     this->moderationStatusChanged.invoke();
 }
 
+void YouTubeLiveChat::updateLiveViewerCount(uint64_t viewerCount)
+{
+    if (viewerCount == 0 || this->liveViewerCount_ == viewerCount)
+    {
+        return;
+    }
+
+    this->liveViewerCount_ = viewerCount;
+    this->liveStatusChanged.invoke();
+}
+
 void YouTubeLiveChat::setLive(bool live)
 {
     if (this->live_ == live)
@@ -3384,6 +3663,49 @@ QString YouTubeLiveChat::extractFirstMatch(const QString &text,
 QString YouTubeLiveChat::extractLiveChatContinuation(
     const QJsonObject &liveChatRenderer)
 {
+    auto menuItemText = [](const QJsonValue &value) {
+        if (value.isString())
+        {
+            return value.toString().trimmed();
+        }
+        return parseText(value);
+    };
+
+    const auto items =
+        liveChatRenderer["header"]
+            .toObject()["liveChatHeaderRenderer"]
+            .toObject()["viewSelector"]
+            .toObject()["sortFilterSubMenuRenderer"]
+            .toObject()["subMenuItems"]
+            .toArray();
+    for (const auto &itemValue : items)
+    {
+        const auto item = itemValue.toObject();
+        const auto continuation =
+            extractContinuationFromObject(item["continuation"].toObject());
+        if (continuation.isEmpty())
+        {
+            continue;
+        }
+
+        const auto title = menuItemText(item["title"]).toLower();
+        const auto subtitle = menuItemText(item["subtitle"]).toLower();
+        const auto accessibilityLabel =
+            item["accessibility"]
+                .toObject()["accessibilityData"]
+                .toObject()["label"]
+                .toString()
+                .trimmed()
+                .toLower();
+        const auto combinedText =
+            QString("%1 %2 %3").arg(title, subtitle, accessibilityLabel);
+        if (title == QStringLiteral("live chat") ||
+            combinedText.contains(QStringLiteral("all messages are visible")))
+        {
+            return continuation;
+        }
+    }
+
     const auto continuations = liveChatRenderer["continuations"].toArray();
     for (const auto &continuationValue : continuations)
     {
@@ -3395,13 +3717,6 @@ QString YouTubeLiveChat::extractLiveChatContinuation(
         }
     }
 
-    const auto items =
-        liveChatRenderer["header"]
-            .toObject()["liveChatHeaderRenderer"]
-            .toObject()["viewSelector"]
-            .toObject()["sortFilterSubMenuRenderer"]
-            .toObject()["subMenuItems"]
-            .toArray();
     for (const auto &itemValue : items)
     {
         const auto continuation =
@@ -3599,6 +3914,96 @@ QString YouTubeLiveChat::parseText(const QJsonValue &value)
     return text.trimmed();
 }
 
+uint64_t YouTubeLiveChat::extractLiveViewerCount(const QJsonValue &value)
+{
+    auto parseLiveTextValue = [](const QJsonValue &textValue) -> uint64_t {
+        const auto text = textValue.isString() ? textValue.toString().trimmed()
+                                               : parseText(textValue);
+        if (!isLiveViewerCountText(text))
+        {
+            return 0;
+        }
+
+        return parseYouTubeViewerCountText(text);
+    };
+
+    if (value.isString())
+    {
+        return parseLiveTextValue(value);
+    }
+
+    if (value.isArray())
+    {
+        for (const auto &item : value.toArray())
+        {
+            const auto count = extractLiveViewerCount(item);
+            if (count > 0)
+            {
+                return count;
+            }
+        }
+        return 0;
+    }
+
+    if (!value.isObject())
+    {
+        return 0;
+    }
+
+    const auto object = value.toObject();
+
+    for (const auto &key :
+         {QStringLiteral("viewerCount"), QStringLiteral("viewerCountText")})
+    {
+        const auto count = parseViewerCount(object[key]);
+        if (count > 0)
+        {
+            return count;
+        }
+    }
+
+    const auto videoViewCountRenderer =
+        object["videoViewCountRenderer"].toObject();
+    if (!videoViewCountRenderer.isEmpty())
+    {
+        for (const auto &key : {QStringLiteral("viewCount"),
+                                QStringLiteral("shortViewCount"),
+                                QStringLiteral("extraShortViewCount")})
+        {
+            const auto count = parseLiveTextValue(videoViewCountRenderer[key]);
+            if (count > 0)
+            {
+                return count;
+            }
+        }
+    }
+
+    const auto textCount = parseLiveTextValue(value);
+    if (textCount > 0)
+    {
+        return textCount;
+    }
+
+    for (auto it = object.begin(); it != object.end(); ++it)
+    {
+        const auto key = it.key();
+        if (key == QStringLiteral("actions") ||
+            key == QStringLiteral("message") ||
+            key == QStringLiteral("authorName"))
+        {
+            continue;
+        }
+
+        const auto count = extractLiveViewerCount(it.value());
+        if (count > 0)
+        {
+            return count;
+        }
+    }
+
+    return 0;
+}
+
 QString normalizedYouTubeAuthorName(QString author)
 {
     author = author.trimmed();
@@ -3611,26 +4016,20 @@ QString normalizedYouTubeAuthorName(QString author)
 
 uint64_t YouTubeLiveChat::parseViewerCount(const QJsonValue &value)
 {
-    const auto text = parseText(value);
+    if (value.isDouble())
+    {
+        const auto count = value.toInteger(0);
+        return count > 0 ? static_cast<uint64_t>(count) : 0;
+    }
+
+    const auto text = value.isString() ? value.toString().trimmed()
+                                       : parseText(value);
     if (text.isEmpty())
     {
         return 0;
     }
 
-    static const QRegularExpression countRegex(R"(([\d,.]+))");
-    const auto match = countRegex.match(text);
-    if (!match.hasMatch())
-    {
-        return 0;
-    }
-
-    auto digits = match.captured(1);
-    digits.remove(',');
-    digits.remove('.');
-
-    bool ok = false;
-    const auto count = digits.toULongLong(&ok);
-    return ok ? count : 0;
+    return parseYouTubeViewerCountText(text);
 }
 
 QString compactMembershipGiftText(const QString &text, const QString &author)

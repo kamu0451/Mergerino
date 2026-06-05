@@ -4428,8 +4428,7 @@ void ChannelView::showUserInfoPopup(const QString &userName,
         return;
     }
 
-    auto *userPopup =
-        new UserInfoPopup(getSettings()->autoCloseUserPopup, this->split_);
+    auto *userPopup = new UserInfoPopup(false, this->split_);
 
     auto openingChannel = this->hasSourceChannel() ? this->sourceChannel_
                                                    : this->underlyingChannel_;

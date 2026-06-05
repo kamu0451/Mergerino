@@ -56,6 +56,7 @@
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QStringList>
 #include <QTextStream>
 #include <QTimer>
 #include <QUrl>
@@ -339,10 +340,6 @@ auto formatTitle(const TwitchChannel::StreamStatus &s, Settings &settings)
     {
         title += " - " + s.uptime;
     }
-    if (settings.headerViewerCount)
-    {
-        title += " - " + localizeNumbers(s.viewerCount);
-    }
     if (settings.headerGame && !s.game.isEmpty())
     {
         title += " - " + s.game;
@@ -396,6 +393,209 @@ void openUrlInBrowser(const QUrl &url)
     {
         QDesktopServices::openUrl(url);
     }
+}
+
+QColor viewerCountColor()
+{
+    return QColor(232, 232, 232);
+}
+
+QColor viewerCountIconColor()
+{
+    return viewerCountColor();
+}
+
+class ViewerCountIcon final : public BaseWidget
+{
+public:
+    explicit ViewerCountIcon(BaseWidget *parent)
+        : BaseWidget(parent)
+    {
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+
+        auto pen = QPen(viewerCountIconColor());
+        pen.setWidthF(1.9 * this->scale());
+        pen.setCapStyle(Qt::RoundCap);
+        pen.setJoinStyle(Qt::RoundJoin);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+
+        const auto size = std::min(this->width(), this->height()) * 0.88;
+        const auto centerX = this->width() / 2.0;
+        const auto top =
+            (this->height() - size) / 2.0 + this->scale();
+        const auto headRadius = size * 0.14;
+        const auto headCenter = QPointF(centerX, top + size * 0.27);
+        painter.drawEllipse(headCenter, headRadius, headRadius);
+
+        QPainterPath shoulders;
+        shoulders.moveTo(centerX - size * 0.31, top + size * 0.80);
+        shoulders.cubicTo(centerX - size * 0.28, top + size * 0.61,
+                          centerX - size * 0.16, top + size * 0.52, centerX,
+                          top + size * 0.52);
+        shoulders.cubicTo(centerX + size * 0.16, top + size * 0.52,
+                          centerX + size * 0.28, top + size * 0.61,
+                          centerX + size * 0.31, top + size * 0.80);
+        painter.drawPath(shoulders);
+    }
+};
+
+struct ViewerCountEntry {
+    SplitHeaderViewerCountMode mode{};
+    QString platformName;
+    uint64_t count = 0;
+};
+
+struct ViewerCountDisplay {
+    bool visible = false;
+    QString text;
+    QString tooltip;
+};
+
+QString viewerNoun(uint64_t count)
+{
+    return count == 1 ? QStringLiteral("viewer") : QStringLiteral("viewers");
+}
+
+void addTwitchViewerCount(std::vector<ViewerCountEntry> &entries,
+                          const TwitchChannel *channel)
+{
+    if (channel == nullptr)
+    {
+        return;
+    }
+
+    const auto streamStatus = channel->accessStreamStatus();
+    if (!streamStatus->live)
+    {
+        return;
+    }
+
+    entries.push_back({
+        SplitHeaderViewerCountMode::Twitch,
+        QStringLiteral("Twitch"),
+        streamStatus->viewerCount,
+    });
+}
+
+void addKickViewerCount(std::vector<ViewerCountEntry> &entries,
+                        const KickChannel *channel)
+{
+    if (channel == nullptr)
+    {
+        return;
+    }
+
+    const auto &stream = channel->streamData();
+    if (!stream.isLive)
+    {
+        return;
+    }
+
+    entries.push_back({
+        SplitHeaderViewerCountMode::Kick,
+        QStringLiteral("Kick"),
+        stream.viewerCount,
+    });
+}
+
+void addYouTubeViewerCount(std::vector<ViewerCountEntry> &entries,
+                           const YouTubeLiveChat *liveChat)
+{
+    if (liveChat == nullptr || !liveChat->isLive())
+    {
+        return;
+    }
+
+    entries.push_back({
+        SplitHeaderViewerCountMode::YouTube,
+        QStringLiteral("YouTube"),
+        liveChat->liveViewerCount(),
+    });
+}
+
+std::vector<ViewerCountEntry> viewerCountEntries(Channel *channel)
+{
+    std::vector<ViewerCountEntry> entries;
+
+    if (auto *twitch = dynamic_cast<TwitchChannel *>(channel))
+    {
+        addTwitchViewerCount(entries, twitch);
+    }
+    else if (auto *kick = dynamic_cast<KickChannel *>(channel))
+    {
+        addKickViewerCount(entries, kick);
+    }
+    else if (auto *merged = dynamic_cast<MergedChannel *>(channel))
+    {
+        addTwitchViewerCount(
+            entries,
+            dynamic_cast<TwitchChannel *>(merged->twitchChannel().get()));
+        addKickViewerCount(
+            entries, dynamic_cast<KickChannel *>(merged->kickChannel().get()));
+        addYouTubeViewerCount(entries, merged->youtubeLiveChat());
+    }
+
+    return entries;
+}
+
+bool viewerCountModeIncludes(SplitHeaderViewerCountMode selected,
+                             const ViewerCountEntry &entry)
+{
+    return selected == SplitHeaderViewerCountMode::Total ||
+           selected == entry.mode;
+}
+
+QString viewerCountTooltipLine(const ViewerCountEntry &entry)
+{
+    return QStringLiteral("%1: %2 %3")
+        .arg(entry.platformName)
+        .arg(localizeNumbers(entry.count))
+        .arg(viewerNoun(entry.count));
+}
+
+ViewerCountDisplay viewerCountDisplay(Channel *channel, const Split *split)
+{
+    auto *settings = getSettings();
+    if ((split != nullptr && !split->viewerCountEnabled()) ||
+        (getApp()->getStreamerMode()->isEnabled() &&
+         settings->streamerModeHideViewerCountAndDuration))
+    {
+        return {};
+    }
+
+    const auto selectedMode = headerViewerCountModeSetting().getEnum();
+    const auto entries = viewerCountEntries(channel);
+
+    uint64_t total = 0;
+    QStringList tooltipLines;
+    for (const auto &entry : entries)
+    {
+        if (!viewerCountModeIncludes(selectedMode, entry))
+        {
+            continue;
+        }
+
+        total += entry.count;
+        tooltipLines.append(viewerCountTooltipLine(entry));
+    }
+
+    if (tooltipLines.isEmpty())
+    {
+        return {};
+    }
+
+    return {
+        .visible = true,
+        .text = localizeNumbers(total),
+        .tooltip = tooltipLines.join(QStringLiteral("\n")),
+    };
 }
 
 const TwitchChannel *viewerListTwitchChannel(Channel *channel)
@@ -490,6 +690,7 @@ SplitHeader::SplitHeader(Split *split)
         this->updateChannelText();
     };
     getSettings()->headerViewerCount.connect(_, this->managedConnections_);
+    headerViewerCountModeSetting().connect(_, this->managedConnections_);
     getSettings()->headerStreamTitle.connect(_, this->managedConnections_);
     getSettings()->headerGame.connect(_, this->managedConnections_);
     getSettings()->headerUptime.connect(_, this->managedConnections_);
@@ -552,6 +753,27 @@ void SplitHeader::initializeLayout()
     this->dropdownButton_ =
         new DrawnButton(DrawnButton::Symbol::Kebab, {}, this);
 
+    this->viewerCountContainer_ = new BaseWidget(this);
+    this->viewerCountContainer_->setSizePolicy(QSizePolicy::Fixed,
+                                               QSizePolicy::Preferred);
+    this->viewerCountContainer_->hide();
+
+    this->viewerCountIcon_ = new ViewerCountIcon(this->viewerCountContainer_);
+    this->viewerCountIcon_->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+    this->viewerCountLabel_ = new Label(this->viewerCountContainer_);
+    this->viewerCountLabel_->setSizePolicy(QSizePolicy::Fixed,
+                                           QSizePolicy::Preferred);
+    this->viewerCountLabel_->setCentered(true);
+    this->viewerCountLabel_->setPadding(QMargins(2, 0, 4, 0));
+    this->viewerCountLabel_->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+    auto *viewerCountLayout = new QHBoxLayout(this->viewerCountContainer_);
+    viewerCountLayout->setContentsMargins(0, 0, 0, 0);
+    viewerCountLayout->setSpacing(0);
+    viewerCountLayout->addWidget(this->viewerCountIcon_);
+    viewerCountLayout->addWidget(this->viewerCountLabel_);
+
     this->clearActivityButton_ = new SvgButton(
         {
             .dark = ":/buttons/trash-darkMode.svg",
@@ -584,6 +806,8 @@ void SplitHeader::initializeLayout()
         makeWidget<BaseWidget>([](auto w) {
             w->setScaleIndependentSize(8, 4);
         }),
+        // viewer count
+        this->viewerCountContainer_,
         // mode
         this->modeButton_ = makeWidget<LabelButton>([&](auto w) {
             w->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
@@ -677,6 +901,7 @@ void SplitHeader::initializeLayout()
     this->setLayout(layout);
 
     this->titleLabel_->installEventFilter(this);
+    this->viewerCountContainer_->installEventFilter(this);
     this->queuedSlowChatCountLabel_->installEventFilter(this);
     this->alertsButton_->installEventFilter(this);
     this->moderationButton_->installEventFilter(this);
@@ -713,6 +938,13 @@ bool SplitHeader::eventFilter(QObject *watched, QEvent *event)
                 {
                     this->showHoverTooltip(target, this->tooltipText_, true);
                 }
+            }
+            else if (watched == this->viewerCountContainer_ &&
+                     this->viewerCountContainer_->isVisible() &&
+                     !this->viewerCountTooltipText_.isEmpty())
+            {
+                this->showHoverTooltip(target, this->viewerCountTooltipText_,
+                                       false);
             }
             else if (watched == this->queuedSlowChatCountLabel_ &&
                      !this->queuedSlowChatCountLabel_->getText().isEmpty())
@@ -1521,6 +1753,9 @@ void SplitHeader::scaleChangedEvent(float scale)
     this->alertsButton_->setFixedWidth(w);
     this->moderationButton_->setFixedWidth(w);
     this->chattersButton_->setFixedWidth(w);
+    this->viewerCountContainer_->setFixedHeight(w);
+    this->viewerCountIcon_->setFixedSize(static_cast<int>(17 * scale), w);
+    this->viewerCountLabel_->setFixedHeight(w);
     const auto queuedCountFont =
         getApp()->getFonts()->getFont(FontStyle::UiMediumBold, scale);
     const auto queuedCountMetrics = QFontMetrics(queuedCountFont);
@@ -1544,6 +1779,7 @@ void SplitHeader::updateChannelText()
     auto channel = this->split_->getChannel();
     this->isLive_ = false;
     this->tooltipText_ = QString();
+    this->viewerCountTooltipText_ = QString();
 
     auto title = channel->getLocalizedName();
 
@@ -1555,6 +1791,8 @@ void SplitHeader::updateChannelText()
     if (this->split_->isActivityPane())
     {
         this->resetThumbnail();
+        this->viewerCountContainer_->hide();
+        this->viewerCountLabel_->setText(QString());
         this->titleLabel_->setText(this->split_->activityPaneTitle());
         return;
     }
@@ -1628,6 +1866,21 @@ void SplitHeader::updateChannelText()
         title += " - filtered";
     }
 
+    const auto viewerCount = viewerCountDisplay(channel.get(), this->split_);
+    const auto refreshViewerCountTooltip =
+        viewerCount.visible && this->viewerCountContainer_->isVisible() &&
+        this->viewerCountContainer_->underMouse() &&
+        this->tooltipWidget_->isVisible();
+
+    this->viewerCountContainer_->setVisible(viewerCount.visible);
+    this->viewerCountLabel_->setText(viewerCount.text);
+    this->viewerCountTooltipText_ = viewerCount.tooltip;
+    if (refreshViewerCountTooltip && !this->viewerCountTooltipText_.isEmpty())
+    {
+        this->showHoverTooltip(this->viewerCountContainer_,
+                               this->viewerCountTooltipText_, false);
+    }
+
     this->titleLabel_->setText(title.isEmpty() ? "<empty>" : title);
 }
 
@@ -1642,6 +1895,8 @@ void SplitHeader::updateIcons()
 
     if (this->split_->isActivityPane())
     {
+        this->viewerCountContainer_->hide();
+        this->viewerCountLabel_->setText(QString());
         this->queuedSlowChatCountLabel_->hide();
         this->queuedSlowChatCountLabel_->setText(QString());
         this->alertsButton_->hide();
@@ -1846,6 +2101,8 @@ void SplitHeader::themeChangedEvent()
         palette.setColor(QPalette::WindowText, this->theme->splits.header.text);
     }
     this->titleLabel_->setPalette(palette);
+    palette.setColor(QPalette::WindowText, viewerCountColor());
+    this->viewerCountLabel_->setPalette(palette);
 
     auto queuedPalette = QPalette();
     queuedPalette.setColor(QPalette::WindowText, this->theme->splits.header.text);

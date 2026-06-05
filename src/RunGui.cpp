@@ -169,7 +169,8 @@ std::chrono::steady_clock::time_point signalsInitTime;
 // true.
 void initSignalHandler()
 {
-#if defined(NDEBUG) && !defined(CHATTERINO_WITH_CRASHPAD)
+#if defined(NDEBUG) && !defined(CHATTERINO_WITH_CRASHPAD) && \
+    !defined(Q_OS_WIN)
     signalsInitTime = std::chrono::steady_clock::now();
 
     signal(SIGSEGV, handleSignal);
@@ -246,6 +247,7 @@ void runGui(QApplication &a, const Paths &paths, Settings &settings,
             const Args &args, Updates &updates)
 {
     initQt(args);
+    a.setQuitOnLastWindowClosed(false);
     initResources();
     initSignalHandler();
 

@@ -129,6 +129,29 @@ enum class ActivityTimeDisplayMode : std::uint8_t {
     Timestamp,
 };
 
+enum class SplitHeaderViewerCountMode : std::uint8_t {
+    Total,
+    Twitch,
+    Kick,
+    YouTube,
+};
+
+constexpr std::optional<std::string_view> qmagicenumDisplayName(
+    SplitHeaderViewerCountMode value) noexcept
+{
+    switch (value)
+    {
+        case SplitHeaderViewerCountMode::Total:
+            return "Total (default)";
+        case SplitHeaderViewerCountMode::Twitch:
+            return "Twitch only";
+        case SplitHeaderViewerCountMode::Kick:
+            return "Kick only";
+        case SplitHeaderViewerCountMode::YouTube:
+            return "YouTube only";
+    }
+}
+
 constexpr std::optional<std::string_view> qmagicenumDisplayName(
     PlatformIndicatorMode value) noexcept
 {
@@ -979,6 +1002,7 @@ private:
 };
 
 Settings *getSettings();
+EnumStringSetting<SplitHeaderViewerCountMode> &headerViewerCountModeSetting();
 
 }  // namespace chatterino
 

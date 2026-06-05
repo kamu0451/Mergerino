@@ -765,8 +765,7 @@ QString openUsercard(const CommandContext &ctx)
                "should be open.");
     }
 
-    auto *userPopup =
-        new UserInfoPopup(getSettings()->autoCloseUserPopup, currentSplit);
+    auto *userPopup = new UserInfoPopup(false, currentSplit);
     userPopup->setData(userName, channel);
     userPopup->moveTo(QCursor::pos(), widgets::BoundsChecking::CursorPosition);
     userPopup->show();

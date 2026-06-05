@@ -7,6 +7,8 @@
 #include "common/Channel.hpp"
 #include "widgets/BaseWidget.hpp"
 
+#include <pajlada/signals/signalholder.hpp>
+
 #include <boost/signals2/connection.hpp>
 #include <QRect>
 #include <QSize>
@@ -31,6 +33,7 @@ public:
     explicit TwitchPollsAndPredictionsBar(QWidget *parent = nullptr);
 
     void setChannel(const ChannelPtr &channel);
+    void refreshNow();
 
     QSize sizeHint() const override;
 
@@ -77,6 +80,7 @@ private:
     void drawItem(QPainter &painter, const Item &item, QRect rect) const;
 
     std::weak_ptr<TwitchChannel> twitchChannel_;
+    pajlada::Signals::SignalHolder channelSignalHolder_;
     QTimer refreshTimer_;
     std::vector<Item> items_;
     std::optional<Item> pendingPoll_;

@@ -25,6 +25,12 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4.3.0
         with:
@@ -32,6 +38,8 @@ jobs:
           cache-key-prefix: windows-qt-6.9.3-v1
           modules: qtimageformats
           version: 6.9.3
+          arch: win64_msvc2022_64
+          setup-python: false
 
       - name: Enable Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1.13.0
@@ -54,12 +62,6 @@ jobs:
           path: ~/.conan2/
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-conan-user-
-
-      - name: Setup Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-          cache: pip
 
       - name: Prepare release auth config
         if: ${{ github.event_name != 'pull_request' }}

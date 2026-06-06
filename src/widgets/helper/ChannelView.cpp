@@ -666,9 +666,9 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
     this->initializeScrollbar();
     this->initializeSignals();
 
-    this->cursors_.neutral = QCursor(getResources().scrolling.neutralScroll);
-    this->cursors_.up = QCursor(getResources().scrolling.upScroll);
-    this->cursors_.down = QCursor(getResources().scrolling.downScroll);
+    this->cursors_.neutral = QCursor(Qt::SizeAllCursor);
+    this->cursors_.up = QCursor(Qt::UpArrowCursor);
+    this->cursors_.down = QCursor(Qt::SizeVerCursor);
 
     this->pauseTimer_.setSingleShot(true);
     QObject::connect(&this->pauseTimer_, &QTimer::timeout, this, [this] {
@@ -4753,7 +4753,8 @@ void ChannelView::scrollUpdateRequested()
     const qreal dpi = this->devicePixelRatioF();
     const qreal delta = dpi * (this->currentMousePosition_.y() -
                                this->lastMiddlePressPosition_.y());
-    const int cursorHeight = this->cursors_.neutral.pixmap().height();
+    const int cursorHeight =
+        std::max(16, this->cursors_.neutral.pixmap().height());
 
     if (fabs(delta) <= cursorHeight * dpi)
     {

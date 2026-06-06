@@ -3663,49 +3663,6 @@ QString YouTubeLiveChat::extractFirstMatch(const QString &text,
 QString YouTubeLiveChat::extractLiveChatContinuation(
     const QJsonObject &liveChatRenderer)
 {
-    auto menuItemText = [](const QJsonValue &value) {
-        if (value.isString())
-        {
-            return value.toString().trimmed();
-        }
-        return parseText(value);
-    };
-
-    const auto items =
-        liveChatRenderer["header"]
-            .toObject()["liveChatHeaderRenderer"]
-            .toObject()["viewSelector"]
-            .toObject()["sortFilterSubMenuRenderer"]
-            .toObject()["subMenuItems"]
-            .toArray();
-    for (const auto &itemValue : items)
-    {
-        const auto item = itemValue.toObject();
-        const auto continuation =
-            extractContinuationFromObject(item["continuation"].toObject());
-        if (continuation.isEmpty())
-        {
-            continue;
-        }
-
-        const auto title = menuItemText(item["title"]).toLower();
-        const auto subtitle = menuItemText(item["subtitle"]).toLower();
-        const auto accessibilityLabel =
-            item["accessibility"]
-                .toObject()["accessibilityData"]
-                .toObject()["label"]
-                .toString()
-                .trimmed()
-                .toLower();
-        const auto combinedText =
-            QString("%1 %2 %3").arg(title, subtitle, accessibilityLabel);
-        if (title == QStringLiteral("live chat") ||
-            combinedText.contains(QStringLiteral("all messages are visible")))
-        {
-            return continuation;
-        }
-    }
-
     const auto continuations = liveChatRenderer["continuations"].toArray();
     for (const auto &continuationValue : continuations)
     {
@@ -3717,6 +3674,13 @@ QString YouTubeLiveChat::extractLiveChatContinuation(
         }
     }
 
+    const auto items =
+        liveChatRenderer["header"]
+            .toObject()["liveChatHeaderRenderer"]
+            .toObject()["viewSelector"]
+            .toObject()["sortFilterSubMenuRenderer"]
+            .toObject()["subMenuItems"]
+            .toArray();
     for (const auto &itemValue : items)
     {
         const auto continuation =

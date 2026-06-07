@@ -52,7 +52,6 @@ public:
     void setPlatformIndicatorMode(PlatformIndicatorMode mode);
     void setSlowerChatEnabled(bool enabled);
     void setSlowerChatMessagesPerSecond(qreal value);
-    void setSlowerChatMessageAnimations(bool enabled);
     void setViewerCountEnabled(bool enabled);
     IndirectChannel getSelectedChannel() const;
     bool activityPaneEnabled() const;
@@ -60,7 +59,6 @@ public:
     PlatformIndicatorMode platformIndicatorMode() const;
     bool slowerChatEnabled() const;
     qreal slowerChatMessagesPerSecond() const;
-    bool slowerChatMessageAnimations() const;
     bool viewerCountEnabled() const;
     bool hasSeletedChannel() const;
 
@@ -90,11 +88,9 @@ private:
         QCheckBox *filterActivity{};
         QCheckBox *slowerChat{};
         QDoubleSpinBox *slowerChatRate{};
-        QCheckBox *messageAnimations{};
         QCheckBox *viewerCount{};
         QWidget *slowerChatRateLabel{};
         QWidget *slowerChatRateField{};
-        QWidget *messageAnimationsRow{};
         QVariantAnimation *slowerChatRateAnimation{};
         qreal slowerChatRateVisibilityProgress = 1.0;
 

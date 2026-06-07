@@ -17,6 +17,9 @@
 #include "providers/kick/KickAccount.hpp"
 #include "providers/kick/KickChannel.hpp"
 #include "providers/merged/MergedChannel.hpp"
+#include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/api/TwitchModerationAuth.hpp"
+#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchCommon.hpp"
@@ -32,7 +35,10 @@
 #include "widgets/buttons/Button.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
+#include "widgets/dialogs/CreatePollDialog.hpp"
+#include "widgets/dialogs/CreatePredictionDialog.hpp"
 #include "widgets/dialogs/EmotePopup.hpp"
+#include "widgets/dialogs/ManagePredictionDialog.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/CmdDeleteKeyFilter.hpp"
 #include "widgets/helper/MessageView.hpp"
@@ -43,16 +49,25 @@
 #include "widgets/splits/InputHighlighter.hpp"
 #include "widgets/splits/Split.hpp"
 #include "widgets/splits/SplitContainer.hpp"
+#include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 
 #include <QCompleter>
 #include <QCheckBox>
+#include <QDesktopServices>
+#include <QDialog>
+#include <QHBoxLayout>
 #include <QImage>
+#include <QLabel>
 #include <QMenu>
 #include <QPainter>
 #include <QPen>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QSvgRenderer>
+#include <QTimer>
+#include <QUrl>
 #include <QVariantAnimation>
+#include <QVBoxLayout>
 #include <QWidgetAction>
 
 #include <algorithm>
@@ -132,6 +147,296 @@ bool containsPlatform(const std::vector<MessagePlatform> &platforms,
                       MessagePlatform platform)
 {
     return std::ranges::find(platforms, platform) != platforms.end();
+}
+
+std::shared_ptr<TwitchChannel> twitchChannelForPollPrediction(
+    const ChannelPtr &channel)
+{
+    if (channel == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (auto twitch = std::dynamic_pointer_cast<TwitchChannel>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto merged = std::dynamic_pointer_cast<MergedChannel>(channel))
+    {
+        return std::dynamic_pointer_cast<TwitchChannel>(
+            merged->twitchChannel());
+    }
+
+    return nullptr;
+}
+
+bool canManagePollPredictions(const std::shared_ptr<TwitchChannel> &channel)
+{
+    return channel != nullptr &&
+           (channel->isMod() || channel->isBroadcaster());
+}
+
+bool hasBroadcasterPollPredictionToken(
+    const std::shared_ptr<TwitchChannel> &channel)
+{
+    if (channel == nullptr)
+    {
+        return false;
+    }
+
+    auto account = getApp()->getAccounts()->twitch.getCurrent();
+    if (account == nullptr || account->isAnon())
+    {
+        return false;
+    }
+
+    const auto roomId = channel->roomId();
+    if (!roomId.isEmpty())
+    {
+        return roomId == account->getUserId();
+    }
+
+    return channel->isBroadcaster();
+}
+
+bool needsModerationAuthLogin(const std::shared_ptr<TwitchChannel> &channel)
+{
+    if (!canManagePollPredictions(channel) ||
+        hasBroadcasterPollPredictionToken(channel))
+    {
+        return false;
+    }
+
+    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+    if (currentUser == nullptr || currentUser->isAnon())
+    {
+        return false;
+    }
+
+    return !TwitchModerationAuth::resolveForCurrentUser(
+                currentUser->getUserId())
+                .isValid();
+}
+
+void showModerationAuthLoginPrompt(QWidget *parent, const QString &currentUserID,
+                                   const QString &actionText,
+                                   std::function<void()> successCallback)
+{
+    auto *dialog = new QDialog(parent);
+    dialog->setAttribute(Qt::WA_DeleteOnClose, true);
+    dialog->setWindowTitle(QStringLiteral("Twitch Mod Actions Login"));
+    dialog->setMinimumWidth(460);
+
+    auto *layout = new QVBoxLayout(dialog);
+    layout->setContentsMargins(16, 14, 16, 14);
+    layout->setSpacing(10);
+
+    auto *title = new QLabel(QStringLiteral("Helper token required"), dialog);
+    title->setStyleSheet(QStringLiteral("QLabel { font-weight: 700; }"));
+    layout->addWidget(title);
+
+    auto *body = new QLabel(
+        QStringLiteral(
+            "To %1 as a moderator, Mergerino needs a Twitch browser helper "
+            "token. Copy the helper, run it in the twitch.tv console, then "
+            "click Paste Token.")
+            .arg(actionText),
+        dialog);
+    body->setWordWrap(true);
+    layout->addWidget(body);
+
+    auto *status = new QLabel(
+        QStringLiteral(
+            "On twitch.tv, press F12 to open DevTools, switch to Console, "
+            "paste the helper, then return here."),
+        dialog);
+    status->setWordWrap(true);
+    status->setStyleSheet(QStringLiteral("QLabel { color: #9aa0a6; }"));
+    layout->addWidget(status);
+
+    auto *buttonRow = new QHBoxLayout;
+    buttonRow->setContentsMargins(0, 4, 0, 0);
+    buttonRow->setSpacing(8);
+
+    auto *copyButton = new QPushButton(QStringLiteral("Copy Helper"), dialog);
+    auto *pasteButton = new QPushButton(QStringLiteral("Paste Token"), dialog);
+    auto *cancelButton = new QPushButton(QStringLiteral("Cancel"), dialog);
+
+    buttonRow->addStretch(1);
+    buttonRow->addWidget(copyButton);
+    buttonRow->addWidget(pasteButton);
+    buttonRow->addWidget(cancelButton);
+    layout->addLayout(buttonRow);
+
+    auto inFlight = std::make_shared<bool>(false);
+    const auto setStatus = [status](const QString &message, bool isError) {
+        status->setText(message);
+        status->setStyleSheet(QStringLiteral("QLabel { color: %1; }")
+                                  .arg(isError ? QStringLiteral("#ff7b72")
+                                               : QStringLiteral("#9aa0a6")));
+    };
+    const auto setBusy = [inFlight, copyButton, pasteButton, cancelButton](
+                             bool busy) {
+        *inFlight = busy;
+        copyButton->setEnabled(!busy);
+        pasteButton->setEnabled(!busy);
+        cancelButton->setEnabled(!busy);
+    };
+
+    QObject::connect(copyButton, &QPushButton::clicked, dialog,
+                     [setStatus] {
+                         TwitchModerationAuth::copyHelperToClipboard();
+                         QDesktopServices::openUrl(
+                             QUrl(QStringLiteral("https://www.twitch.tv/")));
+                         setStatus(QStringLiteral(
+                                       "Helper copied. On twitch.tv, press F12 "
+                                       "to open DevTools, switch to Console, "
+                                       "paste it, then return here and click "
+                                       "Paste Token."),
+                                   false);
+                     });
+
+    QObject::connect(cancelButton, &QPushButton::clicked, dialog,
+                     [dialog] {
+                         dialog->reject();
+                     });
+
+    QObject::connect(
+        pasteButton, &QPushButton::clicked, dialog,
+        [dialog = QPointer<QDialog>(dialog), currentUserID, setStatus, setBusy,
+         inFlight, successCallback = std::move(successCallback)]() mutable {
+            if (*inFlight)
+            {
+                return;
+            }
+
+            const auto clipboardText =
+                TwitchModerationAuth::clipboardText().trimmed();
+            if (clipboardText.isEmpty() ||
+                clipboardText.contains(QStringLiteral("localStorage")) ||
+                clipboardText.contains(
+                    QStringLiteral("Mergerino token copied")))
+            {
+                setStatus(QStringLiteral(
+                              "Run the copied helper in the Twitch console "
+                              "first. On twitch.tv, press F12 to open "
+                              "DevTools, switch to Console, paste it, then "
+                              "click Paste Token."),
+                          true);
+                return;
+            }
+
+            const auto payload =
+                TwitchModerationAuth::parseClipboardPayload(clipboardText);
+            if (payload.oauthToken.isEmpty())
+            {
+                setStatus(QStringLiteral(
+                              "Clipboard text is not a Twitch token. Run the "
+                              "copied helper on twitch.tv, then click Paste "
+                              "Token."),
+                          true);
+                return;
+            }
+
+            if (payload.oauthToken.size() > TwitchModerationAuth::maxTokenLength())
+            {
+                setStatus(QStringLiteral(
+                              "Clipboard token is too long to be a Twitch "
+                              "token. Run the copied helper on twitch.tv and "
+                              "paste only the copied token."),
+                          true);
+                return;
+            }
+
+            setBusy(true);
+            setStatus(QStringLiteral("Validating Twitch token..."), false);
+            TwitchModerationAuth::validateToken(
+                payload.oauthToken,
+                [dialog, currentUserID, payload, setStatus, setBusy,
+                 successCallback](TwitchModerationAuth::Account account) mutable {
+                    if (dialog == nullptr)
+                    {
+                        return;
+                    }
+
+                    QTimer::singleShot(
+                        0, dialog.data(),
+                        [dialog, currentUserID, payload, account, setStatus,
+                         setBusy, successCallback]() mutable {
+                            if (dialog == nullptr)
+                            {
+                                return;
+                            }
+
+                            setBusy(false);
+                            if (!account.supportsWebGql())
+                            {
+                                setStatus(QStringLiteral(
+                                              "That token is not a Twitch "
+                                              "browser token. Run the copied "
+                                              "helper on twitch.tv."),
+                                          true);
+                                return;
+                            }
+
+                            const auto currentID = currentUserID.trimmed();
+                            if (!currentID.isEmpty() &&
+                                !account.userId.isEmpty() &&
+                                account.userId != currentID)
+                            {
+                                setStatus(QStringLiteral(
+                                              "That token belongs to a "
+                                              "different Twitch account. Log "
+                                              "into twitch.tv with the same "
+                                              "account Mergerino is using, "
+                                              "then run the helper again."),
+                                          true);
+                                return;
+                            }
+
+                            account.clientIntegrity = payload.clientIntegrity;
+                            account.deviceId = payload.deviceId;
+                            TwitchModerationAuth::saveAccount(account);
+                            dialog->accept();
+                            successCallback();
+                        });
+                },
+                [dialog, setStatus, setBusy](const QString &error) {
+                    if (dialog == nullptr)
+                    {
+                        return;
+                    }
+
+                    QTimer::singleShot(0, dialog.data(),
+                                       [dialog, error, setStatus, setBusy] {
+                                           if (dialog == nullptr)
+                                           {
+                                               return;
+                                           }
+
+                                           setBusy(false);
+                                           setStatus(error, true);
+                                       });
+                });
+        });
+
+    dialog->show();
+    dialog->activateWindow();
+    dialog->raise();
+}
+
+QUrl twitchPollPopoutUrl(const TwitchChannel &channel)
+{
+    return QUrl(QStringLiteral("https://www.twitch.tv/popout/%1/poll")
+                    .arg(channel.getName()));
+}
+
+QUrl twitchPredictionSummaryUrl(const TwitchChannel &channel)
+{
+    return QUrl(QStringLiteral(
+                    "https://www.twitch.tv/popout/%1/predictions/summary")
+                    .arg(channel.getName()));
 }
 
 std::vector<MessagePlatform> platformSelectionIntersection(
@@ -426,11 +731,23 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
         this->ui_.textEdit->setCompleter(completer);
         this->inputHighlighter->setChannel(this->split_->getChannel());
         this->updatePlatformSelector();
+        this->updatePollPredictionButtons();
         this->updateEmotePopupChannel();
     });
     this->signalHolder_.managedConnect(this->sendPlatformChanged, [this] {
         this->updateEmotePopupChannel();
     });
+    this->managedConnections_.managedConnect(
+        TwitchModerationAuth::accountChanged(), [this] {
+            this->updatePollPredictionButtons();
+        });
+
+    auto *pollPredictionButtonTimer = new QTimer(this);
+    pollPredictionButtonTimer->setInterval(1000);
+    QObject::connect(pollPredictionButtonTimer, &QTimer::timeout, this, [this] {
+        this->updatePollPredictionButtons();
+    });
+    pollPredictionButtonTimer->start();
 
     getSettings()->enableSpellChecking.connect(
         [this] {
@@ -448,6 +765,7 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
     });
     this->scaleChangedEvent(this->scale());
     this->updatePlatformSelector();
+    this->updatePollPredictionButtons();
     this->signalHolder_.managedConnect(getApp()->getHotkeys()->onItemsUpdated,
                                        [this]() {
                                            this->clearShortcuts();
@@ -577,6 +895,31 @@ void SplitInput::initLayout()
         this->ui_.platformButton->setPaintOffset(QPoint{0, -2});
         buttonHbox->addWidget(this->ui_.platformButton);
 
+        this->ui_.predictionButton = new SvgButton(
+            {
+                .dark = ":/buttons/startPrediction.svg",
+                .light = ":/buttons/startPrediction.svg",
+            },
+            nullptr, QSize{4, 1});
+        this->ui_.predictionButton->setContentSize(QSize{18, 18});
+        this->ui_.predictionButton->setPaintOffset(QPoint{0, -2});
+        this->ui_.predictionButton->setToolTip(
+            QStringLiteral("Start prediction"));
+        this->ui_.predictionButton->installEventFilter(this);
+        buttonHbox->addWidget(this->ui_.predictionButton);
+
+        this->ui_.pollButton = new SvgButton(
+            {
+                .dark = ":/buttons/startPoll.svg",
+                .light = ":/buttons/startPoll.svg",
+            },
+            nullptr, QSize{4, 1});
+        this->ui_.pollButton->setContentSize(QSize{22, 22});
+        this->ui_.pollButton->setPaintOffset(QPoint{0, -2});
+        this->ui_.pollButton->setToolTip(QStringLiteral("Start poll"));
+        this->ui_.pollButton->installEventFilter(this);
+        buttonHbox->addWidget(this->ui_.pollButton);
+
         this->ui_.emoteButton = new SvgButton(
             {
                 .dark = ":/buttons/emote.svg",
@@ -607,6 +950,14 @@ void SplitInput::initLayout()
     // open emote popup
     QObject::connect(this->ui_.emoteButton, &Button::leftClicked, [this] {
         this->openEmotePopup();
+    });
+    QObject::connect(this->ui_.predictionButton, &Button::leftClicked, [this] {
+        this->updatePollPredictionButtons();
+        this->openPredictionDialog();
+    });
+    QObject::connect(this->ui_.pollButton, &Button::leftClicked, [this] {
+        this->updatePollPredictionButtons();
+        this->openPollDialog();
     });
 
     QObject::connect(this->ui_.platformButton, &Button::leftClicked, [this] {
@@ -723,9 +1074,19 @@ void SplitInput::updateEmoteButton()
 {
     auto scale = this->scale();
 
-    this->ui_.emoteButton->setFixedHeight(int(26 * scale));
-    // Make button slightly wider so it's easier to click
-    this->ui_.emoteButton->setFixedWidth(int(24 * scale));
+    for (auto *button :
+         {this->ui_.predictionButton, this->ui_.pollButton,
+          this->ui_.emoteButton})
+    {
+        if (button == nullptr)
+        {
+            continue;
+        }
+
+        button->setFixedHeight(int(26 * scale));
+        // Make button slightly wider so it's easier to click
+        button->setFixedWidth(int(24 * scale));
+    }
 }
 
 void SplitInput::updatePlatformButtonLayout(int platformCount)
@@ -1000,6 +1361,73 @@ void SplitInput::updatePlatformSelector(bool animate)
     {
         this->updateEmotePopupChannel();
     }
+}
+
+void SplitInput::updatePollPredictionButtons()
+{
+    if (this->split_ == nullptr || this->ui_.predictionButton == nullptr ||
+        this->ui_.pollButton == nullptr)
+    {
+        return;
+    }
+
+    auto *pollPredictionBar = this->split_->twitchPollsAndPredictionsBar_;
+    if (pollPredictionBar == nullptr)
+    {
+        return;
+    }
+
+    const auto channel = this->split_->getChannel();
+    const auto twitchChannel = twitchChannelForPollPrediction(channel);
+    const bool twitchVisible = twitchChannel != nullptr;
+    const bool canManage = canManagePollPredictions(twitchChannel);
+    const bool predictionVisible =
+        twitchVisible && (canManage || pollPredictionBar->hasOpenPrediction());
+    const bool pollVisible =
+        twitchVisible && (canManage || pollPredictionBar->hasActivePoll());
+
+    this->ui_.predictionButton->setVisible(predictionVisible);
+    this->ui_.predictionButton->setEnabled(predictionVisible);
+    QString predictionTooltip = QStringLiteral("Start prediction");
+    if (predictionVisible)
+    {
+        if (!canManage && pollPredictionBar->hasOpenPrediction())
+        {
+            predictionTooltip = QStringLiteral("Open prediction on Twitch");
+        }
+        else if (needsModerationAuthLogin(twitchChannel))
+        {
+            predictionTooltip = QStringLiteral(
+                "Login to Twitch mod actions to start or manage predictions");
+        }
+        else
+        {
+            predictionTooltip =
+                pollPredictionBar->predictionButtonTooltip(canManage);
+        }
+    }
+    this->ui_.predictionButton->setToolTip(predictionTooltip);
+
+    this->ui_.pollButton->setVisible(pollVisible);
+    this->ui_.pollButton->setEnabled(pollVisible);
+    QString pollTooltip = QStringLiteral("Start poll");
+    if (pollVisible)
+    {
+        if (!canManage && pollPredictionBar->hasActivePoll())
+        {
+            pollTooltip = QStringLiteral("Open poll on Twitch");
+        }
+        else if (needsModerationAuthLogin(twitchChannel))
+        {
+            pollTooltip =
+                QStringLiteral("Login to Twitch mod actions to start polls");
+        }
+        else
+        {
+            pollTooltip = pollPredictionBar->pollButtonTooltip(canManage);
+        }
+    }
+    this->ui_.pollButton->setToolTip(pollTooltip);
 }
 
 void SplitInput::applyActiveAccountProviderDefault()
@@ -1397,6 +1825,243 @@ void SplitInput::updateCancelReplyButton()
 
     this->ui_.cancelReplyButton->setFixedHeight(int(12 * scale));
     this->ui_.cancelReplyButton->setFixedWidth(int(20 * scale));
+}
+
+void SplitInput::openPollDialog()
+{
+    auto channel = this->split_->getChannel();
+    auto twitchChannel = twitchChannelForPollPrediction(channel);
+    if (twitchChannel == nullptr)
+    {
+        return;
+    }
+    const bool canManage = canManagePollPredictions(twitchChannel);
+    const bool hasActivePoll =
+        this->split_->twitchPollsAndPredictionsBar_->hasActivePoll();
+    if (!canManage)
+    {
+        if (hasActivePoll)
+        {
+            QDesktopServices::openUrl(twitchPollPopoutUrl(*twitchChannel));
+        }
+        return;
+    }
+
+    if (!getApp()->getAccounts()->twitch.isLoggedIn())
+    {
+        if (channel != nullptr)
+        {
+            channel->addSystemMessage(
+                QStringLiteral("You must be logged in to create a poll!"));
+        }
+        return;
+    }
+
+    if (!hasBroadcasterPollPredictionToken(twitchChannel))
+    {
+        auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+        QString authError;
+        const auto moderationAccount =
+            TwitchModerationAuth::resolveForCurrentUser(
+                currentUser != nullptr ? currentUser->getUserId() : QString{},
+                &authError);
+        if (!moderationAccount.isValid())
+        {
+            showModerationAuthLoginPrompt(
+                this,
+                currentUser != nullptr ? currentUser->getUserId() : QString{},
+                QStringLiteral("start Twitch polls"),
+                [guard = QPointer<SplitInput>(this)] {
+                    if (guard != nullptr)
+                    {
+                        guard->openPollDialog();
+                    }
+                });
+            return;
+        }
+    }
+
+    CreatePollDialog::showDialog(std::move(channel), *twitchChannel);
+}
+
+void SplitInput::openPredictionDialog()
+{
+    auto channel = this->split_->getChannel();
+    auto twitchChannel = twitchChannelForPollPrediction(channel);
+    if (twitchChannel == nullptr)
+    {
+        return;
+    }
+    const bool canManage = canManagePollPredictions(twitchChannel);
+    const bool canUseBroadcasterHelix =
+        hasBroadcasterPollPredictionToken(twitchChannel);
+    const bool hasOpenPrediction =
+        this->split_->twitchPollsAndPredictionsBar_->hasOpenPrediction();
+    if (!canManage)
+    {
+        if (hasOpenPrediction)
+        {
+            QDesktopServices::openUrl(
+                twitchPredictionSummaryUrl(*twitchChannel));
+        }
+        return;
+    }
+
+    if (!canUseBroadcasterHelix)
+    {
+        auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+        if (currentUser == nullptr || currentUser->isAnon())
+        {
+            if (channel != nullptr)
+            {
+                channel->addSystemMessage(QStringLiteral(
+                    "You must be logged in to create or manage a prediction!"));
+            }
+            return;
+        }
+
+        QString authError;
+        const auto moderationAccount =
+            TwitchModerationAuth::resolveForCurrentUser(
+                currentUser->getUserId(), &authError);
+        if (!moderationAccount.isValid())
+        {
+            showModerationAuthLoginPrompt(
+                this,
+                currentUser != nullptr ? currentUser->getUserId() : QString{},
+                QStringLiteral("start or manage Twitch predictions"),
+                [guard = QPointer<SplitInput>(this)] {
+                    if (guard != nullptr)
+                    {
+                        guard->openPredictionDialog();
+                    }
+                });
+            return;
+        }
+
+        if (hasOpenPrediction)
+        {
+            const auto roomId = twitchChannel->roomId();
+            const auto channelLogin = twitchChannel->getName();
+            const auto openLocalPrediction =
+                [channel, roomId, channelLogin] {
+                    const auto predictionJson =
+                        TwitchPollsAndPredictionsBar::localPredictionJson(
+                            roomId);
+                    if (!predictionJson ||
+                        predictionJson->value(QStringLiteral("id"))
+                            .toString()
+                            .trimmed()
+                            .isEmpty())
+                    {
+                        return false;
+                    }
+
+                    ManagePredictionDialog::showDialog(
+                        channel, roomId, channelLogin,
+                        HelixPrediction(*predictionJson), true);
+                    return true;
+                };
+
+            TwitchWebApi::getActivePollAndPredictions(
+                roomId, moderationAccount.clientId,
+                moderationAccount.oauthToken,
+                [channel, roomId, channelLogin,
+                 openLocalPrediction](const HelixPolls &,
+                                      const HelixPredictions &result) {
+                    const auto openPrediction = std::find_if(
+                        result.predictions.begin(), result.predictions.end(),
+                        [](const HelixPrediction &prediction) {
+                            return prediction.status == "ACTIVE" ||
+                                   prediction.status == "LOCKED";
+                        });
+                    if (openPrediction != result.predictions.end())
+                    {
+                        TwitchPollsAndPredictionsBar::rememberLocalPrediction(
+                            roomId, *openPrediction);
+                        ManagePredictionDialog::showDialog(
+                            channel, roomId, channelLogin, *openPrediction,
+                            true);
+                        return;
+                    }
+
+                    if (openLocalPrediction())
+                    {
+                        return;
+                    }
+
+                    if (channel != nullptr)
+                    {
+                        channel->addSystemMessage(
+                            "Could not find an open prediction");
+                    }
+                },
+                [channel, openLocalPrediction](const auto &error) {
+                    if (openLocalPrediction())
+                    {
+                        return;
+                    }
+
+                    if (channel != nullptr)
+                    {
+                        channel->addSystemMessage(
+                            "Failed to query predictions - " + error);
+                    }
+                });
+            return;
+        }
+
+        CreatePredictionDialog::showDialog(std::move(channel), *twitchChannel);
+        return;
+    }
+
+    if (!getApp()->getAccounts()->twitch.isLoggedIn())
+    {
+        if (channel != nullptr)
+        {
+            channel->addSystemMessage(QStringLiteral(
+                "You must be logged in to create or manage a prediction!"));
+        }
+        return;
+    }
+
+    const auto roomId = twitchChannel->roomId();
+    const auto channelLogin = twitchChannel->getName();
+    getHelix()->getPredictions(
+        roomId, {}, 20, {},
+        [channel, roomId, channelLogin](const auto &result) {
+            const auto openPrediction = std::find_if(
+                result.predictions.begin(), result.predictions.end(),
+                [](const auto &prediction) {
+                    return prediction.status == "ACTIVE" ||
+                           prediction.status == "LOCKED";
+                });
+            if (openPrediction != result.predictions.end())
+            {
+                ManagePredictionDialog::showDialog(channel, roomId, channelLogin,
+                                                   *openPrediction);
+                return;
+            }
+
+            if (auto twitch = twitchChannelForPollPrediction(channel))
+            {
+                CreatePredictionDialog::showDialog(channel, *twitch);
+                return;
+            }
+
+            if (channel != nullptr)
+            {
+                channel->addSystemMessage(QStringLiteral(
+                    "The prediction button only works in Twitch channels"));
+            }
+        },
+        [channel](const auto &error) {
+            if (channel != nullptr)
+            {
+                channel->addSystemMessage("Failed to query predictions - " +
+                                          error);
+            }
+        });
 }
 
 void SplitInput::openEmotePopup()
@@ -1877,6 +2542,17 @@ void SplitInput::addShortcuts()
 
 bool SplitInput::eventFilter(QObject *obj, QEvent *event)
 {
+    const bool isPollPredictionButton =
+        (this->ui_.predictionButton != nullptr &&
+         obj == this->ui_.predictionButton) ||
+        (this->ui_.pollButton != nullptr && obj == this->ui_.pollButton);
+    if (isPollPredictionButton &&
+        (event->type() == QEvent::Enter ||
+         event->type() == QEvent::ToolTip))
+    {
+        this->updatePollPredictionButtons();
+    }
+
     if (event->type() == QEvent::ShortcutOverride ||
         event->type() == QEvent::Shortcut)
     {
@@ -2022,11 +2698,13 @@ void SplitInput::onCursorPositionChanged()
 void SplitInput::updateCompletionPopup()
 {
     auto *channel = this->split_->getChannel().get();
+    bool showCommandCompletion = true;
     bool showEmoteCompletion = getSettings()->emoteCompletionWithColon;
     bool showUsernameCompletion =
         dynamic_cast<ChannelChatters *>(channel) != nullptr &&
         getSettings()->showUsernameCompletionMenu;
-    if (!showEmoteCompletion && !showUsernameCompletion)
+    if (!showCommandCompletion && !showEmoteCompletion &&
+        !showUsernameCompletion)
     {
         this->hideCompletionPopup();
         return;
@@ -2049,6 +2727,20 @@ void SplitInput::updateCompletionPopup()
         if (text[i] == ' ')
         {
             this->hideCompletionPopup();
+            return;
+        }
+
+        if (text[i] == '/' && showCommandCompletion)
+        {
+            if (text.left(i).trimmed().isEmpty())
+            {
+                this->showCompletionPopup(text.mid(i, position - i + 1),
+                                          CompletionKind::Command);
+            }
+            else
+            {
+                this->hideCompletionPopup();
+            }
             return;
         }
 
@@ -2131,6 +2823,10 @@ void SplitInput::insertCompletionText(const QString &input_) const
     {
         bool done = false;
         if (text[i] == ':')
+        {
+            done = true;
+        }
+        else if (text[i] == '/')
         {
             done = true;
         }

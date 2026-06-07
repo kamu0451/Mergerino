@@ -10,6 +10,7 @@
 
 #include <QString>
 
+#include <functional>
 #include <vector>
 
 class QLabel;
@@ -28,11 +29,13 @@ class ManagePredictionDialog final : public BasePopup
 public:
     static void showDialog(ChannelPtr channel, QString broadcasterID,
                            QString channelLogin,
-                           const HelixPrediction &prediction);
+                           const HelixPrediction &prediction,
+                           bool useModerationAuth = false);
 
     ManagePredictionDialog(ChannelPtr channel, QString broadcasterID,
                            QString channelLogin,
                            const HelixPrediction &prediction,
+                           bool useModerationAuth = false,
                            QWidget *parent = nullptr);
 
 protected:
@@ -46,6 +49,10 @@ private:
     void updateDialogSize();
     void setChoosingOutcome(bool choosing);
     void selectOutcome(const QString &outcomeID);
+    void endPrediction(bool refundPoints, QString winningOutcomeID,
+                       std::function<void(const HelixPrediction &)>
+                           successCallback,
+                       std::function<void(const QString &)> failureCallback);
     void cancelPrediction();
     void lockPrediction();
     void resolvePrediction();
@@ -60,6 +67,7 @@ private:
     QString channelLogin_;
     HelixPrediction prediction_;
     QString selectedOutcomeID_;
+    bool useModerationAuth_ = false;
 
     QLabel *statusLabel_ = nullptr;
     QLabel *descriptionLabel_ = nullptr;

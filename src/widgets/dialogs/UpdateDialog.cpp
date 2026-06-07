@@ -272,6 +272,19 @@ void UpdateDialog::updateStatusChanged(Updates::Status status)
 
     switch (status)
     {
+        case Updates::None: {
+            this->ui_.label->setText("Check for updates to load the latest "
+                                     "Mergerino release information.");
+            this->updateGeometry();
+        }
+        break;
+
+        case Updates::Searching: {
+            this->ui_.label->setText("Checking for Mergerino updates...");
+            this->updateGeometry();
+        }
+        break;
+
         case Updates::UpdateAvailable: {
             this->ui_.label->setText(
                 getApp()->getUpdates().buildUpdateAvailableText());
@@ -279,8 +292,27 @@ void UpdateDialog::updateStatusChanged(Updates::Status status)
         }
         break;
 
+        case Updates::NoUpdateAvailable: {
+            const auto latestVersion = getApp()->getUpdates().getOnlineVersion();
+            if (latestVersion.isEmpty())
+            {
+                this->ui_.label->setText("Mergerino is up to date.");
+            }
+            else
+            {
+                this->ui_.label->setText(
+                    QString("Mergerino is up to date.\n\nCurrent: %1\nLatest: "
+                            "%2")
+                        .arg(getApp()->getUpdates().getCurrentVersion(),
+                             latestVersion));
+            }
+            this->updateGeometry();
+        }
+        break;
+
         case Updates::SearchFailed: {
             this->ui_.label->setText("Failed to load version information.");
+            this->updateGeometry();
         }
         break;
 
@@ -288,16 +320,19 @@ void UpdateDialog::updateStatusChanged(Updates::Status status)
             this->ui_.label->setText(
                 "Downloading updates.\n\nMergerino will restart "
                 "automatically when the download is done.");
+            this->updateGeometry();
         }
         break;
 
         case Updates::DownloadFailed: {
             this->ui_.label->setText("Failed to download the update.");
+            this->updateGeometry();
         }
         break;
 
         case Updates::WriteFileFailed: {
             this->ui_.label->setText("Failed to save the update to disk.");
+            this->updateGeometry();
         }
         break;
 
@@ -305,15 +340,15 @@ void UpdateDialog::updateStatusChanged(Updates::Status status)
             this->ui_.label->setText("The portable updater (expected in " %
                                      Updates::portableUpdaterPath() %
                                      ") was not found.");
+            this->updateGeometry();
         }
         break;
 
         case Updates::RunUpdaterFailed: {
             this->ui_.label->setText("Failed to run the updater.");
+            this->updateGeometry();
         }
         break;
-
-        default:;
     }
 }
 

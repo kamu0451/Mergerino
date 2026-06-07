@@ -525,7 +525,7 @@ private:
     // channelConnections_ will be cleared when the underlying channel of the channelview changes
     pajlada::Signals::SignalHolder channelConnections_;
 
-    std::unordered_set<std::shared_ptr<MessageLayout>> messagesOnScreen_;
+    std::unordered_set<std::shared_ptr<MessageLayout>> messagesWithBuffers_;
 
     MessageColors messageColors_;
     MessageColors activityMessageColors_;

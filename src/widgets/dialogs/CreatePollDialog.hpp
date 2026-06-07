@@ -72,10 +72,12 @@ private:
     void updateRemoveButton(ResponseRow &row, bool visible, bool animated);
     int visibleResponseCount() const;
     int dialogHeightForVisibleResponses(int visibleCount) const;
+    int errorLabelHeight() const;
     void updateDialogHeight(int visibleCount, bool animated);
     void updateStartButton();
     void removeResponse(size_t index);
     void submit();
+    void finishSubmitFailure(const QString &message);
     void showError(const QString &message);
     void clearError();
     QStringList responses() const;

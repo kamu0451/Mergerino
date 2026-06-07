@@ -22,6 +22,7 @@
 #include "util/Helpers.hpp"
 #include "util/IncognitoBrowser.hpp"
 #include "widgets/BaseWindow.hpp"
+#include "widgets/dialogs/UpdateDialog.hpp"
 #include "widgets/helper/FontSettingWidget.hpp"
 #include "widgets/settingspages/GeneralPageView.hpp"
 #include "widgets/settingspages/SettingWidget.hpp"
@@ -561,6 +562,10 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                      "message to help better tell them apart.")
         ->addTo(layout);
 
+    SettingWidget::checkbox("Message animations", s.messageAnimations)
+        ->setTooltip("Smoothly animate new messages in every tab.")
+        ->addTo(layout);
+
     SettingWidget::dropdown("Merged platform indicator",
                             s.mergedPlatformIndicatorMode)
         ->setTooltip("Use platform-colored merged rows, platform logo badges, "
@@ -1025,6 +1030,19 @@ void GeneralPage::initLayout(GeneralPageView &layout)
 #else
         QDesktopServices::openUrl(getApp()->getPaths().rootAppDataDirectory);
 #endif
+    });
+
+    layout.addSubtitle("Updates");
+    layout.addDescription(
+        "Check GitHub for the latest Mergerino release and install it if one "
+        "is available.");
+    layout.addButton("Check for updates", [] {
+        getApp()->getUpdates().checkForUpdates();
+
+        auto *dialog = new UpdateDialog();
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
     });
 
     layout.addSubtitle("Chatterino Import");

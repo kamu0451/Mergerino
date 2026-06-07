@@ -59,11 +59,14 @@ private:
     void updateOutcomeRowVisibility(OutcomeRow &row, bool visible,
                                     bool animated);
     void updateRemoveButton(OutcomeRow &row, bool visible, bool animated);
+    int visibleOutcomeCount() const;
     int dialogHeightForVisibleOutcomes(int visibleCount) const;
+    int errorLabelHeight() const;
     void updateDialogHeight(int visibleCount, bool animated);
     void updateStartButton();
     void removeOutcome(size_t index);
     void submit();
+    void finishSubmitFailure(const QString &message);
     void showError(const QString &message);
     void clearError();
     QStringList outcomes() const;

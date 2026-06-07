@@ -11,11 +11,14 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/api/TwitchModerationAuth.hpp"
+#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "widgets/Window.hpp"
+#include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
@@ -45,6 +48,7 @@
 #include <QSpinBox>
 #include <QStyle>
 #include <QStyleOptionButton>
+#include <QTimer>
 #include <QUrl>
 #include <QVariantAnimation>
 #include <QVBoxLayout>
@@ -54,6 +58,7 @@
 #include <algorithm>
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <utility>
 
 namespace chatterino {
@@ -1169,7 +1174,24 @@ int CreatePollDialog::dialogHeightForVisibleResponses(int visibleCount) const
         height += this->pointsContainer_->sizeHint().height();
     }
 
+    height += this->errorLabelHeight();
+
     return height;
+}
+
+int CreatePollDialog::errorLabelHeight() const
+{
+    if (this->errorLabel_ == nullptr || !this->errorLabel_->isVisible())
+    {
+        return 0;
+    }
+
+    const auto labelWidth = DIALOG_WIDTH - 32;
+    const auto wrappedHeight = this->errorLabel_->heightForWidth(labelWidth);
+    const auto labelHeight =
+        wrappedHeight > 0 ? wrappedHeight : this->errorLabel_->sizeHint().height();
+
+    return labelHeight + 8;
 }
 
 void CreatePollDialog::updateDialogHeight(int visibleCount, bool animated)
@@ -1268,50 +1290,111 @@ void CreatePollDialog::submit()
 
     const auto durationSeconds = this->duration_->currentData().toInt();
     const auto points = this->allowAdditionalVotes_->isChecked()
-                            ? this->pointsPerVote_->value()
-                            : 0;
+                            ? std::optional<int>{this->pointsPerVote_->value()}
+                            : std::nullopt;
     QPointer<CreatePollDialog> self(this);
+    const auto scheduleFailure = [self](const QString &message) {
+        if (self == nullptr)
+        {
+            return;
+        }
 
-    getHelix()->createPoll(
-        this->broadcasterID_, title, choices,
-        std::chrono::seconds(durationSeconds), points,
-        [channel = this->channel_, title, self] {
+        QTimer::singleShot(0, self.data(), [self, message] {
+            if (self != nullptr)
+            {
+                self->finishSubmitFailure(message);
+            }
+        });
+    };
+
+    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+    if (currentUser == nullptr || currentUser->isAnon() ||
+        currentUser->getOAuthToken().isEmpty())
+    {
+        scheduleFailure(QStringLiteral("You must be logged in to create a poll."));
+        return;
+    }
+
+    std::function<void()> successCallback = [channel = this->channel_, title,
+                                             self] {
+        if (self == nullptr)
+        {
+            return;
+        }
+
+        QTimer::singleShot(0, self.data(), [channel, title, self] {
+            if (self == nullptr)
+            {
+                return;
+            }
+
             if (channel != nullptr)
             {
                 channel->addSystemMessage(
                     QStringLiteral("Created poll: '%1'").arg(title));
                 notifyPollsAndPredictionsChanged(channel);
             }
-            if (self != nullptr)
-            {
-                self->close();
-            }
-        },
-        [channel = this->channel_, self](const auto &error) {
-            if (channel != nullptr)
-            {
-                channel->addSystemMessage("Failed to create poll - " + error);
-            }
-            if (self != nullptr)
-            {
-                self->submitting_ = false;
-                self->showError("Failed to create poll - " + error);
-                self->updateResponseRows(false);
-                self->updateStartButton();
-            }
+            self->close();
         });
+    };
+    std::function<void(const QString &)> failureCallback =
+        [scheduleFailure](const QString &error) {
+        scheduleFailure("Failed to create poll - " + error);
+    };
+
+    if (currentUser->getUserId() == this->broadcasterID_)
+    {
+        getHelix()->createPoll(this->broadcasterID_, title, choices,
+                               std::chrono::seconds(durationSeconds),
+                               points.value_or(0), std::move(successCallback),
+                               std::move(failureCallback));
+        return;
+    }
+
+    QString authError;
+    const auto moderationAccount =
+        TwitchModerationAuth::resolveForCurrentUser(currentUser->getUserId(),
+                                                    &authError);
+    if (!moderationAccount.isValid())
+    {
+        scheduleFailure("Failed to create poll - " + authError);
+        return;
+    }
+
+    TwitchWebApi::startPoll(
+        this->broadcasterID_, title, choices, durationSeconds, points,
+        moderationAccount.clientId, moderationAccount.oauthToken,
+        [successCallback = std::move(successCallback),
+         broadcasterID = this->broadcasterID_, title, choices,
+         durationSeconds]() mutable {
+            TwitchPollsAndPredictionsBar::rememberLocalPoll(
+                broadcasterID, title, choices, durationSeconds);
+            successCallback();
+        },
+        std::move(failureCallback));
+}
+
+void CreatePollDialog::finishSubmitFailure(const QString &message)
+{
+    this->submitting_ = false;
+    this->updateResponseRows(false);
+    this->updateStartButton();
+    this->showError(message);
 }
 
 void CreatePollDialog::showError(const QString &message)
 {
     this->errorLabel_->setText(message);
     this->errorLabel_->show();
+    this->errorLabel_->updateGeometry();
+    this->updateDialogHeight(this->visibleResponseCount(), false);
 }
 
 void CreatePollDialog::clearError()
 {
     this->errorLabel_->clear();
     this->errorLabel_->hide();
+    this->updateDialogHeight(this->visibleResponseCount(), false);
 }
 
 QStringList CreatePollDialog::responses() const

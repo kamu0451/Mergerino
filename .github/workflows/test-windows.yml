@@ -31,8 +31,7 @@ jobs:
       fail-fast: false
     env:
       QT_MODULES: qtimageformats
-      C2_USE_OPENSSL3: ${{ case(startsWith(matrix.qt-version, '6.'), 'True', 'False') }}
-      C2_CONAN_CACHE_SUFFIX: ${{ case(startsWith(matrix.qt-version, '6.'), '-QT6', '') }}
+      C2_USE_OPENSSL3: "True"
 
     steps:
       - uses: actions/checkout@v6

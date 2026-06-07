@@ -6,14 +6,20 @@
 
 #include "Application.hpp"
 #include "common/Channel.hpp"
+#include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
+#include "providers/twitch/api/TwitchModerationAuth.hpp"
+#include "providers/twitch/api/TwitchWebApi.hpp"
+#include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/Helpers.hpp"
 #include "widgets/Window.hpp"
+#include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
 #include <QHBoxLayout>
@@ -483,11 +489,12 @@ private:
 void ManagePredictionDialog::showDialog(ChannelPtr channel,
                                         QString broadcasterID,
                                         QString channelLogin,
-                                        const HelixPrediction &prediction)
+                                        const HelixPrediction &prediction,
+                                        bool useModerationAuth)
 {
     auto *dialog = new ManagePredictionDialog(
         std::move(channel), std::move(broadcasterID), std::move(channelLogin),
-        prediction,
+        prediction, useModerationAuth,
         static_cast<QWidget *>(&(getApp()->getWindows()->getMainWindow())));
     dialog->setAttribute(Qt::WA_DeleteOnClose, true);
     dialog->show();
@@ -497,7 +504,7 @@ void ManagePredictionDialog::showDialog(ChannelPtr channel,
 
 ManagePredictionDialog::ManagePredictionDialog(
     ChannelPtr channel, QString broadcasterID, QString channelLogin,
-    const HelixPrediction &prediction, QWidget *parent)
+    const HelixPrediction &prediction, bool useModerationAuth, QWidget *parent)
     : BasePopup(
           {
               BaseWindow::EnableCustomFrame,
@@ -509,6 +516,7 @@ ManagePredictionDialog::ManagePredictionDialog(
     , broadcasterID_(std::move(broadcasterID))
     , channelLogin_(std::move(channelLogin))
     , prediction_(prediction)
+    , useModerationAuth_(useModerationAuth)
 {
     this->setWindowTitle(QStringLiteral("Manage Prediction"));
     this->setScaleIndependentSize(DIALOG_WIDTH, TWO_OUTCOME_ACTIVE_HEIGHT);
@@ -1179,6 +1187,75 @@ void ManagePredictionDialog::selectOutcome(const QString &outcomeID)
     this->updateActionButton();
 }
 
+void ManagePredictionDialog::endPrediction(
+    bool refundPoints, QString winningOutcomeID,
+    std::function<void(const HelixPrediction &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (this->prediction_.id.trimmed().isEmpty())
+    {
+        failureCallback(QStringLiteral(
+            "Mergerino does not have the Twitch prediction ID yet. Try again "
+            "in a moment."));
+        return;
+    }
+
+    if (!this->useModerationAuth_)
+    {
+        getHelix()->endPrediction(this->broadcasterID_, this->prediction_.id,
+                                  refundPoints, winningOutcomeID,
+                                  std::move(successCallback),
+                                  std::move(failureCallback));
+        return;
+    }
+
+    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+    QString authError;
+    const auto moderationAccount =
+        TwitchModerationAuth::resolveForCurrentUser(
+            currentUser != nullptr ? currentUser->getUserId() : QString{},
+            &authError);
+    if (!moderationAccount.isValid())
+    {
+        failureCallback(authError);
+        return;
+    }
+
+    QPointer<ManagePredictionDialog> self(this);
+    TwitchWebApi::endPredictionEvent(
+        this->prediction_.id, refundPoints, winningOutcomeID,
+        moderationAccount.clientId, moderationAccount.oauthToken,
+        [self, refundPoints, winningOutcomeID,
+         successCallback = std::move(successCallback)]() mutable {
+            if (self == nullptr)
+            {
+                return;
+            }
+
+            auto data = self->prediction_;
+            const auto now = QDateTime::currentDateTimeUtc();
+            if (refundPoints)
+            {
+                data.status = QStringLiteral("CANCELED");
+                data.endedAt = now;
+            }
+            else if (winningOutcomeID.trimmed().isEmpty())
+            {
+                data.status = QStringLiteral("LOCKED");
+                data.lockedAt = now;
+            }
+            else
+            {
+                data.status = QStringLiteral("RESOLVED");
+                data.winningOutcomeID = winningOutcomeID.trimmed();
+                data.endedAt = now;
+            }
+
+            successCallback(data);
+        },
+        std::move(failureCallback));
+}
+
 void ManagePredictionDialog::cancelPrediction()
 {
     if (this->submitting_)
@@ -1191,9 +1268,11 @@ void ManagePredictionDialog::cancelPrediction()
     this->updateActionButton();
 
     QPointer<ManagePredictionDialog> self(this);
-    getHelix()->endPrediction(
-        this->broadcasterID_, this->prediction_.id, true, {},
-        [channel = this->channel_, self](const HelixPrediction &data) {
+    this->endPrediction(
+        true, {},
+        [channel = this->channel_, broadcasterID = this->broadcasterID_,
+         self](const HelixPrediction &data) {
+            TwitchPollsAndPredictionsBar::clearLocalPrediction(broadcasterID);
             notifyPollsAndPredictionsChanged(channel);
             if (channel != nullptr)
             {
@@ -1227,9 +1306,12 @@ void ManagePredictionDialog::lockPrediction()
     this->updateActionButton();
 
     QPointer<ManagePredictionDialog> self(this);
-    getHelix()->endPrediction(
-        this->broadcasterID_, this->prediction_.id, false, {},
-        [channel = this->channel_, self](const HelixPrediction &data) {
+    this->endPrediction(
+        false, {},
+        [channel = this->channel_, broadcasterID = this->broadcasterID_,
+         self](const HelixPrediction &data) {
+            TwitchPollsAndPredictionsBar::rememberLocalPrediction(
+                broadcasterID, data);
             notifyPollsAndPredictionsChanged(channel);
             if (channel != nullptr)
             {
@@ -1270,10 +1352,11 @@ void ManagePredictionDialog::resolvePrediction()
     this->updateActionButton();
 
     QPointer<ManagePredictionDialog> self(this);
-    getHelix()->endPrediction(
-        this->broadcasterID_, this->prediction_.id, false,
-        this->selectedOutcomeID_,
-        [channel = this->channel_, self](const HelixPrediction &data) {
+    this->endPrediction(
+        false, this->selectedOutcomeID_,
+        [channel = this->channel_, broadcasterID = this->broadcasterID_,
+         self](const HelixPrediction &data) {
+            TwitchPollsAndPredictionsBar::clearLocalPrediction(broadcasterID);
             notifyPollsAndPredictionsChanged(channel);
             if (channel != nullptr)
             {

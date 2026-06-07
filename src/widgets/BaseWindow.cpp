@@ -21,6 +21,7 @@
 #include <QApplication>
 #include <QFont>
 #include <QIcon>
+#include <QPixmap>
 #include <QScreen>
 #include <QWindow>
 
@@ -219,6 +220,40 @@ Qt::WindowFlags windowFlagsFor(FlagsEnum<BaseWindow::Flags> flags)
     return out;
 }
 
+#ifdef USEWINSDK
+class TitleBarLogo final : public BaseWidget
+{
+public:
+    TitleBarLogo()
+        : icon_(QStringLiteral(":/icon.png"))
+    {
+        this->setScaleIndependentSize(22, 30);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        if (this->icon_.isNull())
+        {
+            return;
+        }
+
+        QPainter painter(this);
+
+        const auto scale = this->scale();
+        const int iconSize = int(16 * scale);
+        const int leftPadding = int(5 * scale);
+        const QRect target{
+            leftPadding, (this->height() - iconSize) / 2, iconSize, iconSize};
+
+        painter.drawPixmap(target, this->icon_);
+    }
+
+private:
+    QPixmap icon_;
+};
+#endif
+
 }  // namespace
 
 namespace chatterino {
@@ -319,7 +354,11 @@ void BaseWindow::init()
             layout->addLayout(buttonLayout);
 
             // title
+            auto *titleIcon = new TitleBarLogo;
+            buttonLayout->addWidget(titleIcon);
+
             Label *title = new Label;
+            title->setPadding(QMargins{0, 0, 8, 0});
             QObject::connect(this, &QWidget::windowTitleChanged,
                              [title](const QString &text) {
                                  title->setText(text);

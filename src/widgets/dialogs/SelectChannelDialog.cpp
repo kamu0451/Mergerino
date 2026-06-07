@@ -582,13 +582,6 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     platformLayout->addRow(
         createCheckboxRow(ui.filterActivity, filterActivityTooltip, this));
 
-    ui.messageAnimations = new QCheckBox("Message animations");
-    const auto messageAnimationsTooltip =
-        QStringLiteral("Smoothly animate messages.");
-    ui.messageAnimationsRow = createCheckboxRow(ui.messageAnimations,
-                                                messageAnimationsTooltip, this);
-    platformLayout->addRow(ui.messageAnimationsRow);
-
     ui.slowerChat = new QCheckBox("Slower chat");
     const auto slowerChatTooltip = QStringLiteral(
         "Queue messages and release them at a fixed rate.");
@@ -725,7 +718,6 @@ void SelectChannelDialog::setMergedDefaults()
     this->ui_.tiktokSource->clear();
     this->ui_.slowerChat->setChecked(false);
     this->ui_.slowerChatRate->setValue(5.0);
-    this->ui_.messageAnimations->setChecked(true);
     this->ui_.viewerCount->setChecked(
         getSettings()->headerViewerCount.getValue());
     this->ui_.indicatorMode->setCurrentIndex(indicatorModeIndex(
@@ -890,14 +882,6 @@ void SelectChannelDialog::setSlowerChatMessagesPerSecond(qreal value)
     }
 }
 
-void SelectChannelDialog::setSlowerChatMessageAnimations(bool enabled)
-{
-    if (this->ui_.messageAnimations)
-    {
-        this->ui_.messageAnimations->setChecked(enabled);
-    }
-}
-
 void SelectChannelDialog::setViewerCountEnabled(bool enabled)
 {
     if (this->ui_.viewerCount)
@@ -942,12 +926,6 @@ qreal SelectChannelDialog::slowerChatMessagesPerSecond() const
 {
     return this->ui_.slowerChatRate != nullptr ? this->ui_.slowerChatRate->value()
                                                : 5.0;
-}
-
-bool SelectChannelDialog::slowerChatMessageAnimations() const
-{
-    return this->ui_.messageAnimations != nullptr &&
-           this->ui_.messageAnimations->isChecked();
 }
 
 bool SelectChannelDialog::viewerCountEnabled() const
@@ -1173,10 +1151,6 @@ void SelectChannelDialog::scaleChangedEvent(float newScale)
     if (this->ui_.slowerChatRate)
     {
         this->ui_.slowerChatRate->setFont(uiFont);
-    }
-    if (this->ui_.messageAnimations)
-    {
-        this->ui_.messageAnimations->setFont(uiFont);
     }
     if (this->ui_.viewerCount)
     {

@@ -199,7 +199,8 @@ std::unique_ptr<completion::Source> TabCompletionModel::buildCommandSource()
     const
 {
     return std::make_unique<completion::CommandSource>(
-        std::make_unique<completion::CommandStrategy>(true));
+        std::make_unique<completion::CommandStrategy>(true), nullptr,
+        &this->channel_);
 }
 
 }  // namespace chatterino

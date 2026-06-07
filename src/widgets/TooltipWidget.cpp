@@ -145,7 +145,7 @@ void TooltipWidget::set(const std::vector<TooltipEntry> &entries,
 {
     this->setCurrentStyle(style);
 
-    int delta = entries.size() - this->currentLayoutCount();
+    int delta = static_cast<int>(entries.size()) - this->currentLayoutCount();
     if (delta > 0)
     {
         // Need to add more TooltipEntry instances
@@ -199,21 +199,21 @@ void TooltipWidget::addNewEntry(int absoluteIndex)
     switch (this->currentStyle_)
     {
         case TooltipStyle::Vertical:
-            this->vLayout_->addWidget(new TooltipEntryWidget(),
+            this->vLayout_->addWidget(new TooltipEntryWidget(this),
                                       Qt::AlignHCenter);
             return;
         case TooltipStyle::Grid:
             if (absoluteIndex == 0)
             {
                 // Top row spans all columns
-                this->gLayout_->addWidget(new TooltipEntryWidget(), 0, 0, 1,
+                this->gLayout_->addWidget(new TooltipEntryWidget(this), 0, 0, 1,
                                           GRID_NUM_COLS, Qt::AlignCenter);
             }
             else
             {
                 int row = ((absoluteIndex - 1) / GRID_NUM_COLS) + 1;
                 int col = (absoluteIndex - 1) % GRID_NUM_COLS;
-                this->gLayout_->addWidget(new TooltipEntryWidget(), row, col,
+                this->gLayout_->addWidget(new TooltipEntryWidget(this), row, col,
                                           Qt::AlignHCenter | Qt::AlignBottom);
             }
             return;

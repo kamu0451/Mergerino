@@ -406,13 +406,6 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
                                                    filterActivityTooltip,
                                                    this));
 
-        this->ui_.messageAnimations = new QCheckBox("Message animations");
-        const auto messageAnimationsTooltip =
-            QStringLiteral("Smoothly animate messages.");
-        this->ui_.messageAnimationsRow = createCheckboxRow(
-            this->ui_.messageAnimations, messageAnimationsTooltip, this);
-        appearanceLayout->addRow(this->ui_.messageAnimationsRow);
-
         this->ui_.slowerChat = new QCheckBox("Slower chat");
         const auto slowerChatTooltip = QStringLiteral(
             "Queue messages and release them at a fixed rate.");
@@ -642,20 +635,6 @@ qreal SplitSettingsDialog::slowerChatMessagesPerSecond() const
     return this->ui_.slowerChatRate->value();
 }
 
-void SplitSettingsDialog::setSlowerChatMessageAnimations(bool enabled)
-{
-    if (this->ui_.messageAnimations)
-    {
-        this->ui_.messageAnimations->setChecked(enabled);
-    }
-}
-
-bool SplitSettingsDialog::slowerChatMessageAnimations() const
-{
-    return this->ui_.messageAnimations &&
-           this->ui_.messageAnimations->isChecked();
-}
-
 void SplitSettingsDialog::setViewerCountEnabled(bool enabled)
 {
     if (this->ui_.viewerCount)
@@ -770,10 +749,6 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     if (this->ui_.slowerChatRate)
     {
         this->ui_.slowerChatRate->setFont(uiFont);
-    }
-    if (this->ui_.messageAnimations)
-    {
-        this->ui_.messageAnimations->setFont(uiFont);
     }
     if (this->ui_.viewerCount)
     {

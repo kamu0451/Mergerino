@@ -5,11 +5,14 @@
 #include "controllers/completion/sources/CommandSource.hpp"
 
 #include "Application.hpp"
+#include "common/Channel.hpp"
 #include "controllers/commands/Command.hpp"
 #include "controllers/commands/CommandController.hpp"
 #include "controllers/completion/sources/Helpers.hpp"
 #include "providers/twitch/TwitchCommon.hpp"
 #include "widgets/splits/InputCompletionItem.hpp"
+
+#include <algorithm>
 
 namespace chatterino::completion {
 
@@ -33,12 +36,132 @@ void addCommand(const QString &command, std::vector<CommandItem> &out)
     }
 }
 
+QString displayText(const CommandItem &command)
+{
+    return command.prefix + command.name;
+}
+
+QString commandKey(const CommandItem &command)
+{
+    return displayText(command).toLower();
+}
+
+bool commandLessThan(const CommandItem &a, const CommandItem &b)
+{
+    const auto nameCompare = QString::compare(a.name, b.name,
+                                              Qt::CaseInsensitive);
+    if (nameCompare != 0)
+    {
+        return nameCompare < 0;
+    }
+
+    return QString::compare(a.prefix, b.prefix, Qt::CaseInsensitive) < 0;
+}
+
+bool commandEquals(const CommandItem &a, const CommandItem &b)
+{
+    return QString::compare(commandKey(a), commandKey(b),
+                            Qt::CaseInsensitive) == 0;
+}
+
+const QStringList &moderatorCommands()
+{
+    static const QStringList commands{
+        "/announce",
+        "/announceblue",
+        "/announcegreen",
+        "/announceorange",
+        "/announcepurple",
+        "/ban",
+        "/banid",
+        "/chatters",
+        "/clear",
+        "/delete",
+        "/emoteonly",
+        "/emoteonlyoff",
+        "/followers",
+        "/followersoff",
+        "/lowtrust",
+        "/monitor",
+        "/poll",
+        "/prediction",
+        "/requests",
+        "/restrict",
+        "/r9kbeta",
+        "/r9kbetaoff",
+        "/shield",
+        "/shieldoff",
+        "/shoutout",
+        "/slow",
+        "/slowoff",
+        "/subscribers",
+        "/subscribersoff",
+        "/timeout",
+        "/unban",
+        "/uniquechat",
+        "/uniquechatoff",
+        "/unmonitor",
+        "/unrestrict",
+        "/untimeout",
+        "/warn",
+    };
+
+    return commands;
+}
+
+const QStringList &broadcasterCommands()
+{
+    static const QStringList commands{
+        "/cancelprediction",
+        "/cancelpoll",
+        "/commercial",
+        "/completeprediction",
+        "/endpoll",
+        "/host",
+        "/lockprediction",
+        "/marker",
+        "/mod",
+        "/mods",
+        "/raid",
+        "/setgame",
+        "/settitle",
+        "/unmod",
+        "/unhost",
+        "/unraid",
+        "/unvip",
+        "/vip",
+        "/vips",
+    };
+
+    return commands;
+}
+
+bool canUseCommand(const CommandItem &command, const Channel *channel)
+{
+    const auto key = commandKey(command);
+
+    if (broadcasterCommands().contains(key, Qt::CaseInsensitive))
+    {
+        return channel != nullptr && channel->isBroadcaster();
+    }
+
+    if (moderatorCommands().contains(key, Qt::CaseInsensitive))
+    {
+        return channel != nullptr && channel->hasModRights();
+    }
+
+    return true;
+}
+
 }  // namespace
 
 CommandSource::CommandSource(std::unique_ptr<CommandStrategy> strategy,
-                             ActionCallback callback)
+                             ActionCallback callback, const Channel *channel,
+                             bool slashCommandsOnly)
     : strategy_(std::move(strategy))
     , callback_(std::move(callback))
+    , channel_(channel)
+    , slashCommandsOnly_(slashCommandsOnly)
 {
     this->initializeItems();
 }
@@ -58,7 +181,7 @@ void CommandSource::addToListModel(GenericListModel &model,
     addVecToListModel(this->output_, model, maxCount,
                       [this](const CommandItem &command) {
                           return std::make_unique<InputCompletionItem>(
-                              nullptr, command.name, this->callback_);
+                              nullptr, displayText(command), this->callback_);
                       });
 }
 
@@ -100,6 +223,23 @@ void CommandSource::initializeItems()
     {
         addCommand(command, commands);
     }
+
+    commands.erase(std::remove_if(commands.begin(), commands.end(),
+                                  [this](const CommandItem &command) {
+                                      if (this->slashCommandsOnly_ &&
+                                          command.prefix != "/")
+                                      {
+                                          return true;
+                                      }
+
+                                      return !canUseCommand(command,
+                                                            this->channel_);
+                                  }),
+                   commands.end());
+
+    std::sort(commands.begin(), commands.end(), commandLessThan);
+    commands.erase(std::unique(commands.begin(), commands.end(), commandEquals),
+                   commands.end());
 
     this->items_ = std::move(commands);
 }

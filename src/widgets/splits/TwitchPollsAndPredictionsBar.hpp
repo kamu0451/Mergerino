@@ -10,8 +10,11 @@
 #include <pajlada/signals/signalholder.hpp>
 
 #include <boost/signals2/connection.hpp>
+#include <QJsonObject>
 #include <QRect>
 #include <QSize>
+#include <QString>
+#include <QStringList>
 #include <QTimer>
 
 #include <memory>
@@ -32,8 +35,25 @@ class TwitchPollsAndPredictionsBar final : public BaseWidget
 public:
     explicit TwitchPollsAndPredictionsBar(QWidget *parent = nullptr);
 
+    static void rememberLocalPoll(QString broadcasterID, QString title,
+                                  QStringList choices, int durationSeconds);
+    static void rememberLocalPrediction(QString broadcasterID, QString title,
+                                        QStringList outcomes,
+                                        int durationSeconds,
+                                        QString predictionID = {},
+                                        QJsonObject predictionObject = {});
+    static void rememberLocalPrediction(QString broadcasterID,
+                                        const HelixPrediction &prediction);
+    static void clearLocalPrediction(const QString &broadcasterID);
+    [[nodiscard]] static std::optional<QJsonObject> localPredictionJson(
+        const QString &broadcasterID);
+
     void setChannel(const ChannelPtr &channel);
     void refreshNow();
+    [[nodiscard]] bool hasActivePoll() const;
+    [[nodiscard]] bool hasOpenPrediction() const;
+    [[nodiscard]] QString predictionButtonTooltip(bool canManage) const;
+    [[nodiscard]] QString pollButtonTooltip(bool canManage) const;
 
     QSize sizeHint() const override;
 
@@ -75,12 +95,17 @@ private:
         const HelixPoll &poll);
     [[nodiscard]] static std::optional<Item> makePredictionItem(
         const HelixPrediction &prediction);
+    [[nodiscard]] static std::optional<Item> makeLocalPollItem(
+        const QString &broadcasterID);
+    [[nodiscard]] static std::optional<Item> makeLocalPredictionItem(
+        const QString &broadcasterID);
     [[nodiscard]] int barHeight() const;
     [[nodiscard]] int itemHeight(const Item &item) const;
     void drawItem(QPainter &painter, const Item &item, QRect rect) const;
 
     std::weak_ptr<TwitchChannel> twitchChannel_;
     pajlada::Signals::SignalHolder channelSignalHolder_;
+    pajlada::Signals::SignalHolder moderationAuthSignalHolder_;
     QTimer refreshTimer_;
     std::vector<Item> items_;
     std::optional<Item> pendingPoll_;

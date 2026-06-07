@@ -8,6 +8,8 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/api/TwitchModerationAuth.hpp"
+#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Fonts.hpp"
@@ -15,12 +17,16 @@
 #include "util/Helpers.hpp"
 
 #include <QFontMetrics>
+#include <QDateTime>
+#include <QHash>
+#include <QJsonArray>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPointer>
 #include <QSizePolicy>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace chatterino {
@@ -29,7 +35,42 @@ namespace {
 constexpr int REFRESH_WITH_ACTIVE_MS = 15 * 1000;
 constexpr int REFRESH_WHEN_IDLE_MS = 60 * 1000;
 constexpr int REFRESH_WAIT_FOR_ROOM_ID_MS = 2 * 1000;
-constexpr int REFRESH_AFTER_LOCAL_CHANGE_MS = 2 * 1000;
+constexpr qint64 LOCAL_POLL_EXTRA_RETENTION_MS = 30 * 1000;
+constexpr qint64 LOCAL_PREDICTION_RETENTION_MS = 24LL * 60 * 60 * 1000;
+constexpr std::array<int, 3> REFRESH_AFTER_LOCAL_CHANGE_MS = {
+    2 * 1000,
+    5 * 1000,
+    10 * 1000,
+};
+
+struct LocalPollState {
+    QString title;
+    QStringList choices;
+    QDateTime createdAt;
+    int durationSeconds = 0;
+};
+
+struct LocalPredictionOutcomeState {
+    QString id;
+    QString title;
+    int users = 0;
+    int channelPoints = 0;
+};
+
+struct LocalPredictionState {
+    QString id;
+    QString title;
+    std::vector<LocalPredictionOutcomeState> outcomes;
+    QDateTime createdAt;
+    QDateTime lockedAt;
+    QDateTime endedAt;
+    QString winningOutcomeID;
+    QString status = QStringLiteral("ACTIVE");
+    int durationSeconds = 0;
+};
+
+QHash<QString, LocalPollState> localPolls;
+QHash<QString, LocalPredictionState> localPredictions;
 
 QColor withAlpha(QColor color, int alpha)
 {
@@ -220,6 +261,148 @@ std::shared_ptr<TwitchChannel> resolveTwitchChannel(const ChannelPtr &channel)
     return nullptr;
 }
 
+QString jsonStringValue(const QJsonObject &object, const QString &key,
+                        const QString &fallback = {})
+{
+    const auto value = object.value(key).toString().trimmed();
+    return value.isEmpty() ? fallback : value;
+}
+
+int jsonIntValue(const QJsonObject &object, const QString &key,
+                 int fallback = 0)
+{
+    const auto value = object.value(key);
+    return value.isDouble() ? value.toInt() : fallback;
+}
+
+QDateTime jsonDateTimeValue(const QJsonObject &object, const QString &key)
+{
+    const auto value =
+        QDateTime::fromString(object.value(key).toString(), Qt::ISODate);
+    return value.isValid() ? value.toUTC() : QDateTime{};
+}
+
+QString normalizedPredictionStatus(QString status)
+{
+    status = status.trimmed().toUpper();
+    return status.isEmpty() ? QStringLiteral("ACTIVE") : status;
+}
+
+bool localPredictionExpired(const LocalPredictionState &state,
+                            const QDateTime &now)
+{
+    if (!state.createdAt.isValid())
+    {
+        return true;
+    }
+
+    const auto elapsedMs = std::max<qint64>(0, state.createdAt.msecsTo(now));
+    return elapsedMs > LOCAL_PREDICTION_RETENTION_MS;
+}
+
+QString computedLocalPredictionStatus(const LocalPredictionState &state,
+                                      const QDateTime &now)
+{
+    const auto status = normalizedPredictionStatus(state.status);
+    if (status != QStringLiteral("ACTIVE"))
+    {
+        return status;
+    }
+
+    const auto submissionsOpenMs =
+        static_cast<qint64>(std::max(state.durationSeconds, 1)) * 1000;
+    const auto elapsedMs = std::max<qint64>(0, state.createdAt.msecsTo(now));
+    return elapsedMs <= submissionsOpenMs ? QStringLiteral("ACTIVE")
+                                          : QStringLiteral("LOCKED");
+}
+
+QJsonArray localPredictionOutcomesJson(const LocalPredictionState &state)
+{
+    QJsonArray outcomes;
+    for (const auto &outcome : state.outcomes)
+    {
+        QJsonObject object;
+        object.insert(QStringLiteral("id"), outcome.id);
+        object.insert(QStringLiteral("title"), outcome.title);
+        object.insert(QStringLiteral("users"), outcome.users);
+        object.insert(QStringLiteral("channel_points"), outcome.channelPoints);
+        outcomes.append(object);
+    }
+    return outcomes;
+}
+
+QJsonObject localPredictionJsonObject(const LocalPredictionState &state,
+                                      const QDateTime &now)
+{
+    const auto status = computedLocalPredictionStatus(state, now);
+    auto lockedAt = state.lockedAt;
+    if (status == QStringLiteral("LOCKED") && !lockedAt.isValid() &&
+        state.createdAt.isValid())
+    {
+        lockedAt = state.createdAt.addSecs(std::max(state.durationSeconds, 1));
+    }
+
+    QJsonObject object;
+    object.insert(QStringLiteral("id"), state.id);
+    object.insert(QStringLiteral("title"), state.title);
+    object.insert(QStringLiteral("winning_outcome_id"),
+                  state.winningOutcomeID);
+    object.insert(QStringLiteral("status"), status);
+    object.insert(QStringLiteral("created_at"),
+                  state.createdAt.isValid()
+                      ? state.createdAt.toUTC().toString(Qt::ISODate)
+                      : QString{});
+    object.insert(QStringLiteral("locked_at"),
+                  lockedAt.isValid()
+                      ? lockedAt.toUTC().toString(Qt::ISODate)
+                      : QString{});
+    object.insert(QStringLiteral("ended_at"),
+                  state.endedAt.isValid()
+                      ? state.endedAt.toUTC().toString(Qt::ISODate)
+                      : QString{});
+    object.insert(QStringLiteral("prediction_window"),
+                  std::max(state.durationSeconds, 1));
+    object.insert(QStringLiteral("outcomes"),
+                  localPredictionOutcomesJson(state));
+    return object;
+}
+
+std::vector<LocalPredictionOutcomeState> localPredictionOutcomes(
+    const QStringList &outcomeTitles, const QJsonObject &predictionObject)
+{
+    const auto rawOutcomes =
+        predictionObject.value(QStringLiteral("outcomes")).toArray();
+    const int count = std::max(static_cast<int>(outcomeTitles.size()),
+                               static_cast<int>(rawOutcomes.size()));
+
+    std::vector<LocalPredictionOutcomeState> outcomes;
+    outcomes.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i)
+    {
+        const auto rawOutcome =
+            i < rawOutcomes.size() ? rawOutcomes.at(i).toObject()
+                                   : QJsonObject{};
+        auto title = jsonStringValue(rawOutcome, QStringLiteral("title"));
+        if (title.isEmpty() && i < outcomeTitles.size())
+        {
+            title = outcomeTitles.at(i).trimmed();
+        }
+        if (title.isEmpty())
+        {
+            continue;
+        }
+
+        outcomes.push_back({
+            jsonStringValue(rawOutcome, QStringLiteral("id")),
+            title,
+            jsonIntValue(rawOutcome, QStringLiteral("users")),
+            jsonIntValue(rawOutcome, QStringLiteral("channel_points")),
+        });
+    }
+
+    return outcomes;
+}
+
 }  // namespace
 
 TwitchPollsAndPredictionsBar::TwitchPollsAndPredictionsBar(QWidget *parent)
@@ -238,6 +421,146 @@ TwitchPollsAndPredictionsBar::TwitchPollsAndPredictionsBar(QWidget *parent)
         getApp()->getAccounts()->twitch.currentUserChanged.connect([this] {
             this->scheduleRefresh(0);
         }));
+    this->moderationAuthSignalHolder_.managedConnect(
+        TwitchModerationAuth::accountChanged(), [this] {
+            this->refreshNow();
+        });
+}
+
+void TwitchPollsAndPredictionsBar::rememberLocalPoll(QString broadcasterID,
+                                                     QString title,
+                                                     QStringList choices,
+                                                     int durationSeconds)
+{
+    broadcasterID = broadcasterID.trimmed();
+    title = title.trimmed();
+    choices.removeAll(QString{});
+    if (broadcasterID.isEmpty() || title.isEmpty() || choices.isEmpty())
+    {
+        return;
+    }
+
+    localPolls.insert(
+        broadcasterID,
+        {
+            std::move(title),
+            std::move(choices),
+            QDateTime::currentDateTimeUtc(),
+            std::max(durationSeconds, 1),
+        });
+}
+
+void TwitchPollsAndPredictionsBar::rememberLocalPrediction(
+    QString broadcasterID, QString title, QStringList outcomes,
+    int durationSeconds, QString predictionID, QJsonObject predictionObject)
+{
+    broadcasterID = broadcasterID.trimmed();
+    title = title.trimmed();
+    outcomes.removeAll(QString{});
+    if (broadcasterID.isEmpty() || title.isEmpty() || outcomes.isEmpty())
+    {
+        return;
+    }
+
+    const auto createdAt =
+        jsonDateTimeValue(predictionObject, QStringLiteral("created_at"));
+    const auto lockedAt =
+        jsonDateTimeValue(predictionObject, QStringLiteral("locked_at"));
+    const auto endedAt =
+        jsonDateTimeValue(predictionObject, QStringLiteral("ended_at"));
+    const auto predictionWindow =
+        jsonIntValue(predictionObject, QStringLiteral("prediction_window"),
+                     durationSeconds);
+
+    localPredictions.insert(
+        broadcasterID,
+        {
+            jsonStringValue(predictionObject, QStringLiteral("id"),
+                            predictionID.trimmed()),
+            std::move(title),
+            localPredictionOutcomes(outcomes, predictionObject),
+            createdAt.isValid() ? createdAt : QDateTime::currentDateTimeUtc(),
+            lockedAt,
+            endedAt,
+            jsonStringValue(predictionObject,
+                            QStringLiteral("winning_outcome_id")),
+            normalizedPredictionStatus(jsonStringValue(
+                predictionObject, QStringLiteral("status"))),
+            std::max(predictionWindow, 1),
+        });
+}
+
+void TwitchPollsAndPredictionsBar::rememberLocalPrediction(
+    QString broadcasterID, const HelixPrediction &prediction)
+{
+    if (prediction.status != QStringLiteral("ACTIVE") &&
+        prediction.status != QStringLiteral("LOCKED"))
+    {
+        TwitchPollsAndPredictionsBar::clearLocalPrediction(broadcasterID);
+        return;
+    }
+
+    std::vector<LocalPredictionOutcomeState> outcomes;
+    outcomes.reserve(prediction.outcomes.size());
+    for (const auto &outcome : prediction.outcomes)
+    {
+        outcomes.push_back({
+            outcome.id,
+            outcome.title,
+            outcome.users,
+            outcome.channelPoints,
+        });
+    }
+
+    broadcasterID = broadcasterID.trimmed();
+    if (broadcasterID.isEmpty() || prediction.id.isEmpty() ||
+        prediction.title.isEmpty() || outcomes.empty())
+    {
+        return;
+    }
+
+    localPredictions.insert(
+        broadcasterID,
+        {
+            prediction.id,
+            prediction.title,
+            std::move(outcomes),
+            prediction.createdAt.isValid()
+                ? prediction.createdAt.toUTC()
+                : QDateTime::currentDateTimeUtc(),
+            prediction.lockedAt.isValid() ? prediction.lockedAt.toUTC()
+                                          : QDateTime{},
+            prediction.endedAt.isValid() ? prediction.endedAt.toUTC()
+                                         : QDateTime{},
+            prediction.winningOutcomeID,
+            normalizedPredictionStatus(prediction.status),
+            std::max(prediction.predictionWindow, 1),
+        });
+}
+
+void TwitchPollsAndPredictionsBar::clearLocalPrediction(
+    const QString &broadcasterID)
+{
+    localPredictions.remove(broadcasterID.trimmed());
+}
+
+std::optional<QJsonObject> TwitchPollsAndPredictionsBar::localPredictionJson(
+    const QString &broadcasterID)
+{
+    auto it = localPredictions.find(broadcasterID.trimmed());
+    if (it == localPredictions.end())
+    {
+        return std::nullopt;
+    }
+
+    const auto now = QDateTime::currentDateTimeUtc();
+    if (localPredictionExpired(*it, now))
+    {
+        localPredictions.erase(it);
+        return std::nullopt;
+    }
+
+    return localPredictionJsonObject(*it, now);
 }
 
 void TwitchPollsAndPredictionsBar::setChannel(const ChannelPtr &channel)
@@ -257,6 +580,10 @@ void TwitchPollsAndPredictionsBar::setChannel(const ChannelPtr &channel)
             twitch->streamStatusChanged, [this] {
                 this->refreshNow();
             });
+        this->channelSignalHolder_.managedConnect(
+            twitch->userStateChanged, [this] {
+                this->refreshNow();
+            });
         this->scheduleRefresh(250);
     }
 }
@@ -270,12 +597,89 @@ void TwitchPollsAndPredictionsBar::refreshNow()
     }
 
     this->scheduleRefresh(0);
-    QTimer::singleShot(REFRESH_AFTER_LOCAL_CHANGE_MS, this, [this, twitch] {
-        if (this->twitchChannel_.lock() == twitch)
+    for (const auto delayMs : REFRESH_AFTER_LOCAL_CHANGE_MS)
+    {
+        QTimer::singleShot(delayMs, this, [this, twitch] {
+            if (this->twitchChannel_.lock() == twitch)
+            {
+                this->scheduleRefresh(0);
+            }
+        });
+    }
+}
+
+bool TwitchPollsAndPredictionsBar::hasActivePoll() const
+{
+    for (const auto &item : this->items_)
+    {
+        if (item.kind == ItemKind::Poll)
         {
-            this->scheduleRefresh(0);
+            return true;
         }
-    });
+    }
+
+    return false;
+}
+
+bool TwitchPollsAndPredictionsBar::hasOpenPrediction() const
+{
+    for (const auto &item : this->items_)
+    {
+        if (item.kind == ItemKind::Prediction)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+QString TwitchPollsAndPredictionsBar::predictionButtonTooltip(
+    bool canManage) const
+{
+    if (!canManage)
+    {
+        return QStringLiteral("Predictions");
+    }
+
+    for (const auto &item : this->items_)
+    {
+        if (item.kind != ItemKind::Prediction)
+        {
+            continue;
+        }
+
+        if (item.status == QStringLiteral("Locked"))
+        {
+            return QStringLiteral("Manage locked prediction");
+        }
+        if (item.status == QStringLiteral("Active"))
+        {
+            return QStringLiteral("Manage active prediction");
+        }
+
+        return QStringLiteral("Manage prediction");
+    }
+
+    return QStringLiteral("Start prediction");
+}
+
+QString TwitchPollsAndPredictionsBar::pollButtonTooltip(bool canManage) const
+{
+    if (!canManage)
+    {
+        return QStringLiteral("Poll");
+    }
+
+    for (const auto &item : this->items_)
+    {
+        if (item.kind == ItemKind::Poll)
+        {
+            return QStringLiteral("Poll already active");
+        }
+    }
+
+    return QStringLiteral("Start poll");
 }
 
 QSize TwitchPollsAndPredictionsBar::sizeHint() const
@@ -342,7 +746,8 @@ void TwitchPollsAndPredictionsBar::refresh()
         return;
     }
 
-    if (getApp()->getAccounts()->twitch.getCurrent()->isAnon())
+    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+    if (currentUser == nullptr || currentUser->isAnon())
     {
         this->clearItems();
         this->scheduleRefresh(REFRESH_WHEN_IDLE_MS);
@@ -357,42 +762,71 @@ void TwitchPollsAndPredictionsBar::refresh()
         return;
     }
 
+    std::optional<TwitchModerationAuth::Account> moderationAccount;
+    if (twitch->isMod() && !twitch->isBroadcaster())
+    {
+        auto account =
+            TwitchModerationAuth::resolveForCurrentUser(currentUser->getUserId());
+        if (account.isValid())
+        {
+            moderationAccount = std::move(account);
+        }
+    }
+
     const int generation = ++this->requestGeneration_;
-    this->pendingRequests_ = 2;
+    this->pendingRequests_ = moderationAccount ? 1 : 2;
     this->pendingPoll_.reset();
     this->pendingPrediction_.reset();
+    if (auto item = TwitchPollsAndPredictionsBar::makeLocalPollItem(roomId))
+    {
+        this->pendingPoll_ = std::move(item);
+    }
+    if (auto item =
+            TwitchPollsAndPredictionsBar::makeLocalPredictionItem(roomId))
+    {
+        this->pendingPrediction_ = std::move(item);
+    }
+    if (this->pendingPoll_ || this->pendingPrediction_)
+    {
+        this->items_.clear();
+        if (this->pendingPoll_)
+        {
+            this->items_.push_back(*this->pendingPoll_);
+        }
+        if (this->pendingPrediction_)
+        {
+            this->items_.push_back(*this->pendingPrediction_);
+        }
+        this->updateFixedHeight();
+        this->update();
+    }
 
     QPointer<TwitchPollsAndPredictionsBar> guard(this);
-    getHelix()->getPolls(
-        roomId, {}, 1, {},
-        [guard, generation](const HelixPolls &result) {
-            if (!guard || guard->requestGeneration_ != generation)
-            {
-                return;
-            }
+    auto pollSuccess = [guard, generation](const HelixPolls &result) {
+        if (!guard || guard->requestGeneration_ != generation)
+        {
+            return;
+        }
 
-            for (const auto &poll : result.polls)
+        for (const auto &poll : result.polls)
+        {
+            if (auto item = TwitchPollsAndPredictionsBar::makePollItem(poll))
             {
-                if (auto item =
-                        TwitchPollsAndPredictionsBar::makePollItem(poll))
-                {
-                    guard->pendingPoll_ = std::move(item);
-                    break;
-                }
+                guard->pendingPoll_ = std::move(item);
+                break;
             }
-            guard->finishRequest(generation);
-        },
-        [guard, generation](const QString &) {
-            if (!guard || guard->requestGeneration_ != generation)
-            {
-                return;
-            }
+        }
+        guard->finishRequest(generation);
+    };
+    auto pollFailure = [guard, generation](const QString &) {
+        if (!guard || guard->requestGeneration_ != generation)
+        {
+            return;
+        }
 
-            guard->finishRequest(generation);
-        });
-
-    getHelix()->getPredictions(
-        roomId, {}, 1, {},
+        guard->finishRequest(generation);
+    };
+    auto predictionSuccess =
         [guard, generation](const HelixPredictions &result) {
             if (!guard || guard->requestGeneration_ != generation)
             {
@@ -410,15 +844,65 @@ void TwitchPollsAndPredictionsBar::refresh()
                 }
             }
             guard->finishRequest(generation);
-        },
-        [guard, generation](const QString &) {
-            if (!guard || guard->requestGeneration_ != generation)
-            {
-                return;
-            }
+        };
+    auto predictionFailure = [guard, generation](const QString &) {
+        if (!guard || guard->requestGeneration_ != generation)
+        {
+            return;
+        }
 
-            guard->finishRequest(generation);
-        });
+        guard->finishRequest(generation);
+    };
+
+    if (moderationAccount)
+    {
+        TwitchWebApi::getActivePollAndPredictions(
+            roomId, moderationAccount->clientId, moderationAccount->oauthToken,
+            [guard, generation](const HelixPolls &polls,
+                                const HelixPredictions &predictions) {
+                if (!guard || guard->requestGeneration_ != generation)
+                {
+                    return;
+                }
+
+                for (const auto &poll : polls.polls)
+                {
+                    if (auto item =
+                            TwitchPollsAndPredictionsBar::makePollItem(poll))
+                    {
+                        guard->pendingPoll_ = std::move(item);
+                        break;
+                    }
+                }
+                for (const auto &prediction : predictions.predictions)
+                {
+                    if (auto item =
+                            TwitchPollsAndPredictionsBar::makePredictionItem(
+                                prediction))
+                    {
+                        guard->pendingPrediction_ = std::move(item);
+                        break;
+                    }
+                }
+                guard->finishRequest(generation);
+            },
+            [guard, generation](const QString &) {
+                if (!guard || guard->requestGeneration_ != generation)
+                {
+                    return;
+                }
+
+                guard->finishRequest(generation);
+            });
+        return;
+    }
+
+    getHelix()->getPolls(roomId, {}, 1, {}, std::move(pollSuccess),
+                         std::move(pollFailure));
+
+    getHelix()->getPredictions(roomId, {}, 1, {},
+                               std::move(predictionSuccess),
+                               std::move(predictionFailure));
 }
 
 void TwitchPollsAndPredictionsBar::finishRequest(int generation)
@@ -531,6 +1015,59 @@ std::optional<TwitchPollsAndPredictionsBar::Item>
     }
 
     return item;
+}
+
+std::optional<TwitchPollsAndPredictionsBar::Item>
+    TwitchPollsAndPredictionsBar::makeLocalPollItem(
+        const QString &broadcasterID)
+{
+    auto it = localPolls.find(broadcasterID);
+    if (it == localPolls.end())
+    {
+        return std::nullopt;
+    }
+
+    const auto now = QDateTime::currentDateTimeUtc();
+    const auto elapsedMs = std::max<qint64>(0, it->createdAt.msecsTo(now));
+    const auto lifetimeMs =
+        static_cast<qint64>(std::max(it->durationSeconds, 1)) * 1000 +
+        LOCAL_POLL_EXTRA_RETENTION_MS;
+    if (!it->createdAt.isValid() || elapsedMs > lifetimeMs)
+    {
+        localPolls.erase(it);
+        return std::nullopt;
+    }
+
+    Item item;
+    item.kind = ItemKind::Poll;
+    item.title = it->title;
+    item.status = statusTitle(QStringLiteral("ACTIVE"));
+    item.choices.reserve(it->choices.size());
+    for (const auto &choiceTitle : it->choices)
+    {
+        item.choices.push_back({
+            .title = choiceTitle,
+            .weight = 0,
+            .detail = voteText(0),
+        });
+    }
+
+    return item;
+}
+
+std::optional<TwitchPollsAndPredictionsBar::Item>
+    TwitchPollsAndPredictionsBar::makeLocalPredictionItem(
+        const QString &broadcasterID)
+{
+    const auto predictionJson =
+        TwitchPollsAndPredictionsBar::localPredictionJson(broadcasterID);
+    if (!predictionJson)
+    {
+        return std::nullopt;
+    }
+
+    return TwitchPollsAndPredictionsBar::makePredictionItem(
+        HelixPrediction(*predictionJson));
 }
 
 int TwitchPollsAndPredictionsBar::barHeight() const

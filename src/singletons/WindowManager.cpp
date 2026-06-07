@@ -23,6 +23,7 @@
 #include "widgets/AccountSwitchPopup.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/FramelessEmbedWindow.hpp"
+#include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/NotebookTab.hpp"
 #include "widgets/Notebook.hpp"
 #include "widgets/OverlayWindow.hpp"
@@ -219,6 +220,17 @@ WindowManager::WindowManager(const Args &appArgs_, const Paths &paths,
     this->reloadChannelViewsListener.add(settings.platformEventHighlightStyle);
     this->reloadChannelViewsListener.add(
         settings.platformEventHighlightCustomColor);
+
+    settings.messageAnimations.connect(
+        [this] {
+            for (auto *window : this->windows_)
+            {
+                window->getNotebook().forEachSplit([](Split *split) {
+                    split->getChannelView().refreshSlowerChatSettings();
+                });
+            }
+        },
+        false);
 
     this->repaintVisibleChatWidgetsListener.add(
         this->themes.repaintVisibleChatWidgets_);

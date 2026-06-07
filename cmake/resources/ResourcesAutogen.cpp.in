@@ -8,6 +8,5 @@ namespace chatterino {
 
 Resources2::Resources2()
 {
-@RES_SOURCE_CONTENT@
 }
 }  // namespace chatterino

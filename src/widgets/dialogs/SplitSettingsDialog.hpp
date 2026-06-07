@@ -46,8 +46,6 @@ public:
     bool slowerChatEnabled() const;
     void setSlowerChatMessagesPerSecond(qreal value);
     qreal slowerChatMessagesPerSecond() const;
-    void setSlowerChatMessageAnimations(bool enabled);
-    bool slowerChatMessageAnimations() const;
     void setViewerCountEnabled(bool enabled);
     bool viewerCountEnabled() const;
     void setTwitchActivityMinimumBits(uint32_t value);
@@ -74,14 +72,12 @@ private:
         QComboBox *activityTimeDisplayMode{};
         QCheckBox *slowerChat{};
         QDoubleSpinBox *slowerChatRate{};
-        QCheckBox *messageAnimations{};
         QCheckBox *viewerCount{};
         QSpinBox *twitchBitsMinimum{};
         QSpinBox *kickKicksMinimum{};
         QSpinBox *tiktokGiftMinimum{};
         QWidget *slowerChatRateLabel{};
         QWidget *slowerChatRateField{};
-        QWidget *messageAnimationsRow{};
         QVariantAnimation *slowerChatRateAnimation{};
         qreal slowerChatRateVisibilityProgress = 1.0;
     } ui_{};

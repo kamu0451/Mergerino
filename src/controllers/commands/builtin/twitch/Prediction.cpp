@@ -11,11 +11,14 @@
 #include "controllers/commands/common/ChannelAction.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/api/TwitchModerationAuth.hpp"
+#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "util/Helpers.hpp"
 #include "widgets/dialogs/CreatePredictionDialog.hpp"
 #include "widgets/dialogs/ManagePredictionDialog.hpp"
+#include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 
 #include <QCommandLineParser>
 #include <QProcess>
@@ -61,6 +64,28 @@ void notifyPollsAndPredictionsChanged(const ChannelPtr &channel)
     }
 }
 
+bool hasBroadcasterPredictionToken(const TwitchChannel *channel)
+{
+    if (channel == nullptr)
+    {
+        return false;
+    }
+
+    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+    if (currentUser == nullptr || currentUser->isAnon())
+    {
+        return false;
+    }
+
+    const auto roomId = channel->roomId();
+    if (!roomId.isEmpty())
+    {
+        return roomId == currentUser->getUserId();
+    }
+
+    return channel->isBroadcaster();
+}
+
 }  // namespace
 
 namespace chatterino::commands {
@@ -95,6 +120,108 @@ QString createPrediction(const CommandContext &ctx)
 
         const auto roomId = ctx.twitchChannel->roomId();
         const auto channelLogin = ctx.twitchChannel->getName();
+        if (!hasBroadcasterPredictionToken(ctx.twitchChannel))
+        {
+            if (!ctx.twitchChannel->isMod())
+            {
+                ctx.channel->addSystemMessage(
+                    "Only the broadcaster or a moderator can create or manage "
+                    "predictions.");
+                return "";
+            }
+
+            const auto openLocalPrediction =
+                [channel = ctx.channel, roomId, channelLogin] {
+                    const auto predictionJson =
+                        TwitchPollsAndPredictionsBar::localPredictionJson(
+                            roomId);
+                    if (!predictionJson ||
+                        predictionJson->value(QStringLiteral("id"))
+                            .toString()
+                            .trimmed()
+                            .isEmpty())
+                    {
+                        return false;
+                    }
+
+                    ManagePredictionDialog::showDialog(
+                        channel, roomId, channelLogin,
+                        HelixPrediction(*predictionJson), true);
+                    return true;
+                };
+
+            QString authError;
+            const auto moderationAccount =
+                TwitchModerationAuth::resolveForCurrentUser(
+                    currentUser->getUserId(), &authError);
+            if (!moderationAccount.isValid())
+            {
+                if (openLocalPrediction())
+                {
+                    return "";
+                }
+
+                ctx.channel->addSystemMessage(
+                    "Failed to open prediction manager - " + authError);
+                return "";
+            }
+
+            TwitchWebApi::getPredictions(
+                roomId, {}, 20, {}, moderationAccount.clientId,
+                moderationAccount.oauthToken,
+                [channel = ctx.channel, roomId, channelLogin,
+                 openLocalPrediction](const HelixPredictions &result) {
+                    const auto openPrediction = std::find_if(
+                        result.predictions.begin(), result.predictions.end(),
+                        [](const HelixPrediction &prediction) {
+                            return prediction.status == "ACTIVE" ||
+                                   prediction.status == "LOCKED";
+                        });
+
+                    if (openPrediction != result.predictions.end())
+                    {
+                        TwitchPollsAndPredictionsBar::rememberLocalPrediction(
+                            roomId, *openPrediction);
+                        ManagePredictionDialog::showDialog(
+                            channel, roomId, channelLogin, *openPrediction,
+                            true);
+                        return;
+                    }
+
+                    if (openLocalPrediction())
+                    {
+                        return;
+                    }
+
+                    if (auto twitch = resolveTwitchChannel(channel))
+                    {
+                        CreatePredictionDialog::showDialog(channel, *twitch);
+                        return;
+                    }
+
+                    if (channel != nullptr)
+                    {
+                        channel->addSystemMessage(
+                            "The /prediction command only works in Twitch "
+                            "channels");
+                    }
+                },
+                [channel = ctx.channel,
+                 openLocalPrediction](const auto &error) {
+                    if (openLocalPrediction())
+                    {
+                        return;
+                    }
+
+                    if (channel != nullptr)
+                    {
+                        channel->addSystemMessage(
+                            "Failed to query predictions - " + error);
+                    }
+                });
+            return "";
+        }
+
         getHelix()->getPredictions(
             roomId, {}, 20, {},
             [channel = ctx.channel, roomId,
@@ -157,7 +284,7 @@ QString createPrediction(const CommandContext &ctx)
     }
 
     auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
-    if (currentUser->isAnon())
+    if (currentUser == nullptr || currentUser->isAnon())
     {
         ctx.channel->addSystemMessage(
             "You must be logged in to create a prediction!");
@@ -165,9 +292,50 @@ QString createPrediction(const CommandContext &ctx)
     }
 
     const auto &data = action.value();
-    getHelix()->createPrediction(
-        data.broadcasterID, data.title, data.choices, data.duration,
-        [channel = ctx.channel, data] {
+    if (hasBroadcasterPredictionToken(ctx.twitchChannel))
+    {
+        getHelix()->createPrediction(
+            data.broadcasterID, data.title, data.choices, data.duration,
+            [channel = ctx.channel, data] {
+                channel->addSystemMessage(
+                    QString("Created prediction: '%1'").arg(data.title));
+                notifyPollsAndPredictionsChanged(channel);
+            },
+            [channel = ctx.channel](const auto &error) {
+                channel->addSystemMessage("Failed to create prediction - " +
+                                          error);
+            });
+        return "";
+    }
+
+    if (!ctx.twitchChannel->isMod())
+    {
+        ctx.channel->addSystemMessage(
+            "Only the broadcaster or a moderator can create predictions.");
+        return "";
+    }
+
+    QString authError;
+    const auto moderationAccount =
+        TwitchModerationAuth::resolveForCurrentUser(currentUser->getUserId(),
+                                                    &authError);
+    if (!moderationAccount.isValid())
+    {
+        ctx.channel->addSystemMessage("Failed to create prediction - " +
+                                      authError);
+        return "";
+    }
+
+    TwitchWebApi::startPrediction(
+        data.broadcasterID, data.title, data.choices,
+        static_cast<int>(data.duration.count()), moderationAccount.clientId,
+        moderationAccount.oauthToken,
+        [channel = ctx.channel, data](const QString &predictionID,
+                                      const QJsonObject &predictionObject) {
+            TwitchPollsAndPredictionsBar::rememberLocalPrediction(
+                data.broadcasterID, data.title, data.choices,
+                static_cast<int>(data.duration.count()), predictionID,
+                predictionObject);
             channel->addSystemMessage(
                 QString("Created prediction: '%1'").arg(data.title));
             notifyPollsAndPredictionsChanged(channel);
@@ -175,7 +343,6 @@ QString createPrediction(const CommandContext &ctx)
         [channel = ctx.channel](const auto &error) {
             channel->addSystemMessage("Failed to create prediction - " + error);
         });
-
     return "";
 }
 

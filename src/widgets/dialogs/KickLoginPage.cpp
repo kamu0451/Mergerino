@@ -10,9 +10,12 @@
 #include "util/HttpServer.hpp"
 
 #include <QApplication>
+#include <QByteArray>
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDesktopServices>
+#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -41,6 +44,7 @@ const QUrl KICK_DEVELOPER_URL{u"https://kick.com/settings/developer"_s};
 constexpr uint16_t SERVER_PORT = 38275;
 constexpr auto HTML_CONTENT_TYPE = "text/html; charset=utf-8";
 constexpr auto JSON_CONTENT_TYPE = "application/json; charset=utf-8";
+constexpr auto PNG_CONTENT_TYPE = "image/png";
 constexpr qsizetype PKCE_VERIFIER_BYTES = 32;
 constexpr qsizetype STATE_BYTES = 32;
 constexpr int AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -308,6 +312,22 @@ QByteArray renderPage(const QString &title, const QString &body,
     max-width: 520px;
   }
 
+  .step-image-frame {
+    width: min(100%, 560px);
+    margin: 0;
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: #0b0f0e;
+    box-shadow: 0 18px 38px rgba(0, 0, 0, 0.24);
+  }
+
+  .step-image-frame img {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+
   .setting-intent {
     margin: 0;
     color: var(--accent);
@@ -344,69 +364,11 @@ QByteArray renderPage(const QString &title, const QString &body,
     line-height: 1.2;
   }
 
-  .setting-check {
-    display: none;
-  }
-
   .scope-intro {
     margin: 0;
     color: var(--soft);
     font-size: 15px;
     max-width: 580px;
-  }
-
-  .scope-warning {
-    margin: -4px 0 0;
-    color: var(--accent);
-    font-size: 12px;
-    font-weight: 700;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-  }
-
-  .scope-list {
-    display: grid;
-    gap: 10px;
-    width: 100%;
-    margin: 2px 0 0;
-    text-align: left;
-  }
-
-  .scope-item {
-    display: grid;
-    grid-template-columns: 20px minmax(0, 1fr);
-    align-items: center;
-    gap: 10px;
-    padding: 11px 12px;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--card-strong);
-    transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
-  }
-
-  .scope-item:hover {
-    border-color: rgba(21, 201, 111, 0.32);
-    background: #18211e;
-    transform: translateX(2px);
-  }
-
-  .scope-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 8px;
-    height: 8px;
-    margin-left: 6px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 0 4px var(--accent-soft);
-  }
-
-  .scope-label {
-    color: #edf6f2;
-    font-size: 15px;
-    font-weight: 600;
-    line-height: 1.35;
   }
 
   .single-field {
@@ -621,6 +583,9 @@ QByteArray renderWizardPage(const QString &clientID, const QString &clientSecret
             <p class="step-index">1 / 4</p>
             <h1>Create a Kick app</h1>
             <p class="step-copy">Open Kick's developer page and make a new app.</p>
+            <figure class="step-image-frame">
+              <img src="/assets/kick-onboarding/create-app.png" alt="Kick developer app list with the Create new button highlighted">
+            </figure>
             <div class="step-actions">
               <a class="link-button secondary" href="%3" target="_blank" rel="noreferrer">Open Kick developer page</a>
               <button type="button" class="primary" data-next-step>Next</button>
@@ -632,6 +597,9 @@ QByteArray renderWizardPage(const QString &clientID, const QString &clientSecret
             <p class="step-index">2 / 4</p>
             <h1>Add this redirect URL</h1>
             <code id="redirect-uri" class="hero-code">%2</code>
+            <figure class="step-image-frame">
+              <img src="/assets/kick-onboarding/redirect-url.png" alt="Kick app form with the redirect URL field highlighted">
+            </figure>
             <div class="step-actions">
               <button type="button" class="secondary" data-prev-step>Back</button>
               <button type="button" id="copy-button" class="secondary" onclick="copyRedirect()">Copy redirect URL</button>
@@ -643,36 +611,11 @@ QByteArray renderWizardPage(const QString &clientID, const QString &clientSecret
           <div class="step-screen">
             <p class="step-index">3 / 4</p>
             <p class="setting-intent">Turn these on in Kick</p>
-            <div class="setting-check"></div>
             <h1>Enable these 6 boxes only</h1>
-            <p class="scope-intro">Turn on every box in this list. Leave every other Kick box off.</p>
-            <p class="scope-warning">Only these 6</p>
-            <div class="scope-list" role="list" aria-label="Required Kick scopes">
-              <div class="scope-item" role="listitem">
-                <span class="scope-icon"></span>
-                <span class="scope-label">Read user information (including email address)</span>
-              </div>
-              <div class="scope-item" role="listitem">
-                <span class="scope-icon"></span>
-                <span class="scope-label">Read channel information</span>
-              </div>
-              <div class="scope-item" role="listitem">
-                <span class="scope-icon"></span>
-                <span class="scope-label">Update channel information</span>
-              </div>
-              <div class="scope-item" role="listitem">
-                <span class="scope-icon"></span>
-                <span class="scope-label">Write to Chat feed</span>
-              </div>
-              <div class="scope-item" role="listitem">
-                <span class="scope-icon"></span>
-                <span class="scope-label">Execute moderation actions for moderators</span>
-              </div>
-              <div class="scope-item" role="listitem">
-                <span class="scope-icon"></span>
-                <span class="scope-label">Execute moderation actions on chat messages</span>
-              </div>
-            </div>
+            <p class="scope-intro">Turn on every box as shown below then create your app.</p>
+            <figure class="step-image-frame">
+              <img src="/assets/kick-onboarding/scopes-requested.png" alt="Kick scopes requested checklist showing the boxes to turn on">
+            </figure>
             <div class="step-actions">
               <button type="button" class="secondary" data-prev-step>Back</button>
               <button type="button" class="primary" data-next-step>Next</button>
@@ -684,6 +627,9 @@ QByteArray renderWizardPage(const QString &clientID, const QString &clientSecret
             <p class="step-index">4 / 4</p>
             <p class="setting-intent">Paste this from Kick</p>
             <h1>Client ID and secret</h1>
+            <figure class="step-image-frame">
+              <img src="/assets/kick-onboarding/client-credentials.png" alt="Kick application page with the Client ID and Client Secret copy buttons highlighted">
+            </figure>
             <div class="credential-stack">
               <label class="single-field">
                 <span>Client ID</span>
@@ -696,7 +642,7 @@ QByteArray renderWizardPage(const QString &clientID, const QString &clientSecret
             </div>
             <div class="step-actions">
               <button type="button" class="secondary" data-prev-step>Back</button>
-              <button type="submit" class="primary">Continue to Kick</button>
+              <button type="submit" class="primary">Login to Kick</button>
             </div>
           </div>
         </section>
@@ -872,7 +818,16 @@ const detailNode = document.getElementById('detail');
 const retryLink = document.getElementById('retry-link');
 const returnButton = document.getElementById('return-button');
 
-returnButton.addEventListener('click', () => window.close());
+function closeLoginTab() {
+  window.open('', '_self');
+  window.close();
+
+  setTimeout(() => {
+    window.location.replace('about:blank');
+  }, 150);
+}
+
+returnButton.addEventListener('click', closeLoginTab);
 
 async function pollStatus() {
   try {
@@ -926,6 +881,51 @@ QByteArray renderNotFoundPage()
   </section>
 </main>)");
     return renderPage(u"Kick Login"_s, body);
+}
+
+HttpServer::Response renderKickOnboardingImage(const QString &path)
+{
+    QString filename;
+    if (path == u"/assets/kick-onboarding/create-app.png"_s)
+    {
+        filename = u"create-app.png"_s;
+    }
+    else if (path == u"/assets/kick-onboarding/redirect-url.png"_s)
+    {
+        filename = u"redirect-url.png"_s;
+    }
+    else if (path == u"/assets/kick-onboarding/scopes-requested.png"_s)
+    {
+        filename = u"scopes-requested.png"_s;
+    }
+    else if (path == u"/assets/kick-onboarding/client-credentials.png"_s)
+    {
+        filename = u"client-credentials.png"_s;
+    }
+
+    if (filename.isEmpty())
+    {
+        return {
+            .status = 404,
+            .body = "Kick onboarding image not found.",
+        };
+    }
+
+    QFile image(QCoreApplication::applicationDirPath() %
+                u"/kick_onboarding/"_s % filename);
+    if (!image.open(QIODevice::ReadOnly))
+    {
+        return {
+            .status = 404,
+            .body = "Kick onboarding image not found.",
+        };
+    }
+
+    return {
+        .status = 200,
+        .body = image.readAll(),
+        .contentType = PNG_CONTENT_TYPE,
+    };
 }
 
 class AuthSession : public QObject
@@ -995,6 +995,20 @@ private:
     HttpServer::Response handleRequest(const HttpServer::Request &request)
     {
         const auto path = requestPath(request.target);
+
+        if (path.startsWith(u"/assets/kick-onboarding/"_s))
+        {
+            if (request.method.compare(u"GET"_s, Qt::CaseInsensitive) != 0)
+            {
+                return {
+                    .status = 405,
+                    .body = "Only GET requests are supported for Kick "
+                            "onboarding images.",
+                };
+            }
+
+            return renderKickOnboardingImage(path);
+        }
 
         if (path == u"/"_s)
         {

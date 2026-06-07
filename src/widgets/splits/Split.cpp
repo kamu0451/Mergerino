@@ -234,9 +234,20 @@ bool splitMatchesChannelAndFilters(Split *split,
 
 Split *findLinkedActivityPane(Split *source)
 {
+    if (!source)
+    {
+        return nullptr;
+    }
+
+    const auto sourceChannel = source->getChannel();
     auto *container = dynamic_cast<SplitContainer *>(source->parentWidget());
+    if (!container || !sourceChannel || sourceChannel->isEmpty())
+    {
+        return nullptr;
+    }
+
     const auto alertFilterId = findAlertsFilterId();
-    if (!container || !alertFilterId || source->getChannel()->isEmpty())
+    if (!alertFilterId)
     {
         return nullptr;
     }
@@ -272,10 +283,16 @@ Split *findActivityOwnerSplit(Split *activitySplit)
         return activitySplit;
     }
 
+    const auto activityChannel = activitySplit->getChannel();
     auto *container =
         dynamic_cast<SplitContainer *>(activitySplit->parentWidget());
+    if (!container || !activityChannel || activityChannel->isEmpty())
+    {
+        return nullptr;
+    }
+
     const auto alertFilterId = findAlertsFilterId();
-    if (!container || !alertFilterId || activitySplit->getChannel()->isEmpty())
+    if (!alertFilterId)
     {
         return nullptr;
     }
@@ -1611,6 +1628,7 @@ void Split::setChannel(IndirectChannel newChannel)
         this->usermodeChangedConnection_ = tc->userStateChanged.connect([this] {
             this->header_->updateIcons();
             this->header_->updateRoomModes();
+            this->input_->updatePollPredictionButtons();
         });
 
         this->roomModeChangedConnection_ = tc->roomModesChanged.connect([this] {
@@ -1681,11 +1699,6 @@ void Split::setChannel(IndirectChannel newChannel)
 
     this->channelChanged.invoke();
     this->actionRequested.invoke(Action::RefreshTab);
-
-    if (auto *merged = dynamic_cast<MergedChannel *>(this->channel_.get().get()))
-    {
-        merged->reconnect();
-    }
 
     // Queue up save because: Split channel changed
     getApp()->getWindows()->queueSave();
@@ -1763,9 +1776,6 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
     dialog->setSlowerChatMessagesPerSecond(
         activityOwnerSplit ? activityOwnerSplit->slowerChatMessagesPerSecond()
                            : this->slowerChatMessagesPerSecond());
-    dialog->setSlowerChatMessageAnimations(
-        activityOwnerSplit ? activityOwnerSplit->slowerChatMessageAnimations()
-                           : this->slowerChatMessageAnimations());
     dialog->setViewerCountEnabled(activityOwnerSplit
                                       ? activityOwnerSplit->viewerCountEnabled()
                                       : this->viewerCountEnabled());
@@ -1795,8 +1805,6 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
                 dialog->slowerChatEnabled());
             activityOwnerSplit->setSlowerChatMessagesPerSecond(
                 dialog->slowerChatMessagesPerSecond());
-            activityOwnerSplit->setSlowerChatMessageAnimations(
-                dialog->slowerChatMessageAnimations());
             activityOwnerSplit->setViewerCountEnabled(
                 dialog->viewerCountEnabled());
         }
@@ -1840,8 +1848,6 @@ void Split::showSettingsDialog()
     dialog->setSlowerChatEnabled(this->slowerChatEnabled());
     dialog->setSlowerChatMessagesPerSecond(
         this->slowerChatMessagesPerSecond());
-    dialog->setSlowerChatMessageAnimations(
-        this->slowerChatMessageAnimations());
     dialog->setViewerCountEnabled(this->viewerCountEnabled());
     dialog->setTwitchActivityMinimumBits(this->twitchActivityMinimumBits());
     dialog->setKickActivityMinimumKicks(this->kickActivityMinimumKicks());
@@ -1883,8 +1889,6 @@ void Split::showSettingsDialog()
                 this->setSlowerChatEnabled(dialog->slowerChatEnabled());
                 this->setSlowerChatMessagesPerSecond(
                     dialog->slowerChatMessagesPerSecond());
-                this->setSlowerChatMessageAnimations(
-                    dialog->slowerChatMessageAnimations());
                 this->setViewerCountEnabled(dialog->viewerCountEnabled());
             }
         }

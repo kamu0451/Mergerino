@@ -91,6 +91,7 @@ constexpr size_t TOOLTIP_EMOTE_ENTRIES_LIMIT = 7;
 using namespace chatterino;
 
 constexpr int SCROLLBAR_PADDING = 8;
+constexpr int MESSAGE_BUFFER_RETAIN_VIEWPORTS = 1;
 constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY = 0.4;
 constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY_HOLD = 0.0;
 constexpr qreal SLOW_CHAT_MESSAGE_OPACITY_PROGRESS_SCALE = 1.05;
@@ -1739,6 +1740,7 @@ bool ChannelView::shouldAnimateMessageAnimations() const
 {
     return this->split_ != nullptr && this->context_ != Context::Search &&
            !this->isActivityPaneView() &&
+           getSettings()->messageAnimations &&
            this->split_->slowerChatMessageAnimations();
 }
 
@@ -2845,9 +2847,9 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     const auto now = SteadyClock::now();
     for (const auto &animation : this->messageArrivalAnimations_)
     {
-        const auto it = std::find(messagesSnapshot.begin(), messagesSnapshot.end(),
-                                  animation.layout);
-        if (it == messagesSnapshot.end())
+        const auto it = std::find(messagesSnapshot.rbegin(),
+                                  messagesSnapshot.rend(), animation.layout);
+        if (it == messagesSnapshot.rend())
         {
             continue;
         }
@@ -2867,11 +2869,11 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         const auto clampedProgress = std::clamp(progress, 0.0, 1.0);
         const auto offset = slowChatArrivalOffset(
             clampedProgress, static_cast<qreal>((*it)->getHeight()));
+        const auto messageIndex =
+            static_cast<size_t>(std::distance(it, messagesSnapshot.rend()) - 1);
         activeArrivalAnimations.push_back(
             {
-                .messageIndex =
-                    static_cast<size_t>(std::distance(messagesSnapshot.begin(),
-                                                      it)),
+                .messageIndex = messageIndex,
                 .offset = offset,
             });
         totalStackAnimationOffset += offset;
@@ -2932,6 +2934,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         return y >= area.y() && y < area.y() + area.height();
     };
 
+    size_t renderEnd = renderStart;
     for (; ctx.messageIndex < messagesSnapshot.size(); ++ctx.messageIndex)
     {
         MessageLayout *layout = messagesSnapshot[ctx.messageIndex].get();
@@ -3041,6 +3044,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         ctx.y += layout->getHeight();
 
         end = layout;
+        renderEnd = ctx.messageIndex;
         if (ctx.y > this->height())
         {
             break;
@@ -3069,36 +3073,50 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         return;
     }
 
-    // remove messages that are on screen
-    // the messages that are left at the end get their buffers reset
-    for (size_t i = renderStart; i < messagesSnapshot.size(); ++i)
+    // Keep nearby row pixmaps alive so smooth scrolling does not recreate
+    // buffers for the same messages on adjacent frames.
+    auto retainedBufferStart = renderStart;
+    auto retainedHeight = 0;
+    const auto retainedHeightLimit =
+        this->height() * MESSAGE_BUFFER_RETAIN_VIEWPORTS;
+    while (retainedBufferStart > 0 && retainedHeight < retainedHeightLimit)
     {
-        auto it = this->messagesOnScreen_.find(messagesSnapshot[i]);
-        if (it != this->messagesOnScreen_.end())
+        --retainedBufferStart;
+        retainedHeight +=
+            std::max(1, messagesSnapshot[retainedBufferStart]->getHeight());
+    }
+
+    auto retainedBufferEnd = renderEnd;
+    retainedHeight = 0;
+    while (retainedBufferEnd + 1 < messagesSnapshot.size() &&
+           retainedHeight < retainedHeightLimit)
+    {
+        ++retainedBufferEnd;
+        retainedHeight +=
+            std::max(1, messagesSnapshot[retainedBufferEnd]->getHeight());
+    }
+
+    for (size_t i = retainedBufferStart; i <= retainedBufferEnd; ++i)
+    {
+        auto it = this->messagesWithBuffers_.find(messagesSnapshot[i]);
+        if (it != this->messagesWithBuffers_.end())
         {
-            this->messagesOnScreen_.erase(it);
+            this->messagesWithBuffers_.erase(it);
         }
     }
 
-    // delete the message buffers that aren't on screen
-    for (const std::shared_ptr<MessageLayout> &item : this->messagesOnScreen_)
+    for (const std::shared_ptr<MessageLayout> &item : this->messagesWithBuffers_)
     {
         item->deleteBuffer();
     }
 
-    this->messagesOnScreen_.clear();
+    this->messagesWithBuffers_.clear();
 
-    // add all messages on screen to the map
-    for (size_t i = renderStart; i < messagesSnapshot.size(); ++i)
+    for (size_t i = retainedBufferStart; i <= retainedBufferEnd; ++i)
     {
         const std::shared_ptr<MessageLayout> &layout = messagesSnapshot[i];
 
-        this->messagesOnScreen_.insert(layout);
-
-        if (layout.get() == end)
-        {
-            break;
-        }
+        this->messagesWithBuffers_.insert(layout);
     }
 }
 
@@ -4407,12 +4425,12 @@ void ChannelView::hideEvent(QHideEvent * /*event*/)
 {
     this->activityTimeRefreshTimer_.stop();
 
-    for (const auto &layout : this->messagesOnScreen_)
+    for (const auto &layout : this->messagesWithBuffers_)
     {
         layout->deleteBuffer();
     }
 
-    this->messagesOnScreen_.clear();
+    this->messagesWithBuffers_.clear();
 }
 
 void ChannelView::showUserInfoPopup(const QString &userName,

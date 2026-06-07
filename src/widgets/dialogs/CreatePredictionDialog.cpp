@@ -9,11 +9,14 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/api/TwitchModerationAuth.hpp"
+#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "widgets/Window.hpp"
+#include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
@@ -37,6 +40,7 @@
 #include <QSignalBlocker>
 #include <QShowEvent>
 #include <QSizePolicy>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QWidget>
 
@@ -739,13 +743,43 @@ void CreatePredictionDialog::updateRemoveButton(OutcomeRow &row, bool visible,
     row.removeOpacityAnimation->start();
 }
 
+int CreatePredictionDialog::visibleOutcomeCount() const
+{
+    int visibleCount = 0;
+    for (const auto &row : this->outcomeRows_)
+    {
+        if (row.visible)
+        {
+            ++visibleCount;
+        }
+    }
+
+    return visibleCount;
+}
+
 int CreatePredictionDialog::dialogHeightForVisibleOutcomes(
     int visibleCount) const
 {
     const auto extraRows =
         std::max(0, visibleCount - BASE_VISIBLE_OUTCOMES);
     return BASE_DIALOG_HEIGHT +
-           extraRows * (OUTCOME_INPUT_HEIGHT + OUTCOME_ROW_GAP);
+           extraRows * (OUTCOME_INPUT_HEIGHT + OUTCOME_ROW_GAP) +
+           this->errorLabelHeight();
+}
+
+int CreatePredictionDialog::errorLabelHeight() const
+{
+    if (this->errorLabel_ == nullptr || !this->errorLabel_->isVisible())
+    {
+        return 0;
+    }
+
+    const auto labelWidth = DIALOG_WIDTH - 32;
+    const auto wrappedHeight = this->errorLabel_->heightForWidth(labelWidth);
+    const auto labelHeight =
+        wrappedHeight > 0 ? wrappedHeight : this->errorLabel_->sizeHint().height();
+
+    return labelHeight + 8;
 }
 
 void CreatePredictionDialog::updateDialogHeight(int visibleCount,
@@ -823,48 +857,111 @@ void CreatePredictionDialog::submit()
 
     const auto durationSeconds = this->duration_->currentData().toInt();
     QPointer<CreatePredictionDialog> self(this);
+    const auto scheduleFailure = [self](const QString &message) {
+        if (self == nullptr)
+        {
+            return;
+        }
 
-    getHelix()->createPrediction(
-        this->broadcasterID_, title, outcomeTitles,
-        std::chrono::seconds(durationSeconds),
-        [channel = this->channel_, title, self] {
+        QTimer::singleShot(0, self.data(), [self, message] {
+            if (self != nullptr)
+            {
+                self->finishSubmitFailure(message);
+            }
+        });
+    };
+
+    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+    if (currentUser == nullptr || currentUser->isAnon() ||
+        currentUser->getOAuthToken().isEmpty())
+    {
+        scheduleFailure(QStringLiteral(
+            "You must be logged in to create a prediction."));
+        return;
+    }
+
+    std::function<void()> successCallback = [channel = this->channel_, title,
+                                             self] {
+        if (self == nullptr)
+        {
+            return;
+        }
+
+        QTimer::singleShot(0, self.data(), [channel, title, self] {
+            if (self == nullptr)
+            {
+                return;
+            }
+
             if (channel != nullptr)
             {
                 channel->addSystemMessage(
                     QStringLiteral("Created prediction: '%1'").arg(title));
                 notifyPollsAndPredictionsChanged(channel);
             }
-            if (self != nullptr)
-            {
-                self->close();
-            }
-        },
-        [channel = this->channel_, self](const auto &error) {
-            if (channel != nullptr)
-            {
-                channel->addSystemMessage("Failed to create prediction - " +
-                                          error);
-            }
-            if (self != nullptr)
-            {
-                self->submitting_ = false;
-                self->showError("Failed to create prediction - " + error);
-                self->updateOutcomeRows(false);
-                self->updateStartButton();
-            }
+            self->close();
         });
+    };
+    std::function<void(const QString &)> failureCallback =
+        [scheduleFailure](const QString &error) {
+        scheduleFailure("Failed to create prediction - " + error);
+    };
+
+    if (currentUser->getUserId() == this->broadcasterID_)
+    {
+        getHelix()->createPrediction(this->broadcasterID_, title, outcomeTitles,
+                                     std::chrono::seconds(durationSeconds),
+                                     std::move(successCallback),
+                                     std::move(failureCallback));
+        return;
+    }
+
+    QString authError;
+    const auto moderationAccount =
+        TwitchModerationAuth::resolveForCurrentUser(currentUser->getUserId(),
+                                                    &authError);
+    if (!moderationAccount.isValid())
+    {
+        scheduleFailure("Failed to create prediction - " + authError);
+        return;
+    }
+
+    TwitchWebApi::startPrediction(
+        this->broadcasterID_, title, outcomeTitles, durationSeconds,
+        moderationAccount.clientId, moderationAccount.oauthToken,
+        [successCallback = std::move(successCallback),
+         broadcasterID = this->broadcasterID_, title, outcomeTitles,
+         durationSeconds](const QString &predictionID,
+                          const QJsonObject &predictionObject) mutable {
+            TwitchPollsAndPredictionsBar::rememberLocalPrediction(
+                broadcasterID, title, outcomeTitles, durationSeconds,
+                predictionID, predictionObject);
+            successCallback();
+        },
+        std::move(failureCallback));
+}
+
+void CreatePredictionDialog::finishSubmitFailure(const QString &message)
+{
+    this->submitting_ = false;
+    this->updateOutcomeRows(false);
+    this->updateStartButton();
+    this->showError(message);
 }
 
 void CreatePredictionDialog::showError(const QString &message)
 {
     this->errorLabel_->setText(message);
     this->errorLabel_->show();
+    this->errorLabel_->updateGeometry();
+    this->updateDialogHeight(this->visibleOutcomeCount(), false);
 }
 
 void CreatePredictionDialog::clearError()
 {
     this->errorLabel_->clear();
     this->errorLabel_->hide();
+    this->updateDialogHeight(this->visibleOutcomeCount(), false);
 }
 
 QStringList CreatePredictionDialog::outcomes() const

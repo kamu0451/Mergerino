@@ -1,5 +1,16 @@
 Patch Notes
 
+07/06/2026
+- Added global message animation setting
+- Added command autocomplete to the chatbox
+- Added informational pictures to Kick sign in onboard process
+- Added manual check for update setting
+- Added Moderator and VIP categories to viewer list
+- Added poll button to chatbox
+- Added prediction button to chatbox
+- Fixed a bug causing activity tab toggle to reconnect YouTube chat
+- Fixed a bug causing YouTube chat to not display new messages
+
 05/06/2026
 - Added improved viewer count setting
 - Added improved prediction command

@@ -847,6 +847,26 @@ public:
         "/misc/twitch/messageHistoryLimit",
         800,
     };
+    QStringSetting twitchModerationAuthToken = {
+        "/misc/twitch/moderationAuth/token",
+        "",
+    };
+    QStringSetting twitchModerationAuthClientId = {
+        "/misc/twitch/moderationAuth/clientId",
+        "",
+    };
+    QStringSetting twitchModerationAuthUserId = {
+        "/misc/twitch/moderationAuth/userId",
+        "",
+    };
+    QStringSetting twitchModerationAuthLogin = {
+        "/misc/twitch/moderationAuth/login",
+        "",
+    };
+    QStringSetting twitchModerationAuthDisplayName = {
+        "/misc/twitch/moderationAuth/displayName",
+        "",
+    };
     IntSetting scrollbackSplitLimit = {
         "/misc/scrollback/splitLimit",
         1000,
@@ -945,6 +965,8 @@ public:
     QStringSetting additionalExtensionIDs{"/misc/additionalExtensionIDs", ""};
 
     BoolSetting xChatterino7NoHttp2{"/x-chatterino7/no-http2", false};
+    BoolSetting messageAnimations = {"/appearance/messages/messageAnimations",
+                                     true};
 
 private:
     ChatterinoSetting<std::vector<HighlightPhrase>> highlightedMessagesSetting =

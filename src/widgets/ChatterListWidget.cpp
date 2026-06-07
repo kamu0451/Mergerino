@@ -8,6 +8,8 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/api/TwitchModerationAuth.hpp"
+#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"  // IWYU pragma: keep
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Fonts.hpp"
@@ -22,6 +24,7 @@
 #include <QListWidget>
 #include <QPointer>
 #include <QPixmap>
+#include <QSet>
 #include <QSize>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -32,92 +35,6 @@
 namespace chatterino {
 
 namespace {
-
-QString formatVIPListError(HelixListVIPsError error, const QString &message)
-{
-    using Error = HelixListVIPsError;
-
-    QString errorMessage = QString("Failed to list VIPs - ");
-
-    switch (error)
-    {
-        case Error::Forwarded: {
-            errorMessage += message;
-        }
-        break;
-
-        case Error::Ratelimited: {
-            errorMessage += "You are being ratelimited by Twitch. Try "
-                            "again in a few seconds.";
-        }
-        break;
-
-        case Error::UserMissingScope: {
-            // TODO(pajlada): Phrase MISSING_REQUIRED_SCOPE
-            errorMessage += "Missing required scope. "
-                            "Re-login with your "
-                            "account and try again.";
-        }
-        break;
-
-        case Error::UserNotAuthorized: {
-            // TODO(pajlada): Phrase MISSING_PERMISSION
-            errorMessage += "You don't have permission to "
-                            "perform that action.";
-        }
-        break;
-
-        case Error::UserNotBroadcaster: {
-            errorMessage +=
-                "Due to Twitch restrictions, "
-                "this command can only be used by the broadcaster. "
-                "To see the list of VIPs you must use the Twitch website.";
-        }
-        break;
-
-        case Error::Unknown: {
-            errorMessage += "An unknown error has occurred.";
-        }
-        break;
-    }
-    return errorMessage;
-}
-
-QString formatModsError(HelixGetModeratorsError error, const QString &message)
-{
-    using Error = HelixGetModeratorsError;
-
-    QString errorMessage = QString("Failed to get moderators: ");
-
-    switch (error)
-    {
-        case Error::Forwarded: {
-            errorMessage += message;
-        }
-        break;
-
-        case Error::UserMissingScope: {
-            errorMessage += "Missing required scope. "
-                            "Re-login with your "
-                            "account and try again.";
-        }
-        break;
-
-        case Error::UserNotAuthorized: {
-            errorMessage +=
-                "Due to Twitch restrictions, "
-                "this command can only be used by the broadcaster. "
-                "To see the list of mods you must use the Twitch website.";
-        }
-        break;
-
-        case Error::Unknown: {
-            errorMessage += "An unknown error has occurred.";
-        }
-        break;
-    }
-    return errorMessage;
-}
 
 QString formatChattersError(HelixGetChattersError error, const QString &message)
 {
@@ -227,6 +144,23 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
             chattersList->addItem(formatListItemText(user));
         }
         chattersList->addItem(new QListWidgetItem());
+    };
+
+    auto sortedRoleList = [](const auto &users, QSet<QString> &addedUsers) {
+        QStringList result;
+        for (const auto &user : users)
+        {
+            const auto login = user.trimmed().toLower();
+            if (login.isEmpty() || addedUsers.contains(login))
+            {
+                continue;
+            }
+
+            addedUsers.insert(login);
+            result.append(login);
+        }
+        result.sort();
+        return result;
     };
 
     auto activeSearchQueries = [=]() {
@@ -346,7 +280,9 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
         performListSearch();
     };
 
-    auto loadChatters = [=](auto modList, auto vipList, bool isBroadcaster) {
+    auto loadChatters = [=](auto staffList, auto adminList,
+                            auto globalModList, auto modList, auto vipList,
+                            bool showRoleGroups) {
         getHelix()->getChatters(
             roomId, currentUserId, 50000,
             [=](const auto &chatters) {
@@ -359,6 +295,9 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
 
                 auto broadcaster = broadcasterName;
                 QStringList chatterList;
+                QStringList staffChatters;
+                QStringList adminChatters;
+                QStringList globalModChatters;
                 QStringList modChatters;
                 QStringList vipChatters;
 
@@ -373,6 +312,24 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
                         addLabel("Broadcaster");
                         chattersList->addItem(broadcaster);
                         chattersList->addItem(new QListWidgetItem());
+                        continue;
+                    }
+
+                    if (staffList.contains(chatter))
+                    {
+                        staffChatters.append(chatter);
+                        continue;
+                    }
+
+                    if (adminList.contains(chatter))
+                    {
+                        adminChatters.append(chatter);
+                        continue;
+                    }
+
+                    if (globalModList.contains(chatter))
+                    {
+                        globalModChatters.append(chatter);
                         continue;
                     }
 
@@ -391,12 +348,18 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
                     chatterList.append(chatter);
                 }
 
+                staffChatters.sort();
+                adminChatters.sort();
+                globalModChatters.sort();
                 modChatters.sort();
                 vipChatters.sort();
                 chatterList.sort();
 
-                if (isBroadcaster)
+                if (showRoleGroups)
                 {
+                    addUserList(staffChatters, QString("Staff"));
+                    addUserList(adminChatters, QString("Admins"));
+                    addUserList(globalModChatters, QString("Global Mods"));
                     addUserList(modChatters, QString("Moderators"));
                     addUserList(vipChatters, QString("VIPs"));
                 }
@@ -421,69 +384,85 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
                      performListSearch);
     QObject::connect(searchBar, &QLineEdit::returnPressed, this, addSearchTerm);
 
-    // Only broadcaster can get role lists. Moderators can get viewers.
-    if (isBroadcaster)
-    {
-        // Add moderators
-        getHelix()->getModerators(
-            roomId, 1000,
-            [=](const auto &mods) {
-                if (lifetimeGuard.isNull() || chattersListGuard.isNull())
-                {
-                    return;
-                }
-
-                QSet<QString> modList;
-                for (const auto &mod : mods)
-                {
-                    modList.insert(mod.userName.toLower());
-                }
-
-                // Add vips
-                getHelix()->getChannelVIPs(
-                    roomId,
-                    [=](const auto &vips) {
-                        if (lifetimeGuard.isNull() ||
-                            chattersListGuard.isNull())
-                        {
-                            return;
-                        }
-
-                        QSet<QString> vipList;
-                        for (const auto &vip : vips)
-                        {
-                            vipList.insert(vip.userName.toLower());
-                        }
-
-                        // Add viewers
-                        loadChatters(modList, vipList, true);
-                    },
-                    [=](auto error, const auto &message) {
-                        if (lifetimeGuard.isNull() ||
-                            chattersListGuard.isNull())
-                        {
-                            return;
-                        }
-
-                        auto errorMessage = formatVIPListError(error, message);
-                        chattersList->addItem(formatListItemText(errorMessage));
-                    });
-            },
-            [=](auto error, const auto &message) {
-                if (lifetimeGuard.isNull() || chattersListGuard.isNull())
-                {
-                    return;
-                }
-
-                auto errorMessage = formatModsError(error, message);
-                chattersList->addItem(formatListItemText(errorMessage));
-            });
-    }
-    else if (hasModRights)
-    {
+    auto loadUncategorizedChatters = [=]() {
+        QSet<QString> staffList;
+        QSet<QString> adminList;
+        QSet<QString> globalModList;
         QSet<QString> modList;
         QSet<QString> vipList;
-        loadChatters(modList, vipList, false);
+        loadChatters(staffList, adminList, globalModList, modList, vipList,
+                     false);
+    };
+
+    auto loadGroupedChatters = [=](const HelixChatterGroups &groups) {
+        if (lifetimeGuard.isNull() || chattersListGuard.isNull() ||
+            resultListGuard.isNull() || searchBarGuard.isNull() ||
+            loadingLabelGuard.isNull())
+        {
+            return;
+        }
+
+        QSet<QString> addedUsers;
+        const auto broadcasterChatters =
+            sortedRoleList(groups.broadcaster, addedUsers);
+        const auto staffChatters = sortedRoleList(groups.staff, addedUsers);
+        const auto adminChatters = sortedRoleList(groups.admins, addedUsers);
+        const auto globalModChatters =
+            sortedRoleList(groups.globalMods, addedUsers);
+        const auto modChatters = sortedRoleList(groups.moderators, addedUsers);
+        const auto vipChatters = sortedRoleList(groups.vips, addedUsers);
+        const auto viewerChatters = sortedRoleList(groups.viewers, addedUsers);
+
+        addUserList(broadcasterChatters, QString("Broadcaster"));
+        addUserList(staffChatters, QString("Staff"));
+        addUserList(adminChatters, QString("Admins"));
+        addUserList(globalModChatters, QString("Global Mods"));
+        addUserList(modChatters, QString("Moderators"));
+        addUserList(vipChatters, QString("VIPs"));
+        addUserList(viewerChatters, QString("Viewers"));
+
+        loadingLabel->hide();
+        performListSearch();
+    };
+
+    if (isBroadcaster || hasModRights)
+    {
+        QString moderationAuthError;
+        const auto moderationAccount =
+            TwitchModerationAuth::resolveForCurrentUser(currentUserId,
+                                                        &moderationAuthError);
+        const auto roleOAuthClient = moderationAccount.clientId;
+        const auto roleOAuthToken = moderationAccount.oauthToken;
+        const auto roleClientIntegrity = moderationAccount.clientIntegrity;
+        const auto roleDeviceId = moderationAccount.deviceId;
+
+        TwitchWebApi::getChatterGroups(
+            broadcasterName, roleOAuthClient, roleOAuthToken,
+            roleClientIntegrity, roleDeviceId,
+            [=](const auto &groups) {
+                loadGroupedChatters(groups);
+            },
+            [=](const auto &errorMessage) {
+                if (lifetimeGuard.isNull() || chattersListGuard.isNull())
+                {
+                    return;
+                }
+
+                auto roleError =
+                    QStringLiteral("Role groups unavailable: ") + errorMessage;
+                if (roleOAuthToken.isEmpty() && !moderationAuthError.isEmpty())
+                {
+                    roleError += QStringLiteral(" ") + moderationAuthError;
+                }
+                else if (roleClientIntegrity.isEmpty() || roleDeviceId.isEmpty())
+                {
+                    roleError += QStringLiteral(
+                        " In Settings -> Accounts, logout from Twitch mod "
+                        "actions, then log in again with Copy Helper.");
+                }
+                chattersList->addItem(formatListItemText(roleError));
+                loadUncategorizedChatters();
+            });
     }
     else
     {

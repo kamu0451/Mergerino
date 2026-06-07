@@ -136,6 +136,9 @@ protected:
     void showCompletionPopup(const QString &text, CompletionKind kind);
     void hideCompletionPopup();
     void insertCompletionText(const QString &input_) const;
+    void updatePollPredictionButtons();
+    void openPollDialog();
+    void openPredictionDialog();
     void openEmotePopup();
     void updateEmotePopupChannel();
     void clearReplyTarget();
@@ -199,6 +202,8 @@ protected:
         QVBoxLayout *rightVbox;
         QHBoxLayout *buttonHbox;
         PlatformSwitchButton *platformButton;
+        SvgButton *predictionButton = nullptr;
+        SvgButton *pollButton = nullptr;
         SvgButton *emoteButton;
     } ui_;
 

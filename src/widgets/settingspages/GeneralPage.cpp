@@ -546,6 +546,15 @@ void GeneralPage::initLayout(GeneralPageView &layout)
             "When enabled, messages deleted by moderators will be hidden.")
         ->addTo(layout);
 
+    SettingWidget::checkbox("Hide chat bot messages", s.hideChatBotMessages)
+        ->setTooltip(
+            "When enabled, messages from accounts tagged as a chat bot are "
+            "hidden. Detected via FFZ's \"Bot\" badge on Twitch (NightBot, "
+            "StreamElements, ...) and Kick's native \"Bot\" badge. YouTube and "
+            "TikTok expose no bot flag, so their bots are unaffected. Applies "
+            "immediately to messages already in chat.")
+        ->addTo(layout);
+
     layout.addDropdown<QString>(
         "Message timestamp format",
         {"Disable", "h:mm", "hh:mm", "h:mm a", "hh:mm a", "h:mm:ss", "hh:mm:ss",

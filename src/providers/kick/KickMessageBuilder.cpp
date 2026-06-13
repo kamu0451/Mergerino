@@ -360,6 +360,10 @@ void appendKickBadges(KickMessageBuilder &builder, BoostJsonArray badges)
         {
             hasVip = true;
         }
+        else if (ty == "bot")
+        {
+            builder->flags.set(MessageFlag::ChatBot);
+        }
 
         builder.emplace<BadgeElement>(emote, flag);
     }

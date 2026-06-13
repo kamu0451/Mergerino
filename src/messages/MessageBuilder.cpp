@@ -2522,6 +2522,14 @@ void MessageBuilder::appendFfzBadges(TwitchChannel *twitchChannel,
 
         /// e.g. "frankerfacez:subwoofer"
         this->message().externalBadges.emplace_back(badge.emote->name.string);
+
+        // FFZ tags known bot accounts (NightBot, StreamElements, ...) with its
+        // global "Bot" badge. Surface it as a ChatBot flag so the messages can
+        // optionally be hidden -- Twitch itself exposes no bot indicator.
+        if (badge.emote->name.string == u"frankerfacez:bot")
+        {
+            this->message().flags.set(MessageFlag::ChatBot);
+        }
     }
 
     if (twitchChannel == nullptr)
@@ -2536,6 +2544,11 @@ void MessageBuilder::appendFfzBadges(TwitchChannel *twitchChannel,
 
         /// e.g. "frankerfacez:subwoofer"
         this->message().externalBadges.emplace_back(badge.emote->name.string);
+
+        if (badge.emote->name.string == u"frankerfacez:bot")
+        {
+            this->message().flags.set(MessageFlag::ChatBot);
+        }
     }
 }
 

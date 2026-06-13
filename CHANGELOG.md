@@ -2,6 +2,8 @@
 
 ## Unversioned
 
+- Minor: Added a "Hide chat bot messages" setting that hides messages from known chat bots, detected via FFZ's "Bot" badge on Twitch (NightBot, StreamElements, ...) and Kick's native "Bot" badge. Toggling it applies immediately.
+
 ## 2.5.5
 
 - Minor: Update emoji data to Unicode 17.0. (#6471)

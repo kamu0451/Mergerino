@@ -80,6 +80,9 @@ enum class MessageFlag : std::int64_t {
     /// A cross-platform "raid"/"host" announcement (Twitch raid, Kick stream host)
     Raid = (1LL << 44),
     FirstMessageSession = (1LL << 45),
+    /// The message was sent by an account the platform tags as a chat bot
+    /// (currently Kick's "bot" identity badge). Used to optionally hide bots.
+    ChatBot = (1LL << 46),
 };
 using MessageFlags = FlagsEnum<MessageFlag>;
 

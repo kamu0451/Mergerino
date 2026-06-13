@@ -237,6 +237,8 @@ public:
     BoolSetting fadeMessageHistory = {"/appearance/messages/fadeMessageHistory",
                                       true};
     BoolSetting hideModerated = {"/appearance/messages/hideModerated", false};
+    BoolSetting hideChatBotMessages = {
+        "/appearance/messages/hideChatBotMessages", false};
     BoolSetting hideModerationActions = {
         "/appearance/messages/hideModerationActions", false};
     BoolSetting hideDeletionActions = {

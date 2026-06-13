@@ -421,6 +421,7 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
         getSettings()->showBlockedTermAutomodMessages.getEnum() ==
         ShowModerationState::Never;
     bool hideSimilar = getSettings()->hideSimilar;
+    bool hideChatBotMessages = getSettings()->hideChatBotMessages;
     bool hideReplies = !ctx.flags.has(MessageElementFlag::RepliedMessage);
 
     this->container_.beginLayout(ctx.width, this->scale_, this->imageScale_,
@@ -465,6 +466,12 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
         }
 
         if (hideSimilar && this->message_->flags.has(MessageFlag::Similar))
+        {
+            continue;
+        }
+
+        if (hideChatBotMessages &&
+            this->message_->flags.has(MessageFlag::ChatBot))
         {
             continue;
         }

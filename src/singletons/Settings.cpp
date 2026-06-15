@@ -168,6 +168,58 @@ bool Settings::toggleMutedChannel(const QString &channelName)
     }
 }
 
+bool Settings::isLocallyBlocked(const QString &userName)
+{
+    if (userName.isEmpty())
+    {
+        return false;
+    }
+
+    auto items = this->blockedUsers.readOnly();
+    for (const auto &user : *items)
+    {
+        if (user.compare(userName, Qt::CaseInsensitive) == 0)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void Settings::blockUserLocally(const QString &userName)
+{
+    if (!userName.isEmpty() && !this->isLocallyBlocked(userName))
+    {
+        this->blockedUsers.append(userName);
+    }
+}
+
+void Settings::unblockUserLocally(const QString &userName)
+{
+    for (std::vector<int>::size_type i = 0;
+         i != this->blockedUsers.raw().size(); i++)
+    {
+        if (this->blockedUsers.raw()[i].compare(userName,
+                                                Qt::CaseInsensitive) == 0)
+        {
+            this->blockedUsers.removeAt(i);
+            i--;
+        }
+    }
+}
+
+bool Settings::toggleLocallyBlocked(const QString &userName)
+{
+    if (this->isLocallyBlocked(userName))
+    {
+        this->unblockUserLocally(userName);
+        return false;
+    }
+
+    this->blockUserLocally(userName);
+    return true;
+}
+
 Settings *Settings::instance_ = nullptr;
 
 Settings::Settings(const Args &args, const QString &settingsDirectory,
@@ -241,6 +293,8 @@ Settings::Settings(const Args &args, const QString &settingsDirectory,
                            this->ignoredMessages);
     initializeSignalVector(this->signalHolder, this->mutedChannelsSetting,
                            this->mutedChannels);
+    initializeSignalVector(this->signalHolder, this->blockedUsersSetting,
+                           this->blockedUsers);
     initializeSignalVector(this->signalHolder, this->filterRecordsSetting,
                            this->filterRecords);
     initializeSignalVector(this->signalHolder, this->nicknamesSetting,

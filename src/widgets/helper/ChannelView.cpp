@@ -70,6 +70,7 @@
 #include <QJsonDocument>
 #include <QMessageBox>
 #include <QPainter>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QScreen>
 #include <QStringBuilder>
@@ -89,6 +90,20 @@ constexpr size_t TOOLTIP_EMOTE_ENTRIES_LIMIT = 7;
 using namespace chatterino;
 
 constexpr int SCROLLBAR_PADDING = 8;
+
+/// Maps @a value into [0, range] as a triangle wave -- models an emote
+/// bouncing back and forth between two walls.
+double triangleReflect(double value, double range)
+{
+    if (range <= 0.0)
+    {
+        return 0.0;
+    }
+    double period = 2.0 * range;
+    double m = std::fmod(std::fmod(value, period) + period, period);
+    return m <= range ? m : period - m;
+}
+
 constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY = 0.4;
 constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY_HOLD = 0.0;
 constexpr qreal SLOW_CHAT_MESSAGE_OPACITY_PROGRESS_SCALE = 1.05;
@@ -634,6 +649,13 @@ void ChannelView::initializeSignals()
             if (!this->animationArea_.isEmpty())
             {
                 this->queueUpdate(this->animationArea_);
+            }
+            if (!this->floatingEmotes_.empty())
+            {
+                // Floating emotes move across the whole view, so a partial
+                // repaint won't do -- prune the expired ones and repaint fully.
+                this->pruneFloatingEmotes();
+                this->update();
             }
         });
 
@@ -2067,6 +2089,13 @@ void ChannelView::messageAppended(MessagePtr &message,
         visibleMessage = *transformed;
     }
 
+    if (getSettings()->floatEmotesOnBackground &&
+        this->context_ == Context::None && this->isVisible() &&
+        this->showingLatestMessages_ && visibleMessage->isEmoteOnly())
+    {
+        this->spawnFloatingEmotes(visibleMessage);
+    }
+
     auto *messageFlags = &message->flags;
     if (overridingFlags)
     {
@@ -2483,6 +2512,187 @@ void ChannelView::scrollToMessageLayout(MessageLayout *layout,
     }
 }
 
+void ChannelView::spawnFloatingEmotes(const MessagePtr &message)
+{
+    constexpr size_t MAX_TOTAL = 40;
+    constexpr size_t MAX_PER_MESSAGE = 6;
+
+    const auto style = getSettings()->backgroundEmoteAnimation.getEnum();
+    const int lifetimeMs =
+        style == BackgroundEmoteAnimation::Bounce ? 8000 : 4500;
+    auto *rng = QRandomGenerator::global();
+
+    const auto randomVelocity = [&] {
+        const double speed = 0.05 + (rng->generateDouble() * 0.08);
+        return rng->bounded(2) == 0 ? speed : -speed;
+    };
+
+    size_t spawnedHere = 0;
+    for (const auto &element : message->elements)
+    {
+        if (this->floatingEmotes_.size() >= MAX_TOTAL ||
+            spawnedHere >= MAX_PER_MESSAGE)
+        {
+            break;
+        }
+
+        std::vector<EmotePtr> emotes;
+        if (auto *emoteElement = dynamic_cast<EmoteElement *>(element.get()))
+        {
+            if (auto emote = emoteElement->getEmote())
+            {
+                emotes.push_back(emote);
+            }
+        }
+        else if (auto *layered =
+                     dynamic_cast<LayeredEmoteElement *>(element.get()))
+        {
+            for (const auto &layer : layered->getEmotes())
+            {
+                if (layer.ptr)
+                {
+                    emotes.push_back(layer.ptr);
+                }
+            }
+        }
+
+        for (const auto &emote : emotes)
+        {
+            if (this->floatingEmotes_.size() >= MAX_TOTAL ||
+                spawnedHere >= MAX_PER_MESSAGE)
+            {
+                break;
+            }
+            const auto &image = emote->images.getImageOrLoaded(2.0F);
+            if (!image)
+            {
+                continue;
+            }
+
+            FloatingEmote floating;
+            floating.image = image;
+            floating.spawnedAt = SteadyClock::now();
+            floating.lifetimeMs = lifetimeMs;
+            floating.startX = 0.05 + (rng->generateDouble() * 0.9);
+            floating.startY = 0.05 + (rng->generateDouble() * 0.9);
+            floating.velX = randomVelocity();
+            floating.velY = randomVelocity();
+            this->floatingEmotes_.push_back(std::move(floating));
+            ++spawnedHere;
+        }
+    }
+
+    if (spawnedHere > 0)
+    {
+        this->update();
+    }
+}
+
+void ChannelView::pruneFloatingEmotes()
+{
+    if (!getSettings()->floatEmotesOnBackground)
+    {
+        this->floatingEmotes_.clear();
+        return;
+    }
+
+    const auto now = SteadyClock::now();
+    std::erase_if(this->floatingEmotes_, [&](const FloatingEmote &emote) {
+        const auto ageMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - emote.spawnedAt)
+                .count();
+        return ageMs >= emote.lifetimeMs;
+    });
+}
+
+void ChannelView::drawFloatingEmotes(QPainter &painter)
+{
+    if (this->floatingEmotes_.empty())
+    {
+        return;
+    }
+
+    const double viewW = this->width();
+    const double viewH = this->height();
+    if (viewW <= 0.0 || viewH <= 0.0)
+    {
+        return;
+    }
+
+    const auto style = getSettings()->backgroundEmoteAnimation.getEnum();
+    const auto now = SteadyClock::now();
+    const double targetH = 64.0 * this->scale();
+
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+
+    for (const auto &emote : this->floatingEmotes_)
+    {
+        if (!emote.image)
+        {
+            continue;
+        }
+        auto pixmap = emote.image->pixmapOrLoad();
+        if (!pixmap || pixmap->isNull())
+        {
+            continue;
+        }
+
+        const double ageMs =
+            static_cast<double>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - emote.spawnedAt)
+                    .count());
+        if (ageMs >= emote.lifetimeMs)
+        {
+            continue;
+        }
+        const double t = ageMs / 1000.0;
+        const double progress = ageMs / static_cast<double>(emote.lifetimeMs);
+
+        const double imgW = pixmap->width();
+        const double imgH = pixmap->height();
+        if (imgH <= 0.0)
+        {
+            continue;
+        }
+        const double drawH = targetH;
+        const double drawW = targetH * (imgW / imgH);
+
+        double x = 0.0;
+        double y = 0.0;
+        if (style == BackgroundEmoteAnimation::FlyBy)
+        {
+            // Arc from the bottom up through the top-middle and back down.
+            const double s = progress;
+            x = s * std::max(0.0, viewW - drawW);
+            const double bottomY = viewH - drawH;
+            const double peakY = emote.startY * viewH * 0.4;
+            y = bottomY - ((bottomY - peakY) * 4.0 * s * (1.0 - s));
+        }
+        else
+        {
+            // Bounce: constant-velocity drift reflected off the view edges.
+            const double rangeX = std::max(0.0, viewW - drawW);
+            const double rangeY = std::max(0.0, viewH - drawH);
+            x = triangleReflect((emote.startX * rangeX) + (emote.velX * viewW * t),
+                                rangeX);
+            y = triangleReflect((emote.startY * rangeY) + (emote.velY * viewH * t),
+                                rangeY);
+        }
+
+        const double fadeIn = std::clamp(ageMs / 300.0, 0.0, 1.0);
+        const double fadeOut = std::clamp(
+            (static_cast<double>(emote.lifetimeMs) - ageMs) / 1000.0, 0.0, 1.0);
+        painter.setOpacity(0.55 * std::min(fadeIn, fadeOut));
+        painter.drawPixmap(QRectF(x, y, drawW, drawH), *pixmap,
+                           QRectF(0.0, 0.0, imgW, imgH));
+    }
+
+    painter.restore();
+}
+
 void ChannelView::paintEvent(QPaintEvent *event)
 {
     //    BenchmarkGuard benchmark("paint");
@@ -2490,6 +2700,9 @@ void ChannelView::paintEvent(QPaintEvent *event)
     QPainter painter(this);
 
     painter.fillRect(this->rect(), this->messageColors_.channelBackground);
+
+    // draw floating emotes behind the message list
+    this->drawFloatingEmotes(painter);
 
     // draw messages
     this->drawMessages(painter, event->rect());
@@ -3861,6 +4074,32 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
                 }
             }
         });
+    }
+
+    // Local (client-only) cross-platform user block. Works regardless of
+    // platform since it keys on the message's login name and hides at layout
+    // time -- see Settings::isLocallyBlocked.
+    if (auto messagePtr = layout->getMessagePtr();
+        !messagePtr->loginName.isEmpty() &&
+        !messagePtr->flags.has(MessageFlag::System))
+    {
+        const auto loginName = messagePtr->loginName;
+        const auto label = messagePtr->displayName.isEmpty()
+                               ? loginName
+                               : messagePtr->displayName;
+        menu->addSeparator();
+        if (getSettings()->isLocallyBlocked(loginName))
+        {
+            menu->addAction("Unblock " + label + " (local)", [loginName] {
+                getSettings()->unblockUserLocally(loginName);
+            });
+        }
+        else
+        {
+            menu->addAction("Block " + label + " (local)", [loginName] {
+                getSettings()->blockUserLocally(loginName);
+            });
+        }
     }
 }
 

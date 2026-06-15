@@ -203,6 +203,10 @@ WindowManager::WindowManager(const Args &appArgs_, const Paths &paths,
         settings.showBlockedTermAutomodMessages);
     this->forceLayoutChannelViewsListener.add(settings.hideModerated);
     this->forceLayoutChannelViewsListener.add(settings.hideChatBotMessages);
+    this->forceLayoutChannelViewsListener.add(settings.hideCommandMessages);
+    this->forceLayoutChannelViewsListener.add(settings.hideEmoteOnlyMessages);
+    this->forceLayoutChannelViewsListener.add(
+        settings.blockedUsers.delayedItemsChanged);
     this->forceLayoutChannelViewsListener.add(
         settings.streamerModeHideModActions);
     this->forceLayoutChannelViewsListener.add(

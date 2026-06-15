@@ -81,6 +81,15 @@ enum class ShowModerationState : int {
     Never = 1,
 };
 
+/// How emotes drift across the chat background when floatEmotesOnBackground is
+/// enabled.
+enum class BackgroundEmoteAnimation : int {
+    // Drift with a velocity and reflect off the window edges.
+    Bounce = 0,
+    // Arc from the bottom-left up through the top-middle and out bottom-right.
+    FlyBy = 1,
+};
+
 enum class StreamLinkPreferredQuality : std::uint8_t {
     Choose,
     Source,
@@ -239,6 +248,15 @@ public:
     BoolSetting hideModerated = {"/appearance/messages/hideModerated", false};
     BoolSetting hideChatBotMessages = {
         "/appearance/messages/hideChatBotMessages", false};
+    BoolSetting hideCommandMessages = {
+        "/appearance/messages/hideCommandMessages", false};
+    BoolSetting hideEmoteOnlyMessages = {
+        "/appearance/messages/hideEmoteOnlyMessages", false};
+    BoolSetting floatEmotesOnBackground = {
+        "/appearance/messages/floatEmotesOnBackground", false};
+    EnumSetting<BackgroundEmoteAnimation> backgroundEmoteAnimation = {
+        "/appearance/messages/backgroundEmoteAnimation",
+        BackgroundEmoteAnimation::Bounce};
     BoolSetting hideModerationActions = {
         "/appearance/messages/hideModerationActions", false};
     BoolSetting hideDeletionActions = {
@@ -821,7 +839,7 @@ public:
     };
     IntSetting scrollbackSplitLimit = {
         "/misc/scrollback/splitLimit",
-        1000,
+        100000,
     };
     IntSetting scrollbackUsercardLimit = {
         "/misc/scrollback/usercardLimit",
@@ -932,6 +950,8 @@ private:
         "/ignore/phrases"};
     ChatterinoSetting<std::vector<QString>> mutedChannelsSetting = {
         "/pings/muted"};
+    ChatterinoSetting<std::vector<QString>> blockedUsersSetting = {
+        "/ignore/blockedUsers"};
     ChatterinoSetting<std::vector<FilterRecordPtr>> filterRecordsSetting = {
         "/filtering/filters"};
     ChatterinoSetting<std::vector<Nickname>> nicknamesSetting = {"/nicknames"};
@@ -947,6 +967,10 @@ public:
     SignalVector<HighlightBadge> highlightedBadges;
     SignalVector<HighlightBlacklistUser> blacklistedUsers;
     SignalVector<IgnorePhrase> ignoredMessages;
+    /// Usernames blocked locally on this client only (case-insensitive). Unlike
+    /// the Twitch-Helix block, this hides messages on every platform
+    /// (Twitch/Kick/YouTube/TikTok) -- see Settings::isLocallyBlocked.
+    SignalVector<QString> blockedUsers;
     SignalVector<FilterRecordPtr> filterRecords;
     SignalVector<Nickname> nicknames;
     SignalVector<ModerationAction> moderationActions;
@@ -959,6 +983,14 @@ public:
     std::optional<QString> matchNickname(const QString &username);
     void mute(const QString &channelName);
     void unmute(const QString &channelName);
+
+    /// Local (client-only) cross-platform user blocking. Keyed on the login
+    /// name, matched case-insensitively.
+    bool isLocallyBlocked(const QString &userName);
+    void blockUserLocally(const QString &userName);
+    void unblockUserLocally(const QString &userName);
+    /// Returns true if the user is now blocked, false if now unblocked.
+    bool toggleLocallyBlocked(const QString &userName);
 
 private:
     void updateModerationActions();

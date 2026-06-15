@@ -555,6 +555,50 @@ void GeneralPage::initLayout(GeneralPageView &layout)
             "immediately to messages already in chat.")
         ->addTo(layout);
 
+    SettingWidget::checkbox("Hide command messages", s.hideCommandMessages)
+        ->setTooltip(
+            "When enabled, chat command messages are hidden across all "
+            "platforms -- any message whose text starts with \"!\" followed by "
+            "a letter or digit (e.g. !drops, !uptime, !8ball). Plain emphasis "
+            "like \"!\" or \"!!!\" is not affected. Applies immediately to "
+            "messages already in chat.")
+        ->addTo(layout);
+
+    SettingWidget::checkbox("Hide emote-only messages", s.hideEmoteOnlyMessages)
+        ->setTooltip(
+            "When enabled, messages made up entirely of emotes (Twitch, 7TV, "
+            "BTTV, FFZ, or Unicode emoji -- in any combination) are hidden "
+            "across all platforms. Messages that also contain text, @mentions, "
+            "or links are unaffected. Applies immediately to messages already "
+            "in chat.")
+        ->addTo(layout);
+
+    SettingWidget::checkbox("Float emotes on the chat background",
+                            s.floatEmotesOnBackground)
+        ->setTooltip(
+            "When enabled, emotes from emote-only messages drift across the "
+            "chat background instead of cluttering the message list -- still "
+            "visible, but not spamming chat. Best paired with \"Hide emote-only "
+            "messages\". Only applies to live messages in the main chat view.")
+        ->addTo(layout);
+
+    layout.addDropdown<std::underlying_type_t<BackgroundEmoteAnimation>>(
+        "Background emote animation", {"Bounce", "Fly-by"},
+        s.backgroundEmoteAnimation,
+        [](auto index) {
+            return index;
+        },
+        [](auto args) {
+            // The combo index lines up with the enum's underlying value
+            // (Bounce = 0, Fly-by = 1); the setting is int-backed.
+            return args.index;
+        },
+        false,
+        "How emotes move when \"Float emotes on the chat background\" is on: "
+        "Bounce drifts them around and reflects off the edges; Fly-by arcs each "
+        "emote from the bottom-left up through the middle and out the "
+        "bottom-right.");
+
     layout.addDropdown<QString>(
         "Message timestamp format",
         {"Disable", "h:mm", "hh:mm", "h:mm a", "hh:mm a", "h:mm:ss", "hh:mm:ss",
@@ -1710,7 +1754,7 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                             s.scrollbackSplitLimit,
                             {
                                 .min = 100,
-                                .max = 100000,
+                                .max = 1000000,
                                 .singleStep = 100,
                             })
         ->addTo(layout);

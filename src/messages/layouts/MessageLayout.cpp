@@ -422,6 +422,21 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
         ShowModerationState::Never;
     bool hideSimilar = getSettings()->hideSimilar;
     bool hideChatBotMessages = getSettings()->hideChatBotMessages;
+    // A "command message" is a viewer invocation like "!drops" / "!uptime".
+    // command-ness is purely a function of the message text, so unlike the bot
+    // flag it needs no per-provider detection -- one content check covers
+    // Twitch/Kick/YouTube/TikTok. Require an alphanumeric after the "!" so plain
+    // emphasis ("!", "!!!", "!?") is not mistaken for a command.
+    bool hideCommandMessage = getSettings()->hideCommandMessages && [this] {
+        const auto &text = this->message_->messageText;
+        return text.size() >= 2 && text[0] == u'!' && text[1].isLetterOrNumber();
+    }();
+    // Locally blocked users are hidden on every platform (keyed on login name).
+    bool hideBlockedUser =
+        getSettings()->isLocallyBlocked(this->message_->loginName);
+    // Emote-only messages (all emotes/emoji, no text) can be hidden to cut spam.
+    bool hideEmoteOnly = getSettings()->hideEmoteOnlyMessages &&
+                         this->message_->isEmoteOnly();
     bool hideReplies = !ctx.flags.has(MessageElementFlag::RepliedMessage);
 
     this->container_.beginLayout(ctx.width, this->scale_, this->imageScale_,
@@ -472,6 +487,21 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
 
         if (hideChatBotMessages &&
             this->message_->flags.has(MessageFlag::ChatBot))
+        {
+            continue;
+        }
+
+        if (hideCommandMessage)
+        {
+            continue;
+        }
+
+        if (hideBlockedUser)
+        {
+            continue;
+        }
+
+        if (hideEmoteOnly)
         {
             continue;
         }

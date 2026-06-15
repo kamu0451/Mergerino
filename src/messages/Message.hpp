@@ -113,6 +113,12 @@ struct Message {
         NotReplyableDueToThread,
     };
     ReplyStatus isReplyable() const;
+
+    /// Returns true if the visible body of this message consists solely of
+    /// emotes/emoji (Twitch/7TV/BTTV/FFZ/Unicode -- all flagged uniformly),
+    /// with no text/mentions/links and at least one emote present.
+    bool isEmoteOnly() const;
+
     uint32_t count = 1;
 
     /// Can this message be modified?

@@ -6,6 +6,7 @@
 
 #include "Application.hpp"
 #include "common/Literals.hpp"
+#include "messages/MessageElement.hpp"
 #include "messages/MessageThread.hpp"
 #include "providers/colors/ColorProvider.hpp"
 #include "providers/twitch/TwitchBadge.hpp"
@@ -432,6 +433,33 @@ QJsonObject Message::toJson() const
     }
 
     return msg;
+}
+
+bool Message::isEmoteOnly() const
+{
+    bool hasEmote = false;
+    for (const auto &element : this->elements)
+    {
+        const auto flags = element->getFlags();
+
+        // Any real text -- words, @mentions, links -- disqualifies the message.
+        // Chrome elements (username, timestamp, badges, ...) carry no Text flag
+        // so they're ignored. Note: emoji use the distinct EmojiText bit, not
+        // this Text bit, so they aren't caught here.
+        if (flags.has(MessageElementFlag::Text))
+        {
+            return false;
+        }
+
+        // Every emote provider (Twitch/7TV/BTTV/FFZ) is flagged Emote; Unicode
+        // emoji are flagged EmojiAll. Either counts as emote content.
+        if (flags.hasAny(MessageElementFlag::Emote) ||
+            flags.hasAny(MessageElementFlag::EmojiAll))
+        {
+            hasEmote = true;
+        }
+    }
+    return hasEmote;
 }
 
 Message::ReplyStatus Message::isReplyable() const

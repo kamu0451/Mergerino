@@ -45,6 +45,9 @@ using MessagePtr = std::shared_ptr<const Message>;
 class MessageLayout;
 using MessageLayoutPtr = std::shared_ptr<MessageLayout>;
 
+class Image;
+using ImagePtr = std::shared_ptr<Image>;
+
 enum class MessageElementFlag : int64_t;
 using MessageElementFlags = FlagsEnum<MessageElementFlag>;
 
@@ -302,6 +305,13 @@ private:
                          bool causedByScrollbar, bool causedByShow);
 
     void drawMessages(QPainter &painter, const QRect &area);
+    /// Paints the decorative floating emotes behind the message list.
+    void drawFloatingEmotes(QPainter &painter);
+    /// Spawns floating emotes from an emote-only message (no-op if the feature
+    /// is off or the message isn't emote-only).
+    void spawnFloatingEmotes(const MessagePtr &message);
+    /// Drops floating emotes that have outlived their lifetime.
+    void pruneFloatingEmotes();
     void setSelection(const SelectionItem &start, const SelectionItem &end);
     void setSelection(const Selection &newSelection);
     void selectWholeMessage(MessageLayout *layout, int &messageIndex);
@@ -406,6 +416,21 @@ private:
         qreal toY;
         SteadyClock::time_point startedAt;
     };
+
+    /// One emote drifting across the chat background. Spawned from emote-only
+    /// messages when floatEmotesOnBackground is on; see drawFloatingEmotes().
+    struct FloatingEmote {
+        ImagePtr image;
+        SteadyClock::time_point spawnedAt;
+        int lifetimeMs = 0;
+        // Start position as a fraction of the view, [0, 1].
+        double startX = 0.0;
+        double startY = 0.0;
+        // Velocity in view-fractions per second (Bounce style only).
+        double velX = 0.0;
+        double velY = 0.0;
+    };
+    std::vector<FloatingEmote> floatingEmotes_;
 
     bool pausable_ = false;
     QTimer pauseTimer_;

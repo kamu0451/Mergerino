@@ -3,6 +3,10 @@
 ## Unversioned
 
 - Minor: Added a "Hide chat bot messages" setting that hides messages from known chat bots, detected via FFZ's "Bot" badge on Twitch (NightBot, StreamElements, ...) and Kick's native "Bot" badge. Toggling it applies immediately.
+- Minor: Added a "Hide command messages" setting that hides chat commands (any message starting with "!" followed by a letter or digit, e.g. !drops, !uptime) across all platforms. Toggling it applies immediately.
+- Minor: Added a local, cross-platform user block. Right-click a user in chat and choose "Block ... (local)" to hide their messages on every platform (Twitch/Kick/YouTube/TikTok) -- unlike the Twitch-only block, which never worked for Kick. Manage the list under Settings -> Ignores -> Users. Applies immediately.
+- Minor: Added a "Hide emote-only messages" setting that hides messages consisting entirely of emotes (Twitch/7TV/BTTV/FFZ/Unicode emoji) across all platforms. Messages that also contain text, mentions, or links are kept. Toggling it applies immediately.
+- Minor: Added a "Float emotes on the chat background" setting that drifts emotes from emote-only messages across the chat background instead of cluttering the message list. Pairs with "Hide emote-only messages". Choose the motion ("Bounce" or "Fly-by") with the "Background emote animation" dropdown.
 
 ## 2.5.5
 

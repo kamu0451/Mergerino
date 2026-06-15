@@ -2517,9 +2517,12 @@ void ChannelView::spawnFloatingEmotes(const MessagePtr &message)
     constexpr size_t MAX_TOTAL = 40;
     constexpr size_t MAX_PER_MESSAGE = 6;
 
-    const auto style = getSettings()->backgroundEmoteAnimation.getEnum();
-    const int lifetimeMs =
-        style == BackgroundEmoteAnimation::Bounce ? 8000 : 4500;
+    // One duration for both styles. For Fly-by it doubles as the travel time of
+    // the arc (position is derived from age/lifetime), so a longer duration makes
+    // the emote drift across more slowly; for Bounce it is how long it lives.
+    const int durationSec = std::clamp(
+        getSettings()->backgroundEmoteAnimationDuration.getValue(), 1, 600);
+    const int lifetimeMs = durationSec * 1000;
     auto *rng = QRandomGenerator::global();
 
     const auto randomVelocity = [&] {

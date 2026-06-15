@@ -599,6 +599,21 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         "emote from the bottom-left up through the middle and out the "
         "bottom-right.");
 
+    SettingWidget::intInput("Background emote animation duration (seconds)",
+                            s.backgroundEmoteAnimationDuration,
+                            {
+                                .min = 1,
+                                .max = 600,
+                                .singleStep = 1,
+                            })
+        ->setTooltip(
+            "How long each floating emote stays on the chat background, in "
+            "seconds (1-600). For Fly-by this is also the time each emote takes "
+            "to travel its arc, so a higher value makes them drift across more "
+            "slowly; for Bounce it is how long they keep bouncing before fading "
+            "out.")
+        ->addTo(layout);
+
     layout.addDropdown<QString>(
         "Message timestamp format",
         {"Disable", "h:mm", "hh:mm", "h:mm a", "hh:mm a", "h:mm:ss", "hh:mm:ss",

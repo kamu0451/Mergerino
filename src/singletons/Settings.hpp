@@ -257,6 +257,8 @@ public:
     EnumSetting<BackgroundEmoteAnimation> backgroundEmoteAnimation = {
         "/appearance/messages/backgroundEmoteAnimation",
         BackgroundEmoteAnimation::Bounce};
+    IntSetting backgroundEmoteAnimationDuration = {
+        "/appearance/messages/backgroundEmoteAnimationDuration", 8};
     BoolSetting hideModerationActions = {
         "/appearance/messages/hideModerationActions", false};
     BoolSetting hideDeletionActions = {

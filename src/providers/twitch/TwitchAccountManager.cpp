@@ -11,6 +11,7 @@
 #include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/twitch/LiveController.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
@@ -163,6 +164,12 @@ void checkMissingScopes(const std::shared_ptr<TwitchAccount> &account)
                 << "Failed to check for missing scopes:" << res.formatError();
         })
         .execute();
+}
+
+bool hasHelixCredentials(const std::shared_ptr<TwitchAccount> &account)
+{
+    return account && !account->getOAuthClient().isEmpty() &&
+           !account->getOAuthToken().isEmpty();
 }
 
 }  // namespace
@@ -448,6 +455,29 @@ void TwitchAccountManager::load()
 
     this->currentUsername.connect([this](const QString &newUsername) {
         auto user = this->findUserByUsername(newUsername);
+        auto *app = getApp();
+
+        auto updateHelixCredentials =
+            [this](const std::shared_ptr<TwitchAccount> &preferredUser) {
+                if (hasHelixCredentials(preferredUser))
+                {
+                    getHelix()->update(preferredUser->getOAuthClient(),
+                                       preferredUser->getOAuthToken());
+                    return;
+                }
+
+                for (const auto &account : this->accounts)
+                {
+                    if (hasHelixCredentials(account))
+                    {
+                        getHelix()->update(account->getOAuthClient(),
+                                           account->getOAuthToken());
+                        return;
+                    }
+                }
+
+                getHelix()->update({}, {});
+            };
 
         this->currentUserAboutToChange.invoke(this->currentUser_, user);
 
@@ -455,17 +485,22 @@ void TwitchAccountManager::load()
         {
             qCDebug(chatterinoTwitch)
                 << "Twitch user updated to" << newUsername;
-            getHelix()->update(user->getOAuthClient(), user->getOAuthToken());
+            updateHelixCredentials(user);
             this->currentUser_ = user;
         }
         else
         {
             qCDebug(chatterinoTwitch) << "Twitch user updated to anonymous";
+            updateHelixCredentials(nullptr);
             this->currentUser_ = this->anonymousUser_;
         }
 
         this->currentUserChanged();
         this->currentUser_->reloadEmotes();
+        if (!app->isTest())
+        {
+            app->getTwitchLiveController()->request();
+        }
     });
 }
 

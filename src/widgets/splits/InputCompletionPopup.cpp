@@ -39,14 +39,16 @@ InputCompletionPopup::InputCompletionPopup(QWidget *parent)
     this->redrawTimer_.setInterval(33);
 }
 
-void InputCompletionPopup::updateCompletion(const QString &text,
-                                            CompletionKind kind,
-                                            ChannelPtr channel)
+void InputCompletionPopup::updateCompletion(
+    const QString &text, CompletionKind kind, ChannelPtr channel,
+    std::vector<MessagePlatform> platformFilter)
 {
-    if (this->currentKind_ != kind || this->currentChannel_ != channel)
+    if (this->currentKind_ != kind || this->currentChannel_ != channel ||
+        this->currentPlatformFilter_ != platformFilter)
     {
         // New completion context
-        this->beginCompletion(kind, std::move(channel));
+        this->beginCompletion(kind, std::move(channel),
+                              std::move(platformFilter));
     }
 
     assert(this->model_.hasSource());
@@ -81,12 +83,12 @@ std::unique_ptr<completion::Source> InputCompletionPopup::getSource() const
                 return std::make_unique<completion::EmoteSource>(
                     this->currentChannel_.get(),
                     std::make_unique<completion::SmartEmoteStrategy>(),
-                    this->callback_);
+                    this->callback_, this->currentPlatformFilter_);
             }
             return std::make_unique<completion::EmoteSource>(
                 this->currentChannel_.get(),
                 std::make_unique<completion::ClassicEmoteStrategy>(),
-                this->callback_);
+                this->callback_, this->currentPlatformFilter_);
         case CompletionKind::User:
             return std::make_unique<completion::UserSource>(
                 this->currentChannel_.get(),
@@ -97,11 +99,13 @@ std::unique_ptr<completion::Source> InputCompletionPopup::getSource() const
     }
 }
 
-void InputCompletionPopup::beginCompletion(CompletionKind kind,
-                                           ChannelPtr channel)
+void InputCompletionPopup::beginCompletion(
+    CompletionKind kind, ChannelPtr channel,
+    std::vector<MessagePlatform> platformFilter)
 {
     this->currentKind_ = kind;
     this->currentChannel_ = std::move(channel);
+    this->currentPlatformFilter_ = std::move(platformFilter);
     this->model_.setSource(this->getSource());
 }
 
@@ -109,6 +113,7 @@ void InputCompletionPopup::endCompletion()
 {
     this->currentKind_ = std::nullopt;
     this->currentChannel_ = nullptr;
+    this->currentPlatformFilter_.clear();
     this->model_.setSource(nullptr);
 }
 

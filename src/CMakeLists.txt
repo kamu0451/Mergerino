@@ -489,6 +489,7 @@ set(SOURCE_FILES
 
         providers/twitch/ChannelPointReward.cpp
         providers/twitch/ChannelPointReward.hpp
+        providers/twitch/CurrentUserBadges.hpp
         providers/twitch/IrcMessageHandler.cpp
         providers/twitch/IrcMessageHandler.hpp
         providers/twitch/PubSubClient.cpp
@@ -937,6 +938,8 @@ set(SOURCE_FILES
         widgets/splits/SplitInput.hpp
         widgets/splits/SplitOverlay.cpp
         widgets/splits/SplitOverlay.hpp
+        widgets/splits/StreamDatabaseBadgeBar.cpp
+        widgets/splits/StreamDatabaseBadgeBar.hpp
         widgets/splits/TwitchPollsAndPredictionsBar.cpp
         widgets/splits/TwitchPollsAndPredictionsBar.hpp
         )

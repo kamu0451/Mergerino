@@ -3,12 +3,16 @@
 #include "common/Atomic.hpp"
 #include "common/Channel.hpp"
 #include "common/ChannelChatters.hpp"
+#include "messages/MessageElement.hpp"
 
 #include <pajlada/signals/signal.hpp>
 
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <queue>
 #include <unordered_map>
 #include <vector>
@@ -33,6 +37,7 @@ struct EmoteName;
 struct KickChannelInfo;
 struct KickPrivateChannelInfo;
 struct KickPrivateSubscriberBadgeInfo;
+struct KickPrivateUserInChannelInfo;
 
 class KickChannel : public Channel, public ChannelChatters
 {
@@ -57,6 +62,7 @@ public:
 
     void initialize(const UserInit &init);
     void loadRecentMessages(std::function<void()> onDone = {});
+    void loadRecentMessagesReconnect(std::function<void()> onDone = {});
 
     std::shared_ptr<KickChannel> sharedFromThis();
     std::weak_ptr<KickChannel> weakFromThis();
@@ -92,6 +98,7 @@ public:
 
     void reloadSeventvEmotes(bool manualRefresh);
 
+    std::shared_ptr<const EmoteMap> kickChannelEmotes() const;
     std::shared_ptr<const EmoteMap> seventvEmotes() const;
     EmotePtr seventvEmote(const EmoteName &name) const;
     EmotePtr subscriberBadgeForMonths(uint64_t months) const;
@@ -112,6 +119,18 @@ public:
     void sendMessage(const QString &message) override;
     void sendReply(const QString &message, const QString &replyToID);
 
+    bool tryReplacePendingSentMessage(const MessagePtr &message);
+    void updateOwnIdentityFromMessage(const Message &message);
+
+    struct CachedOwnIdentity {
+        QString displayName;
+        QString loginName;
+        QString userID;
+        QColor usernameColor;
+        std::vector<std::unique_ptr<MessageElement>> badges;
+    };
+    const CachedOwnIdentity *ownIdentity() const;
+
     void deleteMessage(const QString &messageID);
 
     bool isMod() const override;
@@ -124,6 +143,8 @@ public:
     bool hasModRights() const override;
     bool hasHighRateLimit() const override;
     bool isLive() const override;
+    bool canReconnect() const override;
+    void reconnect() override;
     QString getCurrentStreamID() const override;
 
     struct StreamData {
@@ -165,6 +186,9 @@ private:
     uint64_t channelID_ = 0;
 
     void resolveChannelInfo();
+    void reloadKickChannelEmotes();
+    void refreshOwnIdentity();
+    void cacheOwnIdentityFromUserInfo(const KickPrivateUserInChannelInfo &info);
     void setUserInfo(UserInit init);
     void setSubscriberBadges(
         const std::vector<KickPrivateSubscriberBadgeInfo> &badges);
@@ -175,6 +199,8 @@ private:
 
     QString prepareMessage(const QString &message) const;
     void updateSevenTVActivity();
+    void prunePendingSentMessages(const QDateTime &now);
+    void markPendingSentMessageFailed(const QString &localID);
     void applyStreamData(bool isLive, const QString &streamTitle,
                          const QString &categoryName,
                          const QString &thumbnailUrl, uint64_t viewerCount,
@@ -196,6 +222,7 @@ private:
     // The name in the URL (replaces non-alphanumeric characters with dashes)
     QString slug_;
 
+    Atomic<std::shared_ptr<const EmoteMap>> kickChannelEmotes_;
     Atomic<std::shared_ptr<const EmoteMap>> seventvEmotes_;
 
     struct SubscriberBadge {
@@ -218,6 +245,14 @@ private:
     std::queue<std::chrono::steady_clock::time_point> lastMessageTimestamps_;
     std::chrono::steady_clock::time_point lastMessageSpeedErrorTs_;
     std::chrono::steady_clock::time_point lastMessageAmountErrorTs_;
+
+    struct PendingSentMessage {
+        QString localID;
+        QString messageText;
+        QDateTime createdAt;
+    };
+    std::deque<PendingSentMessage> pendingSentMessages_;
+    std::optional<CachedOwnIdentity> ownIdentity_;
 
     QTimer sendWaitTimer_;
     // Timepoint at which the user can send messages again

@@ -159,7 +159,7 @@ void StreamerMode::start()
 
 StreamerModePrivate::StreamerModePrivate(StreamerMode *parent)
     : parent_(parent)
-    , timer_(new QTimer(&this->thread_))
+    , timer_(new QTimer)
 {
     this->thread_.setObjectName("StreamerMode");
     this->timer_->moveToThread(&this->thread_);

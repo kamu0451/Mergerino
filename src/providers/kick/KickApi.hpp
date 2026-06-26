@@ -45,6 +45,19 @@ struct KickPrivateSubscriberBadgeInfo {
     QString imageUrl;
 };
 
+struct KickPrivateUserBadgeInfo {
+    KickPrivateUserBadgeInfo(BoostJsonObject obj);
+
+    QString type;
+    QString text;
+    QString imageUrl;
+    uint64_t count = 0;
+    uint64_t level = 0;
+    uint64_t sortOrder = 1000;
+    bool active = true;
+    bool selected = true;
+};
+
 struct KickPrivateChannelInfo {
     KickPrivateChannelInfo(BoostJsonObject obj);
 
@@ -66,9 +79,11 @@ struct KickPrivateUserInChannelInfo {
     KickPrivateUserInChannelInfo(BoostJsonObject obj);
 
     uint64_t userID = 0;
+    QString username;
     std::optional<QDateTime> followingSince;
     std::optional<uint16_t> subscriptionMonths;
     std::optional<QString> profilePictureURL;
+    std::vector<KickPrivateUserBadgeInfo> badges;
 };
 
 struct KickPrivateEmoteInfo {

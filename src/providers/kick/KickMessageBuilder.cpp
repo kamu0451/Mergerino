@@ -8,6 +8,7 @@
 #include "controllers/highlights/HighlightResult.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "messages/MessageElement.hpp"
+#include "messages/Image.hpp"
 #include "messages/MessageThread.hpp"
 #include "providers/bttv/BttvEmotes.hpp"
 #include "providers/emoji/Emojis.hpp"
@@ -28,10 +29,27 @@
 #include "util/Helpers.hpp"
 #include "util/Variant.hpp"
 
+#include <QRegularExpression>
+
+#include <algorithm>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <string>
+
 namespace {
 
 using namespace chatterino;
 using namespace Qt::Literals;
+
+constexpr uint16_t KICK_LEVEL_BADGE_IMAGE_SIZE = 17;
+
+using KickLevelBadge = std::pair<BoostJsonObject, std::string>;
+
+QString qStringFromView(std::string_view text)
+{
+    return QString::fromUtf8(text.data(), static_cast<qsizetype>(text.size()));
+}
 
 EmotePtr lookupEmote(const KickChannel &channel, uint64_t senderID,
                      QStringView word)
@@ -197,6 +215,276 @@ void parseContent(KickMessageBuilder &builder, QString &messageText,
     }
 }
 
+QString firstString(BoostJsonObject obj,
+                    std::initializer_list<std::string_view> keys)
+{
+    for (auto key : keys)
+    {
+        auto value = obj[key].toQString();
+        if (!value.isEmpty())
+        {
+            return value;
+        }
+    }
+    return {};
+}
+
+std::string firstStdString(BoostJsonObject obj,
+                           std::initializer_list<std::string_view> keys)
+{
+    for (auto key : keys)
+    {
+        auto value = obj[key].toStdString();
+        if (!value.empty())
+        {
+            return value;
+        }
+    }
+    return {};
+}
+
+std::string badgeTypeFromObject(BoostJsonObject obj)
+{
+    return firstStdString(obj, {"type", "badge_type", "badgeType", "kind",
+                                "id", "slug", "key", "name", "title", "alt",
+                                "tooltip", "display_name", "displayName",
+                                "badge_name", "badgeName"});
+}
+
+QString imageUrlFromObject(BoostJsonObject obj);
+
+QString imageUrlFromValue(BoostJsonValue value)
+{
+    if (value.isString())
+    {
+        return value.toQString();
+    }
+    if (value.isObject())
+    {
+        return imageUrlFromObject(value.toObject());
+    }
+    if (value.isArray())
+    {
+        for (auto entry : value.toArray())
+        {
+            auto url = imageUrlFromValue(entry);
+            if (!url.isEmpty())
+            {
+                return url;
+            }
+        }
+    }
+    return {};
+}
+
+QString imageUrlFromObject(BoostJsonObject obj)
+{
+    auto direct = firstString(
+        obj, {"url", "src", "image", "image_url", "imageUrl",
+              "badge_image_url", "badgeImageUrl", "icon", "icon_url",
+              "iconUrl", "small_image_url", "smallImageUrl", "asset",
+              "asset_url", "assetUrl"});
+    if (!direct.isEmpty())
+    {
+        return direct;
+    }
+
+    for (auto key : {"badge_image", "badgeImage", "image", "images", "icon",
+                     "icons", "badge", "level", "level_badge", "levelBadge",
+                     "thumbnail", "thumbnails"})
+    {
+        auto url = imageUrlFromValue(obj[key]);
+        if (!url.isEmpty())
+        {
+            return url;
+        }
+    }
+
+    return {};
+}
+
+bool isKickLevelBadge(std::string_view type)
+{
+    auto normalized = qStringFromView(type).toLower();
+    return normalized == u"level"_s || normalized == u"kick_level"_s ||
+           normalized == u"kick-level"_s ||
+           normalized == u"level_badge"_s ||
+           normalized == u"level-badge"_s ||
+           normalized.contains(u"level"_s);
+}
+
+QString levelTextFromImageUrl(const QString &imageUrl)
+{
+    static const QRegularExpression badgePathPattern(
+        R"(/chat/badges/(\d+)_)",
+        QRegularExpression::CaseInsensitiveOption);
+    auto match = badgePathPattern.match(imageUrl);
+    if (!match.hasMatch())
+    {
+        return {};
+    }
+    return match.captured(1);
+}
+
+QString levelTextFromValue(BoostJsonValue value);
+
+QString levelTextFromString(QString text)
+{
+    text = text.trimmed();
+    if (text.isEmpty())
+    {
+        return {};
+    }
+
+    static const QRegularExpression numberPattern(R"((\d+))");
+    auto match = numberPattern.match(text);
+    if (!match.hasMatch())
+    {
+        return {};
+    }
+
+    bool ok = false;
+    auto number = match.captured(1).toULongLong(&ok);
+    if (!ok || number == 0)
+    {
+        return {};
+    }
+
+    return QString::number(number);
+}
+
+QString levelTextFromObject(BoostJsonObject obj)
+{
+    for (auto key : {"level", "chat_level", "chatLevel", "channel_level",
+                     "channelLevel", "user_level", "userLevel",
+                     "badge_level", "badgeLevel", "current_level",
+                     "currentLevel", "current", "value", "count", "tier",
+                     "rank", "amount", "number", "metadata"})
+    {
+        auto levelText = levelTextFromValue(obj[key]);
+        if (!levelText.isEmpty())
+        {
+            return levelText;
+        }
+    }
+
+    for (auto key : {"text", "label", "name", "title", "display_name",
+                     "displayName", "badge_name", "badgeName", "alt",
+                     "tooltip"})
+    {
+        auto levelText = levelTextFromValue(obj[key]);
+        if (!levelText.isEmpty())
+        {
+            return levelText;
+        }
+    }
+
+    return {};
+}
+
+QString levelTextFromValue(BoostJsonValue value)
+{
+    if (value.isInt64())
+    {
+        auto level = value.toUint64();
+        return level > 0 ? QString::number(level) : QString{};
+    }
+    if (value.isString())
+    {
+        return levelTextFromString(value.toQString());
+    }
+    if (value.isObject())
+    {
+        return levelTextFromObject(value.toObject());
+    }
+    if (value.isArray())
+    {
+        for (auto entry : value.toArray())
+        {
+            auto levelText = levelTextFromValue(entry);
+            if (!levelText.isEmpty())
+            {
+                return levelText;
+            }
+        }
+    }
+    return {};
+}
+
+bool isKickLevelBadgeObject(BoostJsonObject badgeObj, std::string_view type)
+{
+    if (isKickLevelBadge(type))
+    {
+        return true;
+    }
+
+    auto imageUrl = imageUrlFromObject(badgeObj);
+    if (!levelTextFromImageUrl(imageUrl).isEmpty())
+    {
+        return true;
+    }
+
+    auto descriptor = firstStdString(
+        badgeObj, {"text", "label", "description", "alt", "tooltip",
+                   "display_name", "displayName", "badge_name", "badgeName"});
+    return isKickLevelBadge(descriptor);
+}
+
+bool isVisibleKickBadgeObject(BoostJsonObject badgeObj)
+{
+    return badgeObj["active"].toBool(true) &&
+           badgeObj["selected"].toBool(true);
+}
+
+bool appendKickLevelBadge(KickMessageBuilder &builder, BoostJsonObject badgeObj,
+                          std::string_view type)
+{
+    if (!getSettings()->showKickLevelBadges ||
+        !isVisibleKickBadgeObject(badgeObj) ||
+        !isKickLevelBadgeObject(badgeObj, type))
+    {
+        return false;
+    }
+
+    auto imageUrl = imageUrlFromObject(badgeObj);
+    if (imageUrl.isEmpty())
+    {
+        return false;
+    }
+
+    auto levelText = levelTextFromObject(badgeObj);
+    if (levelText.isEmpty())
+    {
+        levelText = levelTextFromImageUrl(imageUrl);
+    }
+
+    auto name = firstString(badgeObj, {"name", "title", "label", "text",
+                                       "alt", "badge_name", "badgeName"});
+    if (name.isEmpty() || name.compare(u"level"_s, Qt::CaseInsensitive) == 0)
+    {
+        name = levelText.isEmpty() ? u"Kick Level"_s
+                                   : u"Level "_s % levelText;
+    }
+
+    auto tooltip = firstString(badgeObj, {"tooltip", "description", "alt",
+                                          "display_name", "displayName"});
+    if (tooltip.isEmpty() ||
+        tooltip.compare(u"level"_s, Qt::CaseInsensitive) == 0)
+    {
+        tooltip = name;
+    }
+
+    auto emote = std::make_shared<const Emote>(Emote{
+        .name = {name},
+        .images = ImageSet(Image::fromAutoscaledUrl(
+            {imageUrl}, KICK_LEVEL_BADGE_IMAGE_SIZE)),
+        .tooltip = Tooltip{tooltip},
+        .homePage = {u"https://kick.com/" % builder.channel()->slug()},
+    });
+    builder.emplace<BadgeElement>(emote, MessageElementFlag::BadgeKickLevel);
+    return true;
+}
+
 QString displayedUsername(const Message &message)
 {
     QString usernameText;
@@ -339,19 +627,37 @@ void appendReplyButtons(KickMessageBuilder &builder)
     }
 }
 
-void appendKickBadges(KickMessageBuilder &builder, BoostJsonArray badges)
+std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
+                                               BoostJsonArray badges,
+                                               bool updateSelfState = true)
 {
     bool hasMod = false;
     bool hasVip = false;
+    std::optional<KickLevelBadge> levelBadge;
     for (auto badgeObj : badges)
     {
-        auto ty = badgeObj["type"].toStringView();
+        auto obj = badgeObj.toObject();
+        if (!isVisibleKickBadgeObject(obj))
+        {
+            continue;
+        }
+
+        auto ty = badgeTypeFromObject(obj);
+        if (isKickLevelBadgeObject(obj, ty))
+        {
+            if (!levelBadge)
+            {
+                levelBadge.emplace(std::move(obj), std::move(ty));
+            }
+            continue;
+        }
+
         auto [emote, flag] = [&] {
             if (ty == "subscriber")
             {
                 auto subscriberBadge =
                     builder.channel()->subscriberBadgeForMonths(
-                        badgeObj["count"].toUint64());
+                        obj["count"].toUint64());
                 if (subscriberBadge)
                 {
                     return std::pair{subscriberBadge,
@@ -380,11 +686,23 @@ void appendKickBadges(KickMessageBuilder &builder, BoostJsonArray badges)
 
     bool isSelf = builder->loginName ==
                   getApp()->getAccounts()->kick.current()->username();
-    if (isSelf)
+    if (updateSelfState && isSelf)
     {
         builder.channel()->setMod(hasMod);
         builder.channel()->setVip(hasVip);
     }
+    return levelBadge;
+}
+
+bool appendDeferredKickLevelBadge(
+    KickMessageBuilder &builder,
+    const std::optional<KickLevelBadge> &levelBadge)
+{
+    if (!levelBadge)
+    {
+        return false;
+    }
+    return appendKickLevelBadge(builder, levelBadge->first, levelBadge->second);
 }
 
 void appendSeventvBadge(KickMessageBuilder &builder)
@@ -394,6 +712,24 @@ void appendSeventvBadge(KickMessageBuilder &builder)
     {
         builder.emplace<BadgeElement>(*badge, MessageElementFlag::BadgeSevenTV);
     }
+}
+
+bool cachedIdentityHasBadgeFlag(const KickChannel::CachedOwnIdentity *identity,
+                                MessageElementFlag flag)
+{
+    if (!identity)
+    {
+        return false;
+    }
+
+    for (const auto &badge : identity->badges)
+    {
+        if (badge && badge->getFlags().has(flag))
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 HighlightAlert processHighlights(KickMessageBuilder &builder,
@@ -502,7 +838,15 @@ std::pair<MessagePtrMut, HighlightAlert> KickMessageBuilder::makeChatMessage(
     builder.emplace<TimestampElement>(builder->serverReceivedTime.time());
     builder.emplace<TwitchModerationElement>();
 
-    appendKickBadges(builder, identity["badges"].toArray());
+    const auto levelBadgeV2 =
+        appendKickBadges(builder, identity["badges_v2"].toArray(), false);
+    const auto levelBadge =
+        appendKickBadges(builder, identity["badges"].toArray(), true);
+    auto hasLevelBadge = appendDeferredKickLevelBadge(builder, levelBadgeV2);
+    if (!hasLevelBadge)
+    {
+        hasLevelBadge = appendDeferredKickLevelBadge(builder, levelBadge);
+    }
     appendSeventvBadge(builder);
 
     builder.appendUsername(identity);
@@ -523,6 +867,72 @@ std::pair<MessagePtrMut, HighlightAlert> KickMessageBuilder::makeChatMessage(
     auto highlightAlert = processHighlights(builder, args);
 
     return {builder.release(), highlightAlert};
+}
+
+MessagePtrMut KickMessageBuilder::makeSentMessage(KickChannel *kickChannel,
+                                                  const QString &content,
+                                                  const QString &localID)
+{
+    auto account = getApp()->getAccounts()->kick.current();
+    if (!account || account->isAnonymous())
+    {
+        return nullptr;
+    }
+
+    const auto now = QDateTime::currentDateTime();
+    const auto *identity = kickChannel->ownIdentity();
+    const auto displayName =
+        identity && !identity->displayName.isEmpty() ? identity->displayName
+                                                     : account->username();
+    KickMessageBuilder builder(kickChannel);
+    builder->channelName = kickChannel->getName();
+    builder->id = localID;
+    builder->serverReceivedTime = now;
+    builder->parseTime = QTime::currentTime();
+    builder->displayName = displayName;
+    builder->loginName =
+        identity && !identity->loginName.isEmpty() ? identity->loginName
+                                                   : displayName.toLower();
+    builder.senderID = account->userID();
+    builder->userID = QString::number(builder.senderID);
+    builder->flags.set(MessageFlag::DoNotTriggerNotification);
+
+    builder.appendChannelName();
+    builder.emplace<TimestampElement>(now.time());
+    const auto hasCachedSevenTVBadge =
+        cachedIdentityHasBadgeFlag(identity, MessageElementFlag::BadgeSevenTV);
+    if (identity)
+    {
+        for (const auto &badge : identity->badges)
+        {
+            if (badge)
+            {
+                builder->elements.emplace_back(badge->clone());
+            }
+        }
+    }
+    if (!hasCachedSevenTVBadge)
+    {
+        appendSeventvBadge(builder);
+    }
+
+    if (identity)
+    {
+        builder.appendUsernameAsSender(displayName, identity->usernameColor);
+    }
+    else
+    {
+        builder.appendUsernameAsSender(displayName);
+    }
+
+    QString messageText;
+    parseContent(builder, messageText, content.simplified());
+
+    builder->searchText =
+        builder->loginName % ' ' % builder->displayName % u": " % messageText;
+    builder->messageText = messageText;
+
+    return builder.release();
 }
 
 MessagePtrMut KickMessageBuilder::makeTimeoutMessage(KickChannel *channel,
@@ -785,6 +1195,10 @@ MessagePtrMut KickMessageBuilder::makeGiftedSubscriptionMessage(
     KickMessageBuilder builder(systemMessage, channel,
                                QDateTime::currentDateTime());
     builder->flags.set(MessageFlag::Subscription);
+    builder->giftedSubscriptionRecipientCount =
+        gifted.size() > std::numeric_limits<uint32_t>::max()
+            ? std::numeric_limits<uint32_t>::max()
+            : static_cast<uint32_t>(gifted.size());
     if (gifted.size() > 1)
     {
         builder->flags.set(MessageFlag::Collapsed);
@@ -988,7 +1402,13 @@ void KickMessageBuilder::appendUsername(BoostJsonObject identityObj)
 
 void KickMessageBuilder::appendUsernameAsSender(const QString &username)
 {
-    auto userColor = this->channel()->getUserColor(username);
+    this->appendUsernameAsSender(username,
+                                 this->channel()->getUserColor(username));
+}
+
+void KickMessageBuilder::appendUsernameAsSender(const QString &username,
+                                                const QColor &userColor)
+{
     MessageColor userMessageColor(userColor);
     if (!userColor.isValid())
     {

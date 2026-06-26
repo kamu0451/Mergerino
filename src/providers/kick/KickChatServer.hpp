@@ -11,6 +11,8 @@
 #include <pajlada/signals/signalholder.hpp>
 
 #include <memory>
+#include <mutex>
+#include <unordered_set>
 
 namespace chatterino {
 
@@ -59,12 +61,15 @@ public:
     }
 
     std::shared_ptr<const EmoteMap> globalEmotes() const;
+    void requestSeventvCosmetics(uint64_t userID, const QString &userName);
 
 private:
     void registerRoomID(uint64_t roomID, uint64_t channelID,
                         std::weak_ptr<KickChannel> chan);
 
     void initializeSeventvEventApi(SeventvEventAPI *api);
+    void subscribeSeventvCosmetics(
+        const std::shared_ptr<KickChannel> &channel) const;
 
     void onChatMessage(KickChannel *channel, BoostJsonObject data);
     void onUserBanned(KickChannel *channel, BoostJsonObject data);
@@ -94,6 +99,9 @@ private:
         channelsByUserID;
     boost::unordered_flat_map<QString, std::weak_ptr<KickChannel>>
         channelsBySlug;
+
+    std::mutex requestedSeventvCosmeticUsersMutex_;
+    std::unordered_set<uint64_t> requestedSeventvCosmeticUsers_;
 
     KickLiveUpdates liveUpdates_;
     KickLiveController liveController_;

@@ -36,6 +36,7 @@ namespace chatterino {
 // from widgets/Window.hpp
 enum class WindowType;
 enum class ActivityTimeDisplayMode : std::uint8_t;
+enum class MessagePlatform : std::uint8_t;
 enum class PlatformIndicatorMode : std::uint8_t;
 
 struct SplitDescriptor {
@@ -59,11 +60,18 @@ struct SplitDescriptor {
     bool slowerChatEnabled_{false};
     qreal slowerChatMessagesPerSecond_{5.0};
     bool slowerChatMessageAnimations_{true};
+    bool streamDatabaseBadgeFeedVisible_{true};
+    bool titleSettingsButtonVisible_{true};
+    bool chatModeIndicatorVisible_{true};
     std::optional<bool> viewerCountEnabled_;
     uint32_t twitchActivityMinimumBits_{100};
     uint32_t kickActivityMinimumKicks_{100};
     uint32_t tiktokActivityMinimumDiamonds_{0};
     std::optional<PlatformIndicatorMode> platformIndicatorMode_;
+    std::optional<MessagePlatform> selectedSendPlatform_;
+    bool selectedSendAllPlatforms_{false};
+    std::vector<MessagePlatform> customSelectedSendPlatforms_;
+    std::vector<MessagePlatform> enabledSendPlatforms_;
 
     std::optional<bool> spellCheckOverride;
 
@@ -105,10 +113,17 @@ struct ContainerNodeDescriptor {
     std::vector<NodeDescriptor> items_;
 };
 
+struct TabFolderDescriptor {
+    QString id_;
+    QString title_;
+    bool expanded_{true};
+};
+
 struct TabDescriptor {
     static TabDescriptor loadFromJSON(const QJsonObject &root);
 
     QString customTitle_;
+    QString folderId_;
     bool selected_{false};
     bool highlightsEnabled_{true};
 
@@ -127,6 +142,7 @@ struct WindowDescriptor {
 
     QRect geometry_;
 
+    std::vector<TabFolderDescriptor> tabFolders_;
     std::vector<TabDescriptor> tabs_;
 };
 

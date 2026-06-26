@@ -4,6 +4,9 @@
 
 #include <private/qpixmapfilter_p.h>
 
+#include <algorithm>
+#include <cmath>
+
 namespace chatterino {
 
 PaintDropShadow::PaintDropShadow(float xOffset, float yOffset, float radius,
@@ -24,6 +27,27 @@ PaintDropShadow PaintDropShadow::scaled(float scale) const
 {
     return {this->xOffset_ * scale, this->yOffset_ * scale,
             this->radius_ * scale, this->color_};
+}
+
+QMarginsF PaintDropShadow::padding(float scale) const
+{
+    auto scaled = this->scaled(scale);
+    auto radius = scaled.radius_;
+    if (getSettings()->largeSevenTVPaintShadows)
+    {
+        radius *= 3;
+    }
+
+    auto pad = [](float value) {
+        return std::ceil(std::max(0.0F, value));
+    };
+
+    return {
+        pad(radius - scaled.xOffset_),
+        pad(radius - scaled.yOffset_),
+        pad(radius + scaled.xOffset_),
+        pad(radius + scaled.yOffset_),
+    };
 }
 
 void PaintDropShadow::apply(QPixmapDropShadowFilter &effect) const

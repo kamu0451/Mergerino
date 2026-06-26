@@ -21,6 +21,7 @@
 #include "widgets/splits/ClosedSplits.hpp"
 #include "widgets/splits/DraggedSplit.hpp"
 #include "widgets/splits/Split.hpp"
+#include "widgets/splits/SplitInput.hpp"
 #include "widgets/Window.hpp"
 
 #include <QApplication>
@@ -128,6 +129,22 @@ Split *findRestoredActivityOwner(SplitContainer *container, Split *candidate,
     }
 
     return nullptr;
+}
+
+void restoreSendPlatformSelection(Split *split,
+                                  const SplitNodeDescriptor &splitNode)
+{
+    if (!splitNode.selectedSendPlatform_)
+    {
+        return;
+    }
+
+    SplitInput::SendPlatformSelection selection;
+    selection.selectedPlatform = *splitNode.selectedSendPlatform_;
+    selection.allPlatforms = splitNode.selectedSendAllPlatforms_;
+    selection.customPlatforms = splitNode.customSelectedSendPlatforms_;
+    selection.enabledPlatforms = splitNode.enabledSendPlatforms_;
+    split->getInput().restoreSendPlatformSelection(selection);
 }
 
 }  // namespace
@@ -268,6 +285,11 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
         source->slowerChatMessagesPerSecond());
     clone->setSlowerChatMessageAnimations(
         source->slowerChatMessageAnimations());
+    clone->setStreamDatabaseBadgeFeedVisible(
+        source->streamDatabaseBadgeFeedVisible());
+    clone->setTitleSettingsButtonVisible(
+        source->titleSettingsButtonVisible());
+    clone->setChatModeIndicatorVisible(source->chatModeIndicatorVisible());
     clone->setViewerCountEnabledOverride(source->viewerCountEnabledOverride());
     clone->setTwitchActivityMinimumBits(source->twitchActivityMinimumBits());
     clone->setKickActivityMinimumKicks(source->kickActivityMinimumKicks());
@@ -275,6 +297,8 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
         source->tiktokActivityMinimumDiamonds());
     clone->setCheckSpellingOverride(source->checkSpellingOverride());
     clone->setChannel(source->getIndirectChannel());
+    clone->getInput().restoreSendPlatformSelection(
+        source->getInput().sendPlatformSelection());
     clone->setPlatformIndicatorMode(source->platformIndicatorMode());
 
     this->insertSplit(clone, {
@@ -845,17 +869,7 @@ void SplitContainer::paintEvent(QPaintEvent * /*event*/)
             getApp()->getFonts()->getFont(FontStyle::ChatMedium, this->scale());
         painter.setFont(font);
 
-        QString text = "Click to add a split";
-
-        auto *notebook = dynamic_cast<Notebook *>(this->parentWidget());
-
-        if (notebook != nullptr)
-        {
-            if (notebook->getPageCount() > 1)
-            {
-                text += "\n\nAfter adding hold <Ctrl+Alt> to move or split it.";
-            }
-        }
+        const QString text = "Click to add a tab";
 
         painter.drawText(this->rect(), text, QTextOption(Qt::AlignCenter));
     }
@@ -1092,6 +1106,15 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
             currentNode->split_->tiktokActivityMinimumDiamonds();
         result.platformIndicatorMode_ =
             currentNode->split_->platformIndicatorMode();
+        const auto sendPlatformSelection =
+            currentNode->split_->getInput().sendPlatformSelection();
+        result.selectedSendPlatform_ =
+            sendPlatformSelection.selectedPlatform;
+        result.selectedSendAllPlatforms_ = sendPlatformSelection.allPlatforms;
+        result.customSelectedSendPlatforms_ =
+            sendPlatformSelection.customPlatforms;
+        result.enabledSendPlatforms_ =
+            sendPlatformSelection.enabledPlatforms;
         return result;
     }
 
@@ -1154,6 +1177,12 @@ void SplitContainer::applyFromDescriptorRecursively(
             splitNode.slowerChatMessagesPerSecond_);
         split->setSlowerChatMessageAnimations(
             splitNode.slowerChatMessageAnimations_);
+        split->setStreamDatabaseBadgeFeedVisible(
+            splitNode.streamDatabaseBadgeFeedVisible_);
+        split->setTitleSettingsButtonVisible(
+            splitNode.titleSettingsButtonVisible_);
+        split->setChatModeIndicatorVisible(
+            splitNode.chatModeIndicatorVisible_);
         split->setViewerCountEnabledOverride(splitNode.viewerCountEnabled_);
         split->setTwitchActivityMinimumBits(
             splitNode.twitchActivityMinimumBits_);
@@ -1168,6 +1197,7 @@ void SplitContainer::applyFromDescriptorRecursively(
         {
             split->setPlatformIndicatorMode(PlatformIndicatorMode::LineColor);
         }
+        restoreSendPlatformSelection(split, splitNode);
 
         this->insertSplit(split);
 
@@ -1233,6 +1263,12 @@ void SplitContainer::applyFromDescriptorRecursively(
                     splitNode.slowerChatMessagesPerSecond_);
                 split->setSlowerChatMessageAnimations(
                     splitNode.slowerChatMessageAnimations_);
+                split->setStreamDatabaseBadgeFeedVisible(
+                    splitNode.streamDatabaseBadgeFeedVisible_);
+                split->setTitleSettingsButtonVisible(
+                    splitNode.titleSettingsButtonVisible_);
+                split->setChatModeIndicatorVisible(
+                    splitNode.chatModeIndicatorVisible_);
                 split->setViewerCountEnabledOverride(
                     splitNode.viewerCountEnabled_);
                 split->setTwitchActivityMinimumBits(
@@ -1251,6 +1287,7 @@ void SplitContainer::applyFromDescriptorRecursively(
                     split->setPlatformIndicatorMode(
                         PlatformIndicatorMode::LineColor);
                 }
+                restoreSendPlatformSelection(split, splitNode);
 
                 auto node = std::make_shared<Node>();
                 node->parent_ = baseNode;

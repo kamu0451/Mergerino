@@ -451,14 +451,39 @@ bool MergedChannel::canReconnect() const
 
 void MergedChannel::reconnect()
 {
+    bool announceTwitchJoin = false;
+    QString twitchTitle;
+    bool announceKickJoin = false;
+    QString kickTitle;
+
     if (this->twitchChannel_ && this->twitchChannel_->canReconnect())
     {
         this->twitchChannel_->reconnect();
+        this->twitchLiveJoinAnnounced_ = false;
+        if (auto *twitch = dynamic_cast<TwitchChannel *>(this->twitchChannel_.get()))
+        {
+            this->twitchLive_ = twitch->isLive();
+            if (this->twitchLive_)
+            {
+                announceTwitchJoin = true;
+                twitchTitle = twitch->accessStreamStatus()->title;
+            }
+        }
     }
 
     if (this->kickChannel_ && this->kickChannel_->canReconnect())
     {
         this->kickChannel_->reconnect();
+        this->kickLiveJoinAnnounced_ = false;
+        if (auto *kick = dynamic_cast<KickChannel *>(this->kickChannel_.get()))
+        {
+            this->kickLive_ = kick->isLive();
+            if (this->kickLive_)
+            {
+                announceKickJoin = true;
+                kickTitle = kick->streamData().title;
+            }
+        }
     }
 
     if (this->youtubeLiveChat_ != nullptr)
@@ -473,6 +498,14 @@ void MergedChannel::reconnect()
         this->tiktokLive_ = false;
         this->tiktokLiveChat_->stop();
         this->tiktokLiveChat_->start();
+    }
+    if (announceTwitchJoin)
+    {
+        this->announceJoinedLiveChat(MessagePlatform::AnyOrTwitch, twitchTitle);
+    }
+    if (announceKickJoin)
+    {
+        this->announceJoinedLiveChat(MessagePlatform::Kick, kickTitle);
     }
 
     this->refreshStatusText();

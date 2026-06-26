@@ -62,6 +62,11 @@ private:
     std::unique_ptr<QMenu> createChatModeMenu();
     void exportChat();
     void popupMainMenu(const QPoint &globalPosition);
+    void openTabSettings();
+    void popupTitleSettingsButtonMenu(const QPoint &globalPosition);
+    void setTitleSettingsButtonVisible(bool visible);
+    void positionTitleSettingsButton();
+    bool isTitleSettingsButtonHoverArea() const;
     void showHoverTooltip(QWidget *target, const QString &text, bool wordWrap);
     void hideHoverTooltip();
     QString mergedStreamPreviewTooltip(MergedChannel *mergedChannel);
@@ -78,6 +83,7 @@ private:
     Split *const split_{};
     QString tooltipText_{};
     QString viewerCountTooltipText_{};
+    QString modeTooltipText_{};
     TooltipWidget *const tooltipWidget_{};
     bool isLive_{false};
     QString thumbnail_;
@@ -89,6 +95,7 @@ private:
     // ui
     DrawnButton *dropdownButton_{};
     Label *titleLabel_{};
+    SvgButton *titleSettingsButton_{};
     BaseWidget *viewerCountContainer_{};
     BaseWidget *viewerCountIcon_{};
     Label *viewerCountLabel_{};

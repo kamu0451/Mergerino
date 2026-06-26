@@ -30,6 +30,7 @@ public:
                                  bool showTwitchBitsMinimum,
                                  bool showKickKicksMinimum,
                                  bool showTikTokGiftMinimum,
+                                 bool showStreamDatabaseBadgeFeed,
                                  QWidget *parent = nullptr);
 
     void setPlatformIndicatorMode(PlatformIndicatorMode mode);
@@ -48,6 +49,8 @@ public:
     qreal slowerChatMessagesPerSecond() const;
     void setViewerCountEnabled(bool enabled);
     bool viewerCountEnabled() const;
+    void setStreamDatabaseBadgeFeedVisible(bool visible);
+    bool streamDatabaseBadgeFeedVisible() const;
     void setTwitchActivityMinimumBits(uint32_t value);
     uint32_t twitchActivityMinimumBits() const;
     void setKickActivityMinimumKicks(uint32_t value);
@@ -73,6 +76,7 @@ private:
         QCheckBox *slowerChat{};
         QDoubleSpinBox *slowerChatRate{};
         QCheckBox *viewerCount{};
+        QCheckBox *streamDatabaseBadgeFeed{};
         QSpinBox *twitchBitsMinimum{};
         QSpinBox *kickKicksMinimum{};
         QSpinBox *tiktokGiftMinimum{};
@@ -86,6 +90,7 @@ private:
     const bool showTwitchBitsMinimum_;
     const bool showKickKicksMinimum_;
     const bool showTikTokGiftMinimum_;
+    const bool showStreamDatabaseBadgeFeed_;
     bool hasAcceptedChanges_{false};
 
     void updateSlowerChatVisibility(bool animate = true);

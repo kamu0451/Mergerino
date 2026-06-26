@@ -411,7 +411,7 @@ private:
     void refreshBadges();
     void refreshCheerEmotes();
     void loadRecentMessages();
-    void loadRecentMessagesReconnect();
+    void loadRecentMessagesReconnect(bool manualRefresh = false);
     void cleanUpReplyThreads();
     void showLoginMessage();
 

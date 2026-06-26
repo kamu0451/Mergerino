@@ -72,6 +72,35 @@ QString formatChattersError(HelixGetChattersError error, const QString &message)
     return errorMessage;
 }
 
+template <typename UserList>
+QSet<QString> userLoginsToSet(const UserList &users)
+{
+    QSet<QString> result;
+    for (const auto &user : users)
+    {
+        const auto login = user.userLogin.trimmed().toLower();
+        if (!login.isEmpty())
+        {
+            result.insert(login);
+        }
+    }
+    return result;
+}
+
+QSet<QString> userLoginsToSet(const QStringList &users)
+{
+    QSet<QString> result;
+    for (const auto &user : users)
+    {
+        const auto login = user.trimmed().toLower();
+        if (!login.isEmpty())
+        {
+            result.insert(login);
+        }
+    }
+    return result;
+}
+
 }  // namespace
 
 ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
@@ -425,12 +454,105 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
         performListSearch();
     };
 
-    if (isBroadcaster || hasModRights)
+    auto loadWithRoleSets = [=](QSet<QString> modList, QSet<QString> vipList) {
+        if (lifetimeGuard.isNull() || chattersListGuard.isNull())
+        {
+            return;
+        }
+
+        QSet<QString> staffList;
+        QSet<QString> adminList;
+        QSet<QString> globalModList;
+        loadChatters(staffList, adminList, globalModList, modList, vipList,
+                     true);
+    };
+
+    auto loadRoleFallbackChatters = [=]() {
+        auto loadWithModerators = [=](QSet<QString> modList) {
+            getHelix()->getChannelVIPs(
+                roomId,
+                [=](const std::vector<HelixVip> &vips) {
+                    loadWithRoleSets(modList, userLoginsToSet(vips));
+                },
+                [=](auto, const auto &) {
+                    QSet<QString> vipList;
+                    if (modList.isEmpty())
+                    {
+                        loadUncategorizedChatters();
+                        return;
+                    }
+                    loadWithRoleSets(modList, vipList);
+                });
+        };
+
+        getHelix()->getModerators(
+            roomId, 500,
+            [=](const std::vector<HelixModerator> &moderators) {
+                loadWithModerators(userLoginsToSet(moderators));
+            },
+            [=](auto, const auto &) {
+                QSet<QString> modList;
+                loadWithModerators(modList);
+            });
+    };
+
+    auto loadBrowserTokenRoleFallbackChatters =
+        [=](const TwitchModerationAuth::Account &account,
+            const QString &roleErrorMessage, bool canUseMainTokenFallback) {
+            auto fallbackToMainToken = [=]() {
+                if (lifetimeGuard.isNull() || chattersListGuard.isNull())
+                {
+                    return;
+                }
+
+                chattersList->addItem(formatListItemText(
+                    QStringLiteral("Role groups unavailable: ") +
+                    roleErrorMessage));
+                if (!canUseMainTokenFallback)
+                {
+                    loadingLabel->hide();
+                    return;
+                }
+                loadRoleFallbackChatters();
+            };
+
+            auto loadWithWebModerators = [=](QSet<QString> modList) {
+                TwitchWebApi::getVipLogins(
+                    roomId, account.clientId, account.oauthToken,
+                    [=](const QStringList &vips) {
+                        loadWithRoleSets(modList, userLoginsToSet(vips));
+                    },
+                    [=](const QString &) {
+                        if (modList.isEmpty())
+                        {
+                            fallbackToMainToken();
+                            return;
+                        }
+
+                        QSet<QString> vipList;
+                        loadWithRoleSets(modList, vipList);
+                    });
+            };
+
+            TwitchWebApi::getModeratorLogins(
+                roomId, account.clientId, account.oauthToken,
+                [=](const QStringList &moderators) {
+                    loadWithWebModerators(userLoginsToSet(moderators));
+                },
+                [=](const QString &) {
+                    QSet<QString> modList;
+                    loadWithWebModerators(modList);
+                });
+        };
+
+    const auto canUseMainTokenViewerList = isBroadcaster || hasModRights;
+    QString moderationAuthError;
+    const auto moderationAccount =
+        TwitchModerationAuth::resolveForCurrentUser(currentUserId,
+                                                    &moderationAuthError);
+
+    if (moderationAccount.supportsWebGql())
     {
-        QString moderationAuthError;
-        const auto moderationAccount =
-            TwitchModerationAuth::resolveForCurrentUser(currentUserId,
-                                                        &moderationAuthError);
         const auto roleOAuthClient = moderationAccount.clientId;
         const auto roleOAuthToken = moderationAccount.oauthToken;
         const auto roleClientIntegrity = moderationAccount.clientIntegrity;
@@ -448,21 +570,14 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
                     return;
                 }
 
-                auto roleError =
-                    QStringLiteral("Role groups unavailable: ") + errorMessage;
-                if (roleOAuthToken.isEmpty() && !moderationAuthError.isEmpty())
-                {
-                    roleError += QStringLiteral(" ") + moderationAuthError;
-                }
-                else if (roleClientIntegrity.isEmpty() || roleDeviceId.isEmpty())
-                {
-                    roleError += QStringLiteral(
-                        " In Settings -> Accounts, logout from Twitch mod "
-                        "actions, then log in again with Copy Helper.");
-                }
-                chattersList->addItem(formatListItemText(roleError));
-                loadUncategorizedChatters();
+                loadBrowserTokenRoleFallbackChatters(
+                    moderationAccount, errorMessage, canUseMainTokenViewerList);
             });
+    }
+    else if (canUseMainTokenViewerList)
+    {
+        (void)moderationAuthError;
+        loadRoleFallbackChatters();
     }
     else
     {

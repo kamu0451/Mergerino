@@ -46,6 +46,7 @@
 #include "widgets/splits/SplitHeader.hpp"
 #include "widgets/splits/SplitInput.hpp"
 #include "widgets/splits/SplitOverlay.hpp"
+#include "widgets/splits/StreamDatabaseBadgeBar.hpp"
 #include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 #include "widgets/Window.hpp"
 
@@ -73,6 +74,7 @@ constexpr qreal MIN_ACTIVITY_MESSAGE_SCALE = 0.75;
 constexpr qreal MAX_ACTIVITY_MESSAGE_SCALE = 1.1;
 constexpr qreal MIN_SLOWER_CHAT_MESSAGES_PER_SECOND = 0.25;
 constexpr qreal MAX_SLOWER_CHAT_MESSAGES_PER_SECOND = 20.0;
+constexpr auto STREAMDATABASE_LOGIN = "streamdatabase";
 
 bool isTwitchSpecialChannelType(Channel::Type type)
 {
@@ -97,6 +99,21 @@ PlatformIndicatorMode defaultPlatformIndicatorMode(bool isActivityPane)
     }
 
     return getSettings()->mergedPlatformIndicatorMode.getEnum();
+}
+
+PlatformIndicatorMode normalizedPlatformIndicatorMode(
+    PlatformIndicatorMode value, bool isActivityPane)
+{
+    switch (value)
+    {
+        case PlatformIndicatorMode::None:
+        case PlatformIndicatorMode::LineColor:
+        case PlatformIndicatorMode::Badge:
+        case PlatformIndicatorMode::Both:
+            return value;
+    }
+
+    return defaultPlatformIndicatorMode(isActivityPane);
 }
 
 bool mergedSplitHasTikTokEnabled(const Split *split)
@@ -127,6 +144,34 @@ bool splitHasTwitchActivity(const Split *split)
     return channel != nullptr && channel->getType() == Channel::Type::Twitch;
 }
 
+const TwitchChannel *streamDatabaseTwitchChannel(Channel *channel)
+{
+    if (auto *twitch = dynamic_cast<TwitchChannel *>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel))
+    {
+        return dynamic_cast<TwitchChannel *>(merged->twitchChannel().get());
+    }
+
+    return nullptr;
+}
+
+bool splitIsStreamDatabase(const Split *split)
+{
+    if (split == nullptr)
+    {
+        return false;
+    }
+
+    auto *twitch = streamDatabaseTwitchChannel(split->getChannel().get());
+    return twitch != nullptr &&
+           twitch->getName().compare(QString::fromLatin1(STREAMDATABASE_LOGIN),
+                                     Qt::CaseInsensitive) == 0;
+}
+
 bool splitHasKickActivity(const Split *split)
 {
     if (!split)
@@ -154,6 +199,36 @@ const TwitchChannel *viewerListTwitchChannel(Channel *channel)
     if (auto *merged = dynamic_cast<MergedChannel *>(channel))
     {
         return dynamic_cast<TwitchChannel *>(merged->twitchChannel().get());
+    }
+
+    return nullptr;
+}
+
+TwitchChannel *roomModeTwitchChannel(Channel *channel)
+{
+    if (auto *twitch = dynamic_cast<TwitchChannel *>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel))
+    {
+        return dynamic_cast<TwitchChannel *>(merged->twitchChannel().get());
+    }
+
+    return nullptr;
+}
+
+KickChannel *roomModeKickChannel(Channel *channel)
+{
+    if (auto *kick = dynamic_cast<KickChannel *>(channel))
+    {
+        return kick;
+    }
+
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel))
+    {
+        return dynamic_cast<KickChannel *>(merged->kickChannel().get());
     }
 
     return nullptr;
@@ -469,7 +544,13 @@ Split::Split(QWidget *parent)
     this->vbox_->setSpacing(0);
     this->vbox_->setContentsMargins(1, 1, 1, 1);
 
+    auto *streamDatabaseBadgeBar = new StreamDatabaseBadgeBar(this);
+    this->streamDatabaseBadgeBar_ = streamDatabaseBadgeBar;
+    streamDatabaseBadgeBar->setBadgeFeedVisible(
+        this->inputEnabled_ && this->streamDatabaseBadgeFeedVisible_);
+
     this->vbox_->addWidget(this->header_);
+    this->vbox_->addWidget(streamDatabaseBadgeBar);
     this->vbox_->addWidget(this->twitchPollsAndPredictionsBar_);
     this->vbox_->addWidget(this->view_, 1);
     this->vbox_->addWidget(this->input_);
@@ -478,11 +559,15 @@ Split::Split(QWidget *parent)
 
     // update placeholder text on Twitch account change and channel change
     this->bSignals_.emplace_back(
-        getApp()->getAccounts()->twitch.currentUserChanged.connect([this] {
-            this->input_->updatePlatformSelector();
-            this->updateInputPlaceholder();
-        }));
-    this->signalHolder_.managedConnect(this->channelChanged, [this] {
+        getApp()->getAccounts()->twitch.currentUserChanged.connect(
+            [this, streamDatabaseBadgeBar] {
+                streamDatabaseBadgeBar->setChannel(this->getChannel());
+                this->input_->updatePlatformSelector();
+                this->updateInputPlaceholder();
+            }));
+    this->signalHolder_.managedConnect(this->channelChanged,
+                                       [this, streamDatabaseBadgeBar] {
+        streamDatabaseBadgeBar->setChannel(this->getChannel());
         this->input_->updatePlatformSelector();
         this->updateInputPlaceholder();
     });
@@ -499,6 +584,7 @@ Split::Split(QWidget *parent)
     this->signalHolder_.managedConnect(this->input_->sendPlatformChanged,
                                        [this] {
                                            this->updateInputPlaceholder();
+                                           getApp()->getWindows()->queueSave();
                                        });
     this->updateInputPlaceholder();
 
@@ -1141,12 +1227,12 @@ bool Split::filterActivityExplicit() const
 
 bool Split::viewerCountEnabled() const
 {
-    if (getSettings()->headerViewerCount.getValue())
+    if (!getSettings()->headerViewerCount.getValue())
     {
-        return true;
+        return false;
     }
 
-    return this->viewerCountEnabledOverride_.value_or(false);
+    return this->viewerCountEnabledOverride_.value_or(true);
 }
 
 std::optional<bool> Split::viewerCountEnabledOverride() const
@@ -1156,44 +1242,6 @@ std::optional<bool> Split::viewerCountEnabledOverride() const
 
 QString Split::activityPaneTitle() const
 {
-    if (auto *merged = dynamic_cast<MergedChannel *>(this->getChannel().get()))
-    {
-        const auto tabName = merged->config().tabName.trimmed();
-        if (!tabName.isEmpty())
-        {
-            return tabName + "'s Activity";
-        }
-    }
-
-    auto *container = dynamic_cast<SplitContainer *>(this->parentWidget());
-    if (container)
-    {
-        auto *tab = container->getTab();
-        if (tab && tab->hasCustomTitle() && !tab->getCustomTitle().isEmpty())
-        {
-            return tab->getCustomTitle() + "'s Activity";
-        }
-
-        for (auto *split : container->getSplits())
-        {
-            if (split == this || split->isActivityPane())
-            {
-                continue;
-            }
-
-            const auto baseName = split->getChannel()->getLocalizedName();
-            if (!baseName.isEmpty())
-            {
-                return baseName + "'s Activity";
-            }
-        }
-
-        if (tab && !tab->getTitle().isEmpty())
-        {
-            return tab->getTitle() + "'s Activity";
-        }
-    }
-
     return QStringLiteral("Activity");
 }
 
@@ -1222,9 +1270,25 @@ bool Split::slowerChatMessageAnimations() const
     return this->slowerChatMessageAnimations_;
 }
 
+bool Split::streamDatabaseBadgeFeedVisible() const
+{
+    return this->streamDatabaseBadgeFeedVisible_;
+}
+
+bool Split::titleSettingsButtonVisible() const
+{
+    return this->titleSettingsButtonVisible_;
+}
+
+bool Split::chatModeIndicatorVisible() const
+{
+    return this->chatModeIndicatorVisible_;
+}
+
 PlatformIndicatorMode Split::platformIndicatorMode() const
 {
-    return this->platformIndicatorMode_;
+    return normalizedPlatformIndicatorMode(this->platformIndicatorMode_,
+                                           this->isActivityPane());
 }
 
 uint32_t Split::twitchActivityMinimumBits() const
@@ -1261,12 +1325,22 @@ bool Split::eventFilter(QObject *watched, QEvent *event)
 
 void Split::setInputEnabled(bool enabled)
 {
+    auto updateStreamDatabaseBadgeFeedVisibility = [this, enabled] {
+        if (this->streamDatabaseBadgeBar_ != nullptr)
+        {
+            this->streamDatabaseBadgeBar_->setBadgeFeedVisible(
+                enabled && this->streamDatabaseBadgeFeedVisible_);
+        }
+    };
+
     if (this->inputEnabled_ == enabled)
     {
+        updateStreamDatabaseBadgeFeedVisibility();
         return;
     }
 
     this->inputEnabled_ = enabled;
+    updateStreamDatabaseBadgeFeedVisibility();
 
     if (!enabled)
     {
@@ -1284,6 +1358,8 @@ void Split::setInputEnabled(bool enabled)
     getApp()->getWindows()->queueSave();
     this->updateInputVisibility();
     this->header_->updateChannelText();
+    this->view_->refreshMessages();
+    this->view_->refreshSlowerChatSettings();
     this->actionRequested.invoke(Action::RefreshTab);
 }
 
@@ -1351,8 +1427,52 @@ void Split::setSlowerChatMessageAnimations(bool value)
     getApp()->getWindows()->queueSave();
 }
 
+void Split::setStreamDatabaseBadgeFeedVisible(bool value)
+{
+    const bool effectiveValue = this->inputEnabled_ && value;
+    if (this->streamDatabaseBadgeFeedVisible_ == value)
+    {
+        if (this->streamDatabaseBadgeBar_ != nullptr)
+        {
+            this->streamDatabaseBadgeBar_->setBadgeFeedVisible(effectiveValue);
+        }
+        return;
+    }
+
+    this->streamDatabaseBadgeFeedVisible_ = value;
+    if (this->streamDatabaseBadgeBar_ != nullptr)
+    {
+        this->streamDatabaseBadgeBar_->setBadgeFeedVisible(effectiveValue);
+    }
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setTitleSettingsButtonVisible(bool value)
+{
+    if (this->titleSettingsButtonVisible_ == value)
+    {
+        return;
+    }
+
+    this->titleSettingsButtonVisible_ = value;
+    getApp()->getWindows()->queueSave();
+}
+
+void Split::setChatModeIndicatorVisible(bool value)
+{
+    if (this->chatModeIndicatorVisible_ == value)
+    {
+        return;
+    }
+
+    this->chatModeIndicatorVisible_ = value;
+    this->header_->updateRoomModes();
+    getApp()->getWindows()->queueSave();
+}
+
 void Split::setPlatformIndicatorMode(PlatformIndicatorMode value)
 {
+    value = normalizedPlatformIndicatorMode(value, this->isActivityPane());
     if (this->platformIndicatorMode_ == value)
     {
         return;
@@ -1437,7 +1557,12 @@ void Split::setFilterActivity(bool value, bool explicitPreference)
 
 void Split::updateInputVisibility()
 {
-    if (!this->inputEnabled_)
+    const auto channel = this->getChannel();
+    const bool suppressInputForChannel =
+        channel != nullptr &&
+        channel->getType() == Channel::Type::TwitchMentions;
+
+    if (!this->inputEnabled_ || suppressInputForChannel)
     {
         this->input_->setEnabled(false);
         this->input_->hide();
@@ -1619,19 +1744,20 @@ void Split::setChannel(IndirectChannel newChannel)
     this->roomModeChangedConnection_.disconnect();
     this->channelIDChangedConnection_.disconnect();
     this->indirectChannelChangedConnection_.disconnect();
+    this->channelSignalHolder_.clear();
 
-    TwitchChannel *tc = dynamic_cast<TwitchChannel *>(newChannel.get().get());
-    auto *kc = dynamic_cast<KickChannel *>(newChannel.get().get());
+    auto *tc = roomModeTwitchChannel(newChannel.get().get());
+    auto *kc = roomModeKickChannel(newChannel.get().get());
 
     if (tc != nullptr)
     {
-        this->usermodeChangedConnection_ = tc->userStateChanged.connect([this] {
+        this->channelSignalHolder_.managedConnect(tc->userStateChanged, [this] {
             this->header_->updateIcons();
             this->header_->updateRoomModes();
             this->input_->updatePollPredictionButtons();
         });
 
-        this->roomModeChangedConnection_ = tc->roomModesChanged.connect([this] {
+        this->channelSignalHolder_.managedConnect(tc->roomModesChanged, [this] {
             this->header_->updateRoomModes();
         });
 
@@ -1640,14 +1766,14 @@ void Split::setChannel(IndirectChannel newChannel)
                 this->getInput().setSendWaitStatus(text);
             });
     }
-    else if (kc != nullptr)
+    if (kc != nullptr)
     {
-        this->usermodeChangedConnection_ = kc->userStateChanged.connect([this] {
+        this->channelSignalHolder_.managedConnect(kc->userStateChanged, [this] {
             this->header_->updateIcons();
             this->header_->updateRoomModes();
         });
 
-        this->roomModeChangedConnection_ = kc->roomModesChanged.connect([this] {
+        this->channelSignalHolder_.managedConnect(kc->roomModesChanged, [this] {
             this->header_->updateRoomModes();
         });
 
@@ -1681,6 +1807,7 @@ void Split::setChannel(IndirectChannel newChannel)
             });
     }
     this->input_->applyActiveAccountProviderDefault();
+    this->updateInputVisibility();
 
     QObject::connect(
         this->view_, &ChannelView::messageAddedToChannel, this,
@@ -1751,7 +1878,7 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
           isTwitchSpecialChannelType(
               activityOwnerSplit->getIndirectChannel().getType())));
 
-    auto *dialog = new SelectChannelDialog(showSpecialPage, this);
+    auto *dialog = new SelectChannelDialog(showSpecialPage, empty, this);
     if (!empty)
     {
         dialog->setSelectedChannel(activityOwnerSplit
@@ -1766,10 +1893,13 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
     dialog->setFilterActivity(activityOwnerSplit
                                   ? activityOwnerSplit->filterActivity()
                                   : this->filterActivity());
-    dialog->setPlatformIndicatorMode(activityOwnerSplit
-                                         ? activityOwnerSplit
-                                               ->platformIndicatorMode()
-                                         : this->platformIndicatorMode());
+    if (!empty)
+    {
+        dialog->setPlatformIndicatorMode(activityOwnerSplit
+                                             ? activityOwnerSplit
+                                                   ->platformIndicatorMode()
+                                             : this->platformIndicatorMode());
+    }
     dialog->setSlowerChatEnabled(activityOwnerSplit
                                      ? activityOwnerSplit->slowerChatEnabled()
                                      : this->slowerChatEnabled());
@@ -1779,6 +1909,9 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
     dialog->setViewerCountEnabled(activityOwnerSplit
                                       ? activityOwnerSplit->viewerCountEnabled()
                                       : this->viewerCountEnabled());
+    dialog->setStreamDatabaseBadgeFeedVisible(
+        activityOwnerSplit ? activityOwnerSplit->streamDatabaseBadgeFeedVisible()
+                           : this->streamDatabaseBadgeFeedVisible());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     dialog->setWindowTitle(dialogTitle);
     dialog->show();
@@ -1786,40 +1919,63 @@ void Split::showChangeChannelPopup(const char *dialogTitle, bool empty,
     // this Split is closed
     std::ignore = dialog->closed.connect([=, this] {
         const bool acceptedChanges = dialog->hasSeletedChannel();
-        bool didChangeChannel = false;
+        const bool selectedFolder = acceptedChanges && dialog->selectedFolder();
 
-        if (acceptedChanges && activityOwnerSplit)
+        if (selectedFolder)
         {
-            const auto selectedChannel = dialog->getSelectedChannel();
-            didChangeChannel = !areEquivalentIndirectChannels(
-                activityOwnerSplit->getIndirectChannel(), selectedChannel);
-            if (didChangeChannel)
+            auto *window = dynamic_cast<Window *>(this->window());
+            callback(false);
+            if (window != nullptr)
             {
-                activityOwnerSplit->setChannel(selectedChannel);
+                window->getNotebook().showAddFolderDialog();
             }
-            activityOwnerSplit->setPlatformIndicatorMode(
-                dialog->platformIndicatorMode());
-            activityOwnerSplit->setFilterActivity(dialog->filterActivity(),
-                                                  true);
-            activityOwnerSplit->setSlowerChatEnabled(
-                dialog->slowerChatEnabled());
-            activityOwnerSplit->setSlowerChatMessagesPerSecond(
-                dialog->slowerChatMessagesPerSecond());
-            activityOwnerSplit->setViewerCountEnabled(
-                dialog->viewerCountEnabled());
+            return;
         }
 
-        callback(acceptedChanges);
+        if (!acceptedChanges || !activityOwnerSplit)
+        {
+            callback(acceptedChanges);
+            return;
+        }
+
+        const auto selectedChannel = dialog->getSelectedChannel();
+        const auto platformIndicatorMode = dialog->platformIndicatorMode();
+        const auto filterActivity = dialog->filterActivity();
+        const auto slowerChatEnabled = dialog->slowerChatEnabled();
+        const auto slowerChatMessagesPerSecond =
+            dialog->slowerChatMessagesPerSecond();
+        const auto viewerCountEnabled = dialog->viewerCountEnabled();
+        const auto streamDatabaseBadgeFeedVisible =
+            dialog->streamDatabaseBadgeFeedVisible();
+        const auto activityPaneEnabled = dialog->activityPaneEnabled();
+
+        const bool didChangeChannel = !areEquivalentIndirectChannels(
+            activityOwnerSplit->getIndirectChannel(), selectedChannel);
+        if (didChangeChannel)
+        {
+            activityOwnerSplit->setChannel(selectedChannel);
+        }
+        activityOwnerSplit->setPlatformIndicatorMode(platformIndicatorMode);
+        activityOwnerSplit->setFilterActivity(filterActivity, true);
+        activityOwnerSplit->setSlowerChatEnabled(slowerChatEnabled);
+        activityOwnerSplit->setSlowerChatMessagesPerSecond(
+            slowerChatMessagesPerSecond);
+        activityOwnerSplit->setViewerCountEnabled(viewerCountEnabled);
+        if (splitIsStreamDatabase(activityOwnerSplit))
+        {
+            activityOwnerSplit->setStreamDatabaseBadgeFeedVisible(
+                streamDatabaseBadgeFeedVisible);
+        }
 
         const bool didToggleActivityPane =
-            activityOwnerSplit != nullptr &&
-            (linkedActivityPane != nullptr) != dialog->activityPaneEnabled();
+            (linkedActivityPane != nullptr) != activityPaneEnabled;
 
-        if (acceptedChanges && activityOwnerSplit &&
-            (didChangeChannel || didToggleActivityPane))
+        callback(true);
+
+        if (activityOwnerSplit && (didChangeChannel || didToggleActivityPane))
         {
             syncLinkedActivityPane(activityOwnerSplit, linkedActivityPane,
-                                   dialog->activityPaneEnabled());
+                                   activityPaneEnabled);
         }
     });
     this->selectChannelDialog_ = dialog;
@@ -1840,6 +1996,7 @@ void Split::showSettingsDialog()
         this->isActivityPane() && splitHasTwitchActivity(settingsOwnerSplit),
         this->isActivityPane() && splitHasKickActivity(settingsOwnerSplit),
         this->isActivityPane() && mergedSplitHasTikTokEnabled(settingsOwnerSplit),
+        !this->isActivityPane() && splitIsStreamDatabase(settingsOwnerSplit),
         this);
     dialog->setPlatformIndicatorMode(this->platformIndicatorMode());
     dialog->setFilterActivity(this->filterActivity());
@@ -1849,6 +2006,8 @@ void Split::showSettingsDialog()
     dialog->setSlowerChatMessagesPerSecond(
         this->slowerChatMessagesPerSecond());
     dialog->setViewerCountEnabled(this->viewerCountEnabled());
+    dialog->setStreamDatabaseBadgeFeedVisible(
+        this->streamDatabaseBadgeFeedVisible());
     dialog->setTwitchActivityMinimumBits(this->twitchActivityMinimumBits());
     dialog->setKickActivityMinimumKicks(this->kickActivityMinimumKicks());
     dialog->setTikTokActivityMinimumDiamonds(
@@ -1859,38 +2018,58 @@ void Split::showSettingsDialog()
     dialog->show();
 
     std::ignore = dialog->closed.connect([this, dialog] {
-        if (dialog->hasAcceptedChanges())
+        if (!dialog->hasAcceptedChanges())
         {
-            this->setPlatformIndicatorMode(dialog->platformIndicatorMode());
-            if (this->isActivityPane())
+            return;
+        }
+
+        const auto platformIndicatorMode = dialog->platformIndicatorMode();
+        const auto activityMessageScale = dialog->activityMessageScale();
+        const auto activityTimeDisplayMode =
+            dialog->activityTimeDisplayMode();
+        const auto twitchActivityMinimumBits =
+            dialog->twitchActivityMinimumBits();
+        const auto kickActivityMinimumKicks =
+            dialog->kickActivityMinimumKicks();
+        const auto tiktokActivityMinimumDiamonds =
+            dialog->tiktokActivityMinimumDiamonds();
+        const auto filterActivity = dialog->filterActivity();
+        const auto slowerChatEnabled = dialog->slowerChatEnabled();
+        const auto slowerChatMessagesPerSecond =
+            dialog->slowerChatMessagesPerSecond();
+        const auto viewerCountEnabled = dialog->viewerCountEnabled();
+        const auto streamDatabaseBadgeFeedVisible =
+            dialog->streamDatabaseBadgeFeedVisible();
+
+        this->setPlatformIndicatorMode(platformIndicatorMode);
+        if (this->isActivityPane())
+        {
+            this->setActivityMessageScale(activityMessageScale);
+            this->setActivityTimeDisplayMode(activityTimeDisplayMode);
+            this->setTwitchActivityMinimumBits(twitchActivityMinimumBits);
+            this->setKickActivityMinimumKicks(kickActivityMinimumKicks);
+            this->setTikTokActivityMinimumDiamonds(
+                tiktokActivityMinimumDiamonds);
+            if (auto *ownerSplit = findActivityOwnerSplit(this))
             {
-                this->setActivityMessageScale(dialog->activityMessageScale());
-                this->setActivityTimeDisplayMode(
-                    dialog->activityTimeDisplayMode());
-                this->setTwitchActivityMinimumBits(
-                    dialog->twitchActivityMinimumBits());
-                this->setKickActivityMinimumKicks(
-                    dialog->kickActivityMinimumKicks());
-                this->setTikTokActivityMinimumDiamonds(
-                    dialog->tiktokActivityMinimumDiamonds());
-                if (auto *ownerSplit = findActivityOwnerSplit(this))
-                {
-                    ownerSplit->setTwitchActivityMinimumBits(
-                        dialog->twitchActivityMinimumBits());
-                    ownerSplit->setKickActivityMinimumKicks(
-                        dialog->kickActivityMinimumKicks());
-                    ownerSplit->setTikTokActivityMinimumDiamonds(
-                        dialog->tiktokActivityMinimumDiamonds());
-                }
+                ownerSplit->setTwitchActivityMinimumBits(
+                    twitchActivityMinimumBits);
+                ownerSplit->setKickActivityMinimumKicks(
+                    kickActivityMinimumKicks);
+                ownerSplit->setTikTokActivityMinimumDiamonds(
+                    tiktokActivityMinimumDiamonds);
             }
-            else
-            {
-                this->setFilterActivity(dialog->filterActivity(), true);
-                this->setSlowerChatEnabled(dialog->slowerChatEnabled());
-                this->setSlowerChatMessagesPerSecond(
-                    dialog->slowerChatMessagesPerSecond());
-                this->setViewerCountEnabled(dialog->viewerCountEnabled());
-            }
+            return;
+        }
+
+        this->setFilterActivity(filterActivity, true);
+        this->setSlowerChatEnabled(slowerChatEnabled);
+        this->setSlowerChatMessagesPerSecond(slowerChatMessagesPerSecond);
+        this->setViewerCountEnabled(viewerCountEnabled);
+        if (splitIsStreamDatabase(this))
+        {
+            this->setStreamDatabaseBadgeFeedVisible(
+                streamDatabaseBadgeFeedVisible);
         }
     });
 
@@ -2140,6 +2319,10 @@ void Split::popup()
     split->setSlowerChatMessageAnimations(
         this->slowerChatMessageAnimations());
     split->setViewerCountEnabledOverride(this->viewerCountEnabledOverride());
+    split->setStreamDatabaseBadgeFeedVisible(
+        this->streamDatabaseBadgeFeedVisible());
+    split->setTitleSettingsButtonVisible(this->titleSettingsButtonVisible());
+    split->setChatModeIndicatorVisible(this->chatModeIndicatorVisible());
     split->setTwitchActivityMinimumBits(this->twitchActivityMinimumBits());
     split->setKickActivityMinimumKicks(this->kickActivityMinimumKicks());
     split->setTikTokActivityMinimumDiamonds(

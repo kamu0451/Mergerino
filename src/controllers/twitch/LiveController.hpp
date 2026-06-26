@@ -27,6 +27,8 @@ public:
     virtual ~ITwitchLiveController() = default;
 
     virtual void add(const std::shared_ptr<TwitchChannel> &newChannel) = 0;
+    virtual void request(std::optional<QStringList> optChannelIDs =
+                             std::nullopt) = 0;
 };
 
 class TwitchLiveController : public ITwitchLiveController
@@ -51,12 +53,6 @@ public:
     // A request is made within a few seconds if this is the first time this channel is added
     void add(const std::shared_ptr<TwitchChannel> &newChannel) override;
 
-private:
-    struct ChannelEntry {
-        std::weak_ptr<TwitchChannel> ptr;
-        bool wasChecked = false;
-    };
-
     /**
      * Run batched Helix Channels & Stream requests for channels
      *
@@ -65,7 +61,14 @@ private:
      * If no list of channels is passed to request (the default behaviour), we make requests for all channels
      * in the `channels` map.
      **/
-    void request(std::optional<QStringList> optChannelIDs = std::nullopt);
+    void request(std::optional<QStringList> optChannelIDs = std::nullopt)
+        override;
+
+private:
+    struct ChannelEntry {
+        std::weak_ptr<TwitchChannel> ptr;
+        bool wasChecked = false;
+    };
 
     /**
      * List of channel IDs pointing to their Twitch Channel

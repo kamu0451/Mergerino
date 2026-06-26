@@ -1,5 +1,18 @@
 Patch Notes
 
+26/06/2026
+- Added StreamDatabase live badge feed feature
+- Added Mergerino Discord links
+- Added Folders to tab options
+- Added Twitch chat identity menu
+- Added Kick level badges setting
+- Added chat mode indicator
+- Fixed a bug causing F5 to not refresh Twitch and Kick chat
+- Improved Anonymous mode behaviour
+- Improved Kick chat performance
+- Improved platform swap in chatbox behaviour
+- QoL and general app improvements
+
 07/06/2026
 - Added global message animation setting
 - Added command autocomplete to the chatbox

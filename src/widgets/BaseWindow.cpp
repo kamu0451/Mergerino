@@ -5,6 +5,7 @@
 #include "widgets/BaseWindow.hpp"
 
 #include "Application.hpp"
+#include "common/Common.hpp"
 #include "common/QLogging.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
@@ -12,6 +13,7 @@
 #include "util/DebugCount.hpp"
 #include "util/PostToThread.hpp"
 #include "util/WindowsHelper.hpp"
+#include "widgets/buttons/Button.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/TitlebarButton.hpp"
 #include "widgets/buttons/TitlebarButtons.hpp"
@@ -19,13 +21,21 @@
 #include "widgets/Window.hpp"
 
 #include <QApplication>
+#include <QDesktopServices>
+#include <QEasingCurve>
 #include <QFont>
 #include <QIcon>
+#include <QMouseEvent>
+#include <QPaintEvent>
 #include <QPixmap>
 #include <QScreen>
+#include <QUrl>
+#include <QVariantAnimation>
 #include <QWindow>
 
 #include <functional>
+#include <utility>
+#include <vector>
 
 #ifdef USEWINSDK
 #    include <dwmapi.h>
@@ -221,24 +231,139 @@ Qt::WindowFlags windowFlagsFor(FlagsEnum<BaseWindow::Flags> flags)
 }
 
 #ifdef USEWINSDK
-class TitleBarLogo final : public BaseWidget
+class TitleBarSocialButton final : public Button
+{
+public:
+    TitleBarSocialButton(QString iconPath, QUrl link, QString tooltip)
+        : icon_(std::move(iconPath))
+        , link_(std::move(link))
+    {
+        this->setToolTip(std::move(tooltip));
+        this->setCursor(Qt::PointingHandCursor);
+        this->setScaleIndependentHeight(30);
+        this->setFixedWidth(0);
+        this->setVisible(false);
+
+        QObject::connect(this, &Button::leftClicked, this, [this] {
+            QDesktopServices::openUrl(this->link_);
+        });
+    }
+
+    void setExpanded(bool expanded)
+    {
+        if (this->animation_)
+        {
+            this->animation_->stop();
+            this->animation_->deleteLater();
+            this->animation_ = nullptr;
+        }
+
+        if (expanded)
+        {
+            this->setVisible(true);
+        }
+
+        auto *animation = new QVariantAnimation(this);
+        this->animation_ = animation;
+        animation->setDuration(expanded ? 180 : 160);
+        animation->setEasingCurve(QEasingCurve::OutCubic);
+        animation->setStartValue(this->width());
+        animation->setEndValue(expanded ? int(22 * this->scale()) : 0);
+
+        QObject::connect(animation, &QVariantAnimation::valueChanged, this,
+                         [this](const QVariant &value) {
+                             const int width = value.toInt();
+                             if (this->width() != width)
+                             {
+                                 this->setFixedWidth(width);
+                             }
+                             this->update();
+                         });
+        QObject::connect(animation, &QVariantAnimation::finished, this,
+                         [this, animation, expanded] {
+                             if (this->animation_ == animation)
+                             {
+                                 this->animation_ = nullptr;
+                             }
+
+                             if (!expanded)
+                             {
+                                 this->setVisible(false);
+                             }
+
+                             animation->deleteLater();
+                         });
+        animation->start();
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        this->paintContent(painter);
+    }
+
+    void paintContent(QPainter &painter) override
+    {
+        const int iconSize = int(14 * this->scale());
+        if (iconSize <= 0 || this->width() <= 0)
+        {
+            return;
+        }
+
+        const QRect target{(this->width() - iconSize) / 2,
+                           (this->height() - iconSize) / 2, iconSize,
+                           iconSize};
+        this->icon_.paint(&painter, target);
+    }
+
+private:
+    QIcon icon_;
+    QUrl link_;
+    QVariantAnimation *animation_ = nullptr;
+};
+
+class TitleBarLogo final : public Button
 {
 public:
     TitleBarLogo()
         : icon_(QStringLiteral(":/icon.png"))
     {
         this->setScaleIndependentSize(22, 30);
+        this->setCursor(Qt::PointingHandCursor);
+        this->setToolTip(QStringLiteral("Mergerino links"));
+    }
+
+    void setSocialButtons(std::vector<TitleBarSocialButton *> buttons)
+    {
+        this->socialButtons_ = std::move(buttons);
+    }
+
+    void toggleSocialButtons()
+    {
+        this->socialButtonsExpanded_ = !this->socialButtonsExpanded_;
+
+        for (auto *button : this->socialButtons_)
+        {
+            button->setExpanded(this->socialButtonsExpanded_);
+        }
     }
 
 protected:
     void paintEvent(QPaintEvent *) override
     {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        this->paintContent(painter);
+    }
+
+    void paintContent(QPainter &painter) override
+    {
         if (this->icon_.isNull())
         {
             return;
         }
-
-        QPainter painter(this);
 
         const auto scale = this->scale();
         const int iconSize = int(16 * scale);
@@ -251,6 +376,8 @@ protected:
 
 private:
     QPixmap icon_;
+    std::vector<TitleBarSocialButton *> socialButtons_;
+    bool socialButtonsExpanded_ = false;
 };
 #endif
 
@@ -356,6 +483,33 @@ void BaseWindow::init()
             // title
             auto *titleIcon = new TitleBarLogo;
             buttonLayout->addWidget(titleIcon);
+            this->ui_.buttons.push_back(titleIcon);
+
+            auto *githubButton = new TitleBarSocialButton(
+                QStringLiteral(":/social/github.svg"),
+                QUrl(LINK_MERGERINO_SOURCE.toString()),
+                QStringLiteral("Mergerino GitHub"));
+            auto *xButton = new TitleBarSocialButton(
+                QStringLiteral(":/social/x.svg"),
+                QUrl(LINK_MERGERINO_X.toString()),
+                QStringLiteral("Mergerino on X"));
+            auto *discordButton = new TitleBarSocialButton(
+                QStringLiteral(":/social/discord.svg"),
+                QUrl(LINK_MERGERINO_DISCORD.toString()),
+                QStringLiteral("Mergerino Discord"));
+
+            titleIcon->setSocialButtons({discordButton, xButton, githubButton});
+            QObject::connect(titleIcon, &Button::leftClicked, this,
+                             [titleIcon] {
+                                 titleIcon->toggleSocialButtons();
+                             });
+
+            buttonLayout->addWidget(discordButton);
+            buttonLayout->addWidget(xButton);
+            buttonLayout->addWidget(githubButton);
+            this->ui_.buttons.push_back(discordButton);
+            this->ui_.buttons.push_back(xButton);
+            this->ui_.buttons.push_back(githubButton);
 
             Label *title = new Label;
             title->setPadding(QMargins{0, 0, 8, 0});

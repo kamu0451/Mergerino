@@ -62,6 +62,8 @@ std::shared_ptr<QColor> platformHighlightColor(const Message &message,
                                                    platformIndicatorMode,
                                                bool useActivityPlatformHighlightColors)
 {
+    auto base = ColorProvider::instance().color(colorType);
+
     if (useActivityPlatformHighlightColors)
     {
         if (!mergedPlatformIndicatorShowsLineColor(platformIndicatorMode))
@@ -72,7 +74,6 @@ std::shared_ptr<QColor> platformHighlightColor(const Message &message,
         return std::make_shared<QColor>(activityPlatformHighlightColor(message));
     }
 
-    auto base = ColorProvider::instance().color(colorType);
     if (!base || !base->isValid())
     {
         return base;
@@ -93,7 +94,9 @@ std::shared_ptr<QColor> platformHighlightColor(const Message &message,
         }
     }
 
-    if (colorType == ColorType::FirstMessageHighlight)
+    if (message.platform == MessagePlatform::AnyOrTwitch &&
+        (colorType == ColorType::FirstMessageHighlight ||
+         colorType == ColorType::Subscription))
     {
         return std::make_shared<QColor>(*base);
     }
@@ -327,6 +330,8 @@ std::shared_ptr<Message> Message::clone() const
     cloned->reward = this->reward;
     cloned->platform = this->platform;
     cloned->bits = this->bits;
+    cloned->giftedSubscriptionRecipientCount =
+        this->giftedSubscriptionRecipientCount;
     cloned->kickGiftKicks = this->kickGiftKicks;
     cloned->tiktokGiftDiamondCount = this->tiktokGiftDiamondCount;
     std::ranges::transform(this->elements, std::back_inserter(cloned->elements),
@@ -400,6 +405,11 @@ QJsonObject Message::toJson() const
     if (this->bits > 0)
     {
         msg["bits"_L1] = static_cast<qint64>(this->bits);
+    }
+    if (this->giftedSubscriptionRecipientCount > 0)
+    {
+        msg["giftedSubscriptionRecipientCount"_L1] =
+            static_cast<qint64>(this->giftedSubscriptionRecipientCount);
     }
     if (this->kickGiftKicks > 0)
     {

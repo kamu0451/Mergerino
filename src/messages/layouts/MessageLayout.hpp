@@ -13,6 +13,9 @@
 #include <cinttypes>
 #include <memory>
 
+class QPainter;
+class QRect;
+
 namespace chatterino {
 
 struct Message;
@@ -67,6 +70,8 @@ public:
 
     // Painting
     MessagePaintResult paint(const MessagePaintContext &ctx);
+    void paintBackground(QPainter &painter, const QRect &rect,
+                         const MessagePaintContext &ctx) const;
     void invalidateBuffer();
     void deleteBuffer();
     void deleteCache();

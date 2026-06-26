@@ -4253,8 +4253,22 @@ QString moderationAuthClipboardScript()
     clean(storageValue('twilight.uniqueID')) ||
     clean(storageValue('unique_id')) ||
     randomDeviceId();
+  const configureIntegrity = () => {
+    try {
+      if (window.KPSDK && window.KPSDK.configure) {
+        window.KPSDK.configure([{
+          protocol: 'https:',
+          method: 'POST',
+          domain: 'gql.twitch.tv',
+          path: '/integrity',
+        }]);
+      }
+    } catch (_) {
+    }
+  };
   const fetchIntegrity = async token => {
     try {
+      configureIntegrity();
       const headers = {
         'Client-ID': clientId,
         'X-Device-Id': deviceId,
@@ -4692,6 +4706,110 @@ NetworkRequest makeTwitchWebGqlDocumentRequest(const QString &operationName,
     return request;
 }
 
+bool isTwitchIntegrityError(const QString &message)
+{
+    const auto lower = message.toLower();
+    return lower.contains(QStringLiteral("integrity")) ||
+           lower == QStringLiteral("failed");
+}
+
+QString twitchBrowserHelperTokenMessage()
+{
+    return QStringLiteral(
+        "Twitch rejected the browser helper token. Re-copy the Twitch mod "
+        "actions helper token in Settings -> Accounts.");
+}
+
+void fetchTwitchWebIntegrity(
+    const QString &oauthToken, const QString &deviceId,
+    std::function<void(const QString &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    const auto token = stripTwitchOAuthPrefix(oauthToken);
+    const auto requestDeviceId =
+        deviceId.trimmed().isEmpty() ? webGqlDeviceId() : deviceId.trimmed();
+
+    auto request =
+        NetworkRequest("https://gql.twitch.tv/integrity", NetworkRequestType::Post)
+            .timeout(TWITCH_WEB_GQL_TIMEOUT_MS)
+            .header("Accept", "*/*")
+            .header("Client-ID", TWITCH_WEB_GQL_CLIENT_ID)
+            .header("Origin", "https://www.twitch.tv")
+            .header("Referer", "https://www.twitch.tv/")
+            .header("User-Agent", TWITCH_WEB_GQL_USER_AGENT)
+            .header("X-Device-Id", requestDeviceId);
+
+    if (!token.isEmpty())
+    {
+        request = std::move(request).header("Authorization", "OAuth " + token);
+    }
+
+    std::move(request)
+        .onSuccess([successCallback = std::move(successCallback),
+                    failureCallback](const NetworkResult &result) {
+            const auto token =
+                result.parseJson().value(QStringLiteral("token")).toString();
+            if (token.trimmed().isEmpty())
+            {
+                failureCallback(QStringLiteral(
+                    "Twitch did not return a browser integrity token."));
+                return;
+            }
+
+            successCallback(token.trimmed());
+        })
+        .onError([failureCallback = std::move(failureCallback)](
+                     const NetworkResult &result) {
+            auto message =
+                QStringLiteral("Network Error: ") + result.formatError();
+            const auto body = QString::fromUtf8(result.getData()).trimmed();
+            if (!body.isEmpty())
+            {
+                message += QStringLiteral(" - ") + body.left(200);
+            }
+            failureCallback(message);
+        })
+        .execute();
+}
+
+void rememberTwitchWebIntegrity(const QString &oauthToken,
+                                const QString &deviceId,
+                                const QString &clientIntegrity)
+{
+    const auto token = stripTwitchOAuthPrefix(oauthToken);
+    const auto integrity = clientIntegrity.trimmed();
+    if (token.isEmpty())
+    {
+        return;
+    }
+
+    auto account = TwitchModerationAuth::savedAccount();
+    if (stripTwitchOAuthPrefix(account.oauthToken) != token)
+    {
+        return;
+    }
+
+    const auto originalIntegrity = account.clientIntegrity;
+    const auto originalDeviceId = account.deviceId;
+    account.clientIntegrity = integrity;
+    if (!deviceId.trimmed().isEmpty())
+    {
+        account.deviceId = deviceId.trimmed();
+    }
+    else if (account.deviceId.trimmed().isEmpty())
+    {
+        account.deviceId = webGqlDeviceId();
+    }
+
+    if (account.clientIntegrity == originalIntegrity &&
+        account.deviceId == originalDeviceId)
+    {
+        return;
+    }
+
+    TwitchModerationAuth::saveAccount(account);
+}
+
 QString twitchWebHelixClientID(const QString &oauthClient)
 {
     const auto clientID = oauthClient.trimmed();
@@ -4763,6 +4881,62 @@ QString webHelixNetworkError(const NetworkResult &result)
     }
 
     return result.formatError();
+}
+
+void fetchTwitchWebHelixUserLogins(
+    const QString &path, QUrlQuery urlQuery, const QString &oauthClient,
+    const QString &oauthToken, int maxUsers,
+    std::shared_ptr<QStringList> userLogins,
+    std::function<void(const QStringList &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    makeTwitchWebHelixRequest(path, urlQuery, NetworkRequestType::Get,
+                              oauthClient, oauthToken)
+        .onSuccess([=](const NetworkResult &result) mutable {
+            if (result.status() != 200)
+            {
+                qCWarning(chatterinoTwitch)
+                    << "Success result for getting Twitch web role users was"
+                    << result.formatError() << "but we expected it to be 200";
+            }
+
+            const auto response = result.parseJson();
+            for (const auto &userValue :
+                 response.value(QStringLiteral("data")).toArray())
+            {
+                const auto login =
+                    userValue.toObject()
+                        .value(QStringLiteral("user_login"))
+                        .toString()
+                        .trimmed()
+                        .toLower();
+                if (!login.isEmpty())
+                {
+                    userLogins->append(login);
+                }
+            }
+
+            const auto cursor = response.value(QStringLiteral("pagination"))
+                                    .toObject()
+                                    .value(QStringLiteral("cursor"))
+                                    .toString();
+            if (cursor.isEmpty() || userLogins->size() >= maxUsers)
+            {
+                successCallback(*userLogins);
+                return;
+            }
+
+            urlQuery.removeAllQueryItems(QStringLiteral("after"));
+            urlQuery.addQueryItem(QStringLiteral("after"), cursor);
+            fetchTwitchWebHelixUserLogins(
+                path, urlQuery, oauthClient, oauthToken, maxUsers, userLogins,
+                std::move(successCallback), std::move(failureCallback));
+        })
+        .onError([failureCallback = std::move(failureCallback)](
+                     const NetworkResult &result) {
+            failureCallback(webHelixNetworkError(result));
+        })
+        .execute();
 }
 
 int gqlInt(const QJsonObject &object, const QString &key)
@@ -5283,48 +5457,172 @@ void TwitchWebApi::getChatterGroups(
         "  }"
         "}");
 
-    makeTwitchWebGqlDocumentRequest(
-        QStringLiteral("MergerinoChatterGroups"), query, variables, oauthClient,
-        oauthToken, clientIntegrity, deviceId)
-        .onSuccess([successCallback = std::move(successCallback),
-                    failureCallback](const NetworkResult &result) {
-            const auto root = result.parseJsonValue();
-            if (root.isUndefined() || root.isNull())
-            {
-                failureCallback(QStringLiteral("Failed to parse GQL response"));
-                return;
-            }
+    auto success = std::make_shared<std::function<void(const HelixChatterGroups &)>>(
+        std::move(successCallback));
+    auto failure = std::make_shared<std::function<void(const QString &)>>(
+        std::move(failureCallback));
+    auto runRequest =
+        std::make_shared<std::function<void(const QString &, bool, bool)>>();
 
-            const auto gqlError = firstWebGqlError(root);
-            if (!gqlError.isEmpty())
-            {
-                failureCallback(QStringLiteral("Twitch API Error: ") +
-                                gqlError);
-                return;
-            }
+    auto refreshAndRetry = [=](const QString &originalError) {
+        fetchTwitchWebIntegrity(
+            oauthToken, deviceId,
+            [=](const QString &freshIntegrity) {
+                rememberTwitchWebIntegrity(oauthToken, deviceId,
+                                           freshIntegrity);
+                (*runRequest)(freshIntegrity, false, true);
+            },
+            [=](const QString &refreshError) {
+                if (isTwitchIntegrityError(originalError))
+                {
+                    QString message = twitchBrowserHelperTokenMessage();
+                    if (!refreshError.isEmpty())
+                    {
+                        message += QStringLiteral(" Integrity refresh failed: ") +
+                                   refreshError;
+                    }
+                    (*failure)(message);
+                    return;
+                }
 
-            const auto chatters = webGqlData(root)
-                                      .value(QStringLiteral("channel"))
-                                      .toObject()
-                                      .value(QStringLiteral("chatters"))
-                                      .toObject();
-            if (chatters.isEmpty())
-            {
-                failureCallback(QStringLiteral(
-                    "Twitch returned an empty chatter role response."));
-                return;
-            }
+                (*failure)(QStringLiteral("Twitch API Error: ") + originalError);
+            });
+    };
 
-            QJsonObject response;
-            response.insert(QStringLiteral("chatters"), chatters);
-            response.insert(QStringLiteral("chatter_count"),
-                            chatters.value(QStringLiteral("count")).toInt());
-            successCallback(HelixChatterGroups(response));
-        })
-        .onError([failureCallback](const NetworkResult &result) {
-            failureCallback(webGqlNetworkError(result));
-        })
-        .execute();
+    *runRequest = [=](const QString &integrity, bool allowIntegrityRefresh,
+                      bool allowNoIntegrityRetry) {
+        makeTwitchWebGqlDocumentRequest(
+            QStringLiteral("MergerinoChatterGroups"), query, variables,
+            oauthClient, oauthToken, integrity, deviceId)
+            .onSuccess([=](const NetworkResult &result) {
+                const auto root = result.parseJsonValue();
+                if (root.isUndefined() || root.isNull())
+                {
+                    (*failure)(QStringLiteral("Failed to parse GQL response"));
+                    return;
+                }
+
+                const auto gqlError = firstWebGqlError(root);
+                if (!gqlError.isEmpty())
+                {
+                    if (allowNoIntegrityRetry && !integrity.trimmed().isEmpty() &&
+                        isTwitchIntegrityError(gqlError))
+                    {
+                        (*runRequest)(QString(), allowIntegrityRefresh, false);
+                        return;
+                    }
+                    if (allowIntegrityRefresh &&
+                        isTwitchIntegrityError(gqlError))
+                    {
+                        refreshAndRetry(gqlError);
+                        return;
+                    }
+                    if (isTwitchIntegrityError(gqlError))
+                    {
+                        (*failure)(twitchBrowserHelperTokenMessage());
+                        return;
+                    }
+
+                    (*failure)(QStringLiteral("Twitch API Error: ") + gqlError);
+                    return;
+                }
+
+                const auto chatters = webGqlData(root)
+                                          .value(QStringLiteral("channel"))
+                                          .toObject()
+                                          .value(QStringLiteral("chatters"))
+                                          .toObject();
+                if (chatters.isEmpty())
+                {
+                    (*failure)(QStringLiteral(
+                        "Twitch returned an empty chatter role response."));
+                    return;
+                }
+
+                rememberTwitchWebIntegrity(oauthToken, deviceId, integrity);
+
+                QJsonObject response;
+                response.insert(QStringLiteral("chatters"), chatters);
+                response.insert(QStringLiteral("chatter_count"),
+                                chatters.value(QStringLiteral("count")).toInt());
+                (*success)(HelixChatterGroups(response));
+            })
+            .onError([=](const NetworkResult &result) {
+                const auto error = webGqlNetworkError(result);
+                if (allowNoIntegrityRetry && !integrity.trimmed().isEmpty() &&
+                    isTwitchIntegrityError(error))
+                {
+                    (*runRequest)(QString(), allowIntegrityRefresh, false);
+                    return;
+                }
+                if (allowIntegrityRefresh && isTwitchIntegrityError(error))
+                {
+                    refreshAndRetry(error);
+                    return;
+                }
+                if (isTwitchIntegrityError(error))
+                {
+                    (*failure)(twitchBrowserHelperTokenMessage());
+                    return;
+                }
+
+                (*failure)(error);
+            })
+            .execute();
+    };
+
+    const auto initialIntegrity = clientIntegrity.trimmed();
+    if (!initialIntegrity.isEmpty())
+    {
+        (*runRequest)(initialIntegrity, true, true);
+        return;
+    }
+
+    (*runRequest)(QString(), true, false);
+}
+
+void TwitchWebApi::getModeratorLogins(
+    const QString &broadcasterId, const QString &oauthClient,
+    const QString &oauthToken,
+    std::function<void(const QStringList &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (stripTwitchOAuthPrefix(oauthToken).isEmpty())
+    {
+        failureCallback(QStringLiteral("No Twitch mod auth token saved."));
+        return;
+    }
+
+    QUrlQuery urlQuery;
+    urlQuery.addQueryItem(QStringLiteral("broadcaster_id"), broadcasterId);
+    urlQuery.addQueryItem(QStringLiteral("first"), QStringLiteral("100"));
+
+    fetchTwitchWebHelixUserLogins(
+        QStringLiteral("moderation/moderators"), urlQuery, oauthClient,
+        oauthToken, 500, std::make_shared<QStringList>(),
+        std::move(successCallback), std::move(failureCallback));
+}
+
+void TwitchWebApi::getVipLogins(
+    const QString &broadcasterId, const QString &oauthClient,
+    const QString &oauthToken,
+    std::function<void(const QStringList &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (stripTwitchOAuthPrefix(oauthToken).isEmpty())
+    {
+        failureCallback(QStringLiteral("No Twitch mod auth token saved."));
+        return;
+    }
+
+    QUrlQuery urlQuery;
+    urlQuery.addQueryItem(QStringLiteral("broadcaster_id"), broadcasterId);
+    urlQuery.addQueryItem(QStringLiteral("first"), QStringLiteral("100"));
+
+    fetchTwitchWebHelixUserLogins(
+        QStringLiteral("channels/vips"), urlQuery, oauthClient, oauthToken,
+        500, std::make_shared<QStringList>(), std::move(successCallback),
+        std::move(failureCallback));
 }
 
 void TwitchWebApi::startPoll(

@@ -188,7 +188,7 @@ QString optionValueOrDefault(const std::optional<QString> &value,
 QString importedPlatformIndicatorMode(const ImportOptions &options)
 {
     return optionValueOrDefault(options.mergedPlatformIndicatorMode,
-                                u"badge"_s)
+                                u"linecolor"_s)
         .toLower();
 }
 
@@ -229,6 +229,34 @@ QJsonObject mergedSplitDataForTwitchChannel(const QString &channelName)
     return data;
 }
 
+bool disableKickForImportedMergedSplit(QJsonObject &data)
+{
+    bool changed = false;
+    if (data.value("kickEnabled").toBool(false))
+    {
+        data.insert("kickEnabled", false);
+        changed = true;
+    }
+    else if (!data.contains("kickEnabled"))
+    {
+        data.insert("kickEnabled", false);
+        changed = true;
+    }
+
+    if (!data.value("kickChannel").toString().trimmed().isEmpty())
+    {
+        data.insert("kickChannel", QString{});
+        changed = true;
+    }
+    else if (!data.contains("kickChannel"))
+    {
+        data.insert("kickChannel", QString{});
+        changed = true;
+    }
+
+    return changed;
+}
+
 bool patchImportedSplitNode(QJsonObject &node, const QString &indicatorMode)
 {
     const auto nodeType = node.value("type").toString();
@@ -249,11 +277,20 @@ bool patchImportedSplitNode(QJsonObject &node, const QString &indicatorMode)
             return true;
         }
 
-        if (dataType == u"merged"_s &&
-            !node.value("platformIndicatorMode").isString())
+        if (dataType == u"merged"_s)
         {
-            node.insert("platformIndicatorMode", indicatorMode);
-            return true;
+            bool changed = disableKickForImportedMergedSplit(data);
+            if (changed)
+            {
+                node.insert("data", data);
+            }
+
+            if (!node.value("platformIndicatorMode").isString())
+            {
+                node.insert("platformIndicatorMode", indicatorMode);
+                changed = true;
+            }
+            return changed;
         }
 
         return false;

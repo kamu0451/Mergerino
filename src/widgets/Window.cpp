@@ -479,8 +479,8 @@ void Window::addCustomTitlebarButtons()
             .dark = ":/buttons/updateAvailableNeutral-darkMode.svg",
             .light = ":/buttons/updateAvailableNeutral-lightMode.svg",
         });
-    this->updateTitlebarButton_->setPadding(QSize{3, 3});
-    this->updateTitlebarButton_->setScaleIndependentSize(30, 30);
+    this->updateTitlebarButton_->setPadding(QSize{0, 3});
+    this->updateTitlebarButton_->setScaleIndependentSize(24, 30);
     this->signalHolder_.managedConnect(getApp()->getUpdates().statusUpdated,
                                        [this](auto) {
                                            this->updateTitlebarUpdateButton();

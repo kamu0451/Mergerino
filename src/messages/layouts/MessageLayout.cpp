@@ -123,6 +123,14 @@ QColor automaticEventHighlightColor(const Message &message,
 
     if ((message.flags.has(MessageFlag::FirstMessage) ||
          message.flags.has(MessageFlag::FirstMessageSession)) &&
+        message.platform == MessagePlatform::AnyOrTwitch &&
+        highlightColor.isValid())
+    {
+        return highlightColor;
+    }
+
+    if (message.flags.has(MessageFlag::Subscription) &&
+        message.platform == MessagePlatform::AnyOrTwitch &&
         highlightColor.isValid())
     {
         return highlightColor;
@@ -340,6 +348,155 @@ int MessageLayout::getHeight() const
 int MessageLayout::getWidth() const
 {
     return static_cast<int>(this->container_.getWidth());
+}
+
+void MessageLayout::paintBackground(QPainter &painter, const QRect &rect,
+                                    const MessagePaintContext &ctx) const
+{
+    if (rect.isEmpty())
+    {
+        return;
+    }
+
+    QColor backgroundColor = [&] {
+        if (this->message_->flags.has(MessageFlag::WatchStreak) &&
+            ctx.preferences.enableWatchStreakHighlight)
+        {
+            return ctx.messageColors.regularBg;
+        }
+
+        if (ctx.preferences.alternateMessages &&
+            this->flags.has(MessageLayoutFlag::AlternateBackground))
+        {
+            return ctx.messageColors.alternateBg;
+        }
+
+        return ctx.messageColors.regularBg;
+    }();
+    QColor solidOverlayColor;
+    QColor gradientOverlayColor;
+    QColor gradientLeadInColor;
+
+    const bool isWatchStreakEvent =
+        this->message_->flags.has(MessageFlag::WatchStreak) &&
+        ctx.preferences.enableWatchStreakHighlight;
+
+    bool suppressMergedPlatformTint =
+        usesAutomaticEventOverlay(*this->message_, ctx.preferences,
+                                  ctx.forceFlatEventHighlights) &&
+        ((ctx.forceFlatEventHighlights &&
+          mergedPlatformIndicatorShowsLineColor(ctx.platformIndicatorMode)) ||
+         (automaticEventHighlightUsesGradient(ctx) &&
+          (isWatchStreakEvent ||
+           !automaticEventIncludesUserMessage(*this->message_))));
+
+    if (this->message_->platformAccentColor &&
+        mergedPlatformIndicatorShowsLineColor(ctx.platformIndicatorMode) &&
+        !suppressMergedPlatformTint)
+    {
+        backgroundColor = blendColors(backgroundColor,
+                                      *this->message_->platformAccentColor);
+    }
+
+    if (this->message_->flags.has(MessageFlag::ElevatedMessage) &&
+        ctx.preferences.enableElevatedMessageHighlight)
+    {
+        applyAutomaticEventOverlay(*this->message_,
+                                   *ctx.colorProvider.color(
+                                       ColorType::ElevatedMessageHighlight),
+                                   false, ctx, gradientOverlayColor,
+                                   solidOverlayColor);
+    }
+
+    else if (hasEnabledFirstMessageHighlight(*this->message_,
+                                             ctx.preferences))
+    {
+        auto firstMessageBaseColor =
+            *ctx.colorProvider.color(ColorType::FirstMessageHighlight);
+        applyAutomaticEventOverlay(*this->message_, firstMessageBaseColor,
+                                   false, ctx, gradientOverlayColor,
+                                   solidOverlayColor);
+        if (gradientOverlayColor.isValid())
+        {
+            gradientLeadInColor = firstMessageGradientLeadInColor(
+                firstMessageBaseColor, gradientOverlayColor);
+        }
+    }
+    else if (this->message_->flags.has(MessageFlag::WatchStreak) &&
+             ctx.preferences.enableWatchStreakHighlight)
+    {
+        applyAutomaticEventOverlay(
+            *this->message_, *ctx.colorProvider.color(ColorType::WatchStreak),
+            false, ctx, gradientOverlayColor, solidOverlayColor);
+    }
+    else if (ctx.forceFlatEventHighlights &&
+             this->message_->flags.has(MessageFlag::CheerMessage))
+    {
+        applyAutomaticEventOverlay(*this->message_, {}, false, ctx,
+                                   gradientOverlayColor, solidOverlayColor);
+    }
+    else if ((this->message_->flags.has(MessageFlag::Highlighted) ||
+              this->message_->flags.has(MessageFlag::HighlightedWhisper)) &&
+             !this->flags.has(MessageLayoutFlag::IgnoreHighlights))
+    {
+        assert(this->message_->highlightColor);
+        solidOverlayColor = this->message_->highlightColor
+                                ? *this->message_->highlightColor
+                                : QColor{};
+    }
+    else if (this->message_->flags.has(MessageFlag::Subscription) &&
+             ctx.preferences.enableSubHighlight)
+    {
+        applyAutomaticEventOverlay(
+            *this->message_, *ctx.colorProvider.color(ColorType::Subscription),
+            false, ctx, gradientOverlayColor, solidOverlayColor);
+    }
+    else if ((this->message_->flags.has(MessageFlag::RedeemedHighlight) ||
+              this->message_->flags.has(
+                  MessageFlag::RedeemedChannelPointReward)) &&
+             ctx.preferences.enableRedeemedHighlight)
+    {
+        applyAutomaticEventOverlay(
+            *this->message_,
+            *ctx.colorProvider.color(ColorType::RedeemedHighlight), false, ctx,
+            gradientOverlayColor, solidOverlayColor);
+    }
+    else if (isPlatformAlertMessage(*this->message_))
+    {
+        applyAutomaticEventOverlay(*this->message_, {}, true, ctx,
+                                   gradientOverlayColor, solidOverlayColor);
+    }
+    else if (this->message_->flags.has(MessageFlag::AutoMod) ||
+             this->message_->flags.has(MessageFlag::LowTrustUsers))
+    {
+        if (ctx.preferences.enableAutomodHighlight &&
+            (this->message_->flags.has(MessageFlag::AutoModOffendingMessage) ||
+             this->message_->flags.has(
+                 MessageFlag::AutoModOffendingMessageHeader)))
+        {
+            solidOverlayColor =
+                *ctx.colorProvider.color(ColorType::AutomodHighlight);
+        }
+        else
+        {
+            backgroundColor = QColor("#404040");
+        }
+    }
+    else if (this->message_->flags.has(MessageFlag::Debug))
+    {
+        backgroundColor = QColor("#4A273D");
+    }
+
+    painter.fillRect(rect, backgroundColor);
+    if (gradientOverlayColor.isValid())
+    {
+        fillLeadingFade(painter, rect, gradientOverlayColor,
+                        gradientLeadInColor);
+    }
+    else if (solidOverlayColor.isValid())
+    {
+        painter.fillRect(rect, solidOverlayColor);
+    }
 }
 
 // Layout
@@ -653,151 +810,7 @@ void MessageLayout::updateBuffer(QPixmap *buffer,
     QPainter painter(buffer);
     painter.setRenderHint(QPainter::SmoothPixmapTransform);
 
-    // draw background
-    QColor backgroundColor = [&] {
-        if (this->message_->flags.has(MessageFlag::WatchStreak) &&
-            ctx.preferences.enableWatchStreakHighlight)
-        {
-            return ctx.messageColors.regularBg;
-        }
-
-        if (ctx.preferences.alternateMessages &&
-            this->flags.has(MessageLayoutFlag::AlternateBackground))
-        {
-            return ctx.messageColors.alternateBg;
-        }
-
-        return ctx.messageColors.regularBg;
-    }();
-    QColor solidOverlayColor;
-    QColor gradientOverlayColor;
-    QColor gradientLeadInColor;
-
-    const bool isWatchStreakEvent =
-        this->message_->flags.has(MessageFlag::WatchStreak) &&
-        ctx.preferences.enableWatchStreakHighlight;
-
-    bool suppressMergedPlatformTint =
-        usesAutomaticEventOverlay(*this->message_, ctx.preferences,
-                                  ctx.forceFlatEventHighlights) &&
-        ((ctx.forceFlatEventHighlights &&
-          mergedPlatformIndicatorShowsLineColor(ctx.platformIndicatorMode)) ||
-         (automaticEventHighlightUsesGradient(ctx) &&
-          (isWatchStreakEvent ||
-           !automaticEventIncludesUserMessage(*this->message_))));
-
-    if (this->message_->platformAccentColor &&
-        mergedPlatformIndicatorShowsLineColor(
-            ctx.platformIndicatorMode) &&
-        !suppressMergedPlatformTint)
-    {
-        backgroundColor = blendColors(backgroundColor,
-                                      *this->message_->platformAccentColor);
-    }
-
-    if (this->message_->flags.has(MessageFlag::ElevatedMessage) &&
-        ctx.preferences.enableElevatedMessageHighlight)
-    {
-        applyAutomaticEventOverlay(*this->message_,
-                                   *ctx.colorProvider.color(
-                                       ColorType::ElevatedMessageHighlight),
-                                   false, ctx,
-                                   gradientOverlayColor, solidOverlayColor);
-    }
-
-    else if (hasEnabledFirstMessageHighlight(*this->message_,
-                                             ctx.preferences))
-    {
-        auto firstMessageBaseColor =
-            *ctx.colorProvider.color(ColorType::FirstMessageHighlight);
-        applyAutomaticEventOverlay(*this->message_,
-                                   firstMessageBaseColor,
-                                   false, ctx,
-                                   gradientOverlayColor, solidOverlayColor);
-        if (gradientOverlayColor.isValid())
-        {
-            gradientLeadInColor = firstMessageGradientLeadInColor(
-                firstMessageBaseColor, gradientOverlayColor);
-        }
-    }
-    else if (this->message_->flags.has(MessageFlag::WatchStreak) &&
-             ctx.preferences.enableWatchStreakHighlight)
-    {
-        applyAutomaticEventOverlay(
-            *this->message_, *ctx.colorProvider.color(ColorType::WatchStreak),
-            false, ctx,
-            gradientOverlayColor, solidOverlayColor);
-    }
-    else if (ctx.forceFlatEventHighlights &&
-             this->message_->flags.has(MessageFlag::CheerMessage))
-    {
-        applyAutomaticEventOverlay(*this->message_, {}, false, ctx,
-                                   gradientOverlayColor, solidOverlayColor);
-    }
-    else if ((this->message_->flags.has(MessageFlag::Highlighted) ||
-              this->message_->flags.has(MessageFlag::HighlightedWhisper)) &&
-             !this->flags.has(MessageLayoutFlag::IgnoreHighlights))
-    {
-        assert(this->message_->highlightColor);
-        solidOverlayColor = this->message_->highlightColor
-                                ? *this->message_->highlightColor
-                                : QColor{};
-    }
-    else if (this->message_->flags.has(MessageFlag::Subscription) &&
-             ctx.preferences.enableSubHighlight)
-    {
-        applyAutomaticEventOverlay(
-            *this->message_, *ctx.colorProvider.color(ColorType::Subscription),
-            false, ctx,
-            gradientOverlayColor, solidOverlayColor);
-    }
-    else if ((this->message_->flags.has(MessageFlag::RedeemedHighlight) ||
-              this->message_->flags.has(
-                   MessageFlag::RedeemedChannelPointReward)) &&
-             ctx.preferences.enableRedeemedHighlight)
-    {
-        applyAutomaticEventOverlay(
-            *this->message_,
-            *ctx.colorProvider.color(ColorType::RedeemedHighlight),
-            false, ctx,
-            gradientOverlayColor, solidOverlayColor);
-    }
-    else if (isPlatformAlertMessage(*this->message_))
-    {
-        applyAutomaticEventOverlay(*this->message_, {}, true, ctx,
-                                   gradientOverlayColor, solidOverlayColor);
-    }
-    else if (this->message_->flags.has(MessageFlag::AutoMod) ||
-             this->message_->flags.has(MessageFlag::LowTrustUsers))
-    {
-        if (ctx.preferences.enableAutomodHighlight &&
-            (this->message_->flags.has(MessageFlag::AutoModOffendingMessage) ||
-             this->message_->flags.has(
-                  MessageFlag::AutoModOffendingMessageHeader)))
-        {
-            solidOverlayColor =
-                *ctx.colorProvider.color(ColorType::AutomodHighlight);
-        }
-        else
-        {
-            backgroundColor = QColor("#404040");
-        }
-    }
-    else if (this->message_->flags.has(MessageFlag::Debug))
-    {
-        backgroundColor = QColor("#4A273D");
-    }
-
-    painter.fillRect(buffer->rect(), backgroundColor);
-    if (gradientOverlayColor.isValid())
-    {
-        fillLeadingFade(painter, buffer->rect(), gradientOverlayColor,
-                        gradientLeadInColor);
-    }
-    else if (solidOverlayColor.isValid())
-    {
-        painter.fillRect(buffer->rect(), solidOverlayColor);
-    }
+    this->paintBackground(painter, buffer->rect(), ctx);
 
     // draw message
     this->container_.paintElements(painter, ctx);

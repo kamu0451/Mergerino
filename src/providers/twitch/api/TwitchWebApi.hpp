@@ -65,6 +65,18 @@ public:
         std::function<void(const HelixChatterGroups &)> successCallback,
         std::function<void(const QString &)> failureCallback);
 
+    static void getModeratorLogins(
+        const QString &broadcasterId, const QString &oauthClient,
+        const QString &oauthToken,
+        std::function<void(const QStringList &)> successCallback,
+        std::function<void(const QString &)> failureCallback);
+
+    static void getVipLogins(
+        const QString &broadcasterId, const QString &oauthClient,
+        const QString &oauthToken,
+        std::function<void(const QStringList &)> successCallback,
+        std::function<void(const QString &)> failureCallback);
+
     static void endPrediction(
         const QString &channelId, const QString &predictionId,
         bool refundPoints, const QString &winningOutcomeId,

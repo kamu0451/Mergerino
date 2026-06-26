@@ -18,6 +18,12 @@ using namespace seventv;
 using namespace seventv::eventapi;
 using namespace Qt::StringLiterals;
 
+QString platformChannelSubscriptionKey(const QString &userID,
+                                       const QString &platform)
+{
+    return platform + QLatin1Char(':') + userID;
+}
+
 class SeventvEventAPIPrivate
     : public BasicPubSubManager<SeventvEventAPIPrivate,
                                 seventv::eventapi::Client>
@@ -38,8 +44,8 @@ public:
     std::unordered_set<QString> subscribedEmoteSets;
     /** user ids */
     std::unordered_set<QString> subscribedUsers;
-    /** Twitch channel ids */
-    std::unordered_set<QString> subscribedTwitchChannels;
+    /** platform:user-id channel cosmetic subscriptions */
+    std::unordered_set<QString> subscribedPlatformChannels;
 
     std::chrono::milliseconds heartbeatInterval;
     QTimer heartbeatTimer;
@@ -128,7 +134,8 @@ void SeventvEventAPI::subscribeTwitchChannel(const QString &id)
 void SeventvEventAPI::subscribePlatformChannel(const QString &userID,
                                                const QString &platform)
 {
-    if (this->private_->subscribedTwitchChannels.insert(userID).second)
+    const auto key = platformChannelSubscriptionKey(userID, platform);
+    if (this->private_->subscribedPlatformChannels.insert(key).second)
     {
         this->private_->subscribe({
             ChannelCondition{userID, platform},
@@ -192,7 +199,8 @@ void SeventvEventAPI::unsubscribeKickChannel(const QString &id)
 void SeventvEventAPI::unsubscribePlatformChannel(const QString &userID,
                                                  const QString &platform)
 {
-    if (this->private_->subscribedTwitchChannels.erase(userID) > 0)
+    const auto key = platformChannelSubscriptionKey(userID, platform);
+    if (this->private_->subscribedPlatformChannels.erase(key) > 0)
     {
         this->private_->unsubscribe({
             ChannelCondition{userID, platform},

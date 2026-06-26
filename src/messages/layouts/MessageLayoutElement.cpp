@@ -172,8 +172,22 @@ void ImageLayoutElement::paint(QPainter &painter,
     auto pixmap = this->image_->pixmapOrLoad();
     if (pixmap && !this->image_->animated())
     {
+        const auto smoothTransform =
+            this->getCreator().getFlags().has(MessageElementFlag::BadgeKickLevel);
+        const auto oldSmoothTransform =
+            painter.testRenderHint(QPainter::SmoothPixmapTransform);
+        if (smoothTransform)
+        {
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+        }
+
         // fourtf: make it use qreal values
         painter.drawPixmap(QRectF(this->getRect()), *pixmap, QRectF());
+
+        if (smoothTransform && !oldSmoothTransform)
+        {
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        }
     }
 }
 
@@ -469,10 +483,10 @@ void TextLayoutElement::paint(QPainter &painter,
                      getSettings()->displaySevenTVPaints;
     if (drawPaint)
     {
-        auto paint = app->getSeventvPaints()->getPaint(
-            this->getLink().value.toLower(),
-            this->getCreator().getFlags().has(
-                MessageElementFlag::KickUsername));
+        const auto userName = this->getLink().value.toLower();
+        const auto isKickUserName =
+            this->getCreator().getFlags().has(MessageElementFlag::KickUsername);
+        auto paint = app->getSeventvPaints()->getPaint(userName, isKickUserName);
         if (paint)
         {
             if (paint->animated())
@@ -480,11 +494,18 @@ void TextLayoutElement::paint(QPainter &painter,
                 return;
             }
 
+            const auto paintColor =
+                app->getSeventvPaints()
+                    ->getUserStyleColor(userName, isKickUserName)
+                    .value_or(this->color_);
             auto paintPixmap = paint->getPixmap(
-                this->getText(), font, this->color_, this->getRect().size(),
+                this->getText(), font, paintColor, this->getRect().size(),
                 this->scale_, this->dpr_);
+            const auto padding = paint->pixmapPadding(this->scale_, this->dpr_);
 
-            painter.drawPixmap(this->getRect().topLeft(), paintPixmap);
+            painter.drawPixmap(this->getRect().topLeft() -
+                                   QPointF(padding.left(), padding.top()),
+                               paintPixmap);
             return;
         }
     }
@@ -514,21 +535,30 @@ bool TextLayoutElement::paintAnimated(QPainter &painter, const qreal yOffset)
     {
         return false;
     }
-    const auto paint = getApp()->getSeventvPaints()->getPaint(
-        this->getLink().value.toLower(),
-        this->getCreator().getFlags().has(MessageElementFlag::KickUsername));
+    const auto userName = this->getLink().value.toLower();
+    const auto isKickUserName =
+        this->getCreator().getFlags().has(MessageElementFlag::KickUsername);
+    const auto paint =
+        getApp()->getSeventvPaints()->getPaint(userName, isKickUserName);
     if (!paint || !paint->animated())
     {
         return false;
     }
 
+    const auto paintColor =
+        getApp()
+            ->getSeventvPaints()
+            ->getUserStyleColor(userName, isKickUserName)
+            .value_or(this->color_);
     const auto paintPixmap =
-        paint->getPixmap(this->getText(), font, this->color_,
+        paint->getPixmap(this->getText(), font, paintColor,
                          this->getRect().size(), this->scale_, this->dpr_);
+    const auto padding = paint->pixmapPadding(this->scale_, this->dpr_);
 
     auto rect = this->getRect();
     rect.moveTop(rect.y() + yOffset);
-    painter.drawPixmap(rect, paintPixmap, QRectF());
+    painter.drawPixmap(rect.topLeft() - QPointF(padding.left(), padding.top()),
+                       paintPixmap);
     return true;
 }
 

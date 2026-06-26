@@ -44,6 +44,7 @@
 #include "messages/MessageBuilder.hpp"
 #include "providers/emoji/Emojis.hpp"
 #include "providers/kick/KickChannel.hpp"
+#include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchCommon.hpp"
@@ -268,6 +269,47 @@ const std::unordered_map<QString, VariableReplacer> COMMAND_VARS{
     // variables used in mod buttons and the like, these make no sense in normal commands, so they are left empty
     {"input.text", NO_OP_PLACEHOLDER},
 };
+
+TwitchChannel *twitchChannelForCommandContext(const ChannelPtr &channel)
+{
+    if (channel == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (auto *twitchChannel = dynamic_cast<TwitchChannel *>(channel.get()))
+    {
+        return twitchChannel;
+    }
+
+    if (auto *mergedChannel = dynamic_cast<MergedChannel *>(channel.get()))
+    {
+        return dynamic_cast<TwitchChannel *>(
+            mergedChannel->twitchChannel().get());
+    }
+
+    return nullptr;
+}
+
+KickChannel *kickChannelForCommandContext(const ChannelPtr &channel)
+{
+    if (channel == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (auto *kickChannel = dynamic_cast<KickChannel *>(channel.get()))
+    {
+        return kickChannel;
+    }
+
+    if (auto *mergedChannel = dynamic_cast<MergedChannel *>(channel.get()))
+    {
+        return dynamic_cast<KickChannel *>(mergedChannel->kickChannel().get());
+    }
+
+    return nullptr;
+}
 
 }  // namespace
 
@@ -578,8 +620,8 @@ QString CommandController::execCommand(const QString &textNoEmoji,
                 CommandContext ctx{
                     words,
                     channel,
-                    dynamic_cast<TwitchChannel *>(channel.get()),
-                    dynamic_cast<KickChannel *>(channel.get()),
+                    twitchChannelForCommandContext(channel),
+                    kickChannelForCommandContext(channel),
                 };
                 return (*command)(ctx);
             }

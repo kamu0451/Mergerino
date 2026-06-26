@@ -5,6 +5,7 @@
 #include "common/WindowDescriptors.hpp"
 
 #include "common/QLogging.hpp"
+#include "messages/Message.hpp"
 #include "singletons/Settings.hpp"
 #include "util/QMagicEnum.hpp"
 #include "widgets/Window.hpp"
@@ -28,6 +29,150 @@ QJsonArray loadWindowArray(const QString &settingsPath)
     QJsonDocument document = QJsonDocument::fromJson(data);
     QJsonArray windows_arr = document.object().value("windows").toArray();
     return windows_arr;
+}
+
+PlatformIndicatorMode fallbackPlatformIndicatorMode()
+{
+    return getSettings()->mergedPlatformIndicatorMode.getEnum();
+}
+
+std::optional<PlatformIndicatorMode> loadPlatformIndicatorMode(
+    const QJsonValue &value)
+{
+    if (value.isDouble())
+    {
+        switch (value.toInt(-1))
+        {
+            case static_cast<int>(PlatformIndicatorMode::Badge):
+                return PlatformIndicatorMode::Badge;
+            case static_cast<int>(PlatformIndicatorMode::LineColor):
+                return PlatformIndicatorMode::LineColor;
+            case static_cast<int>(PlatformIndicatorMode::Both):
+                return PlatformIndicatorMode::Both;
+            case static_cast<int>(PlatformIndicatorMode::None):
+                return PlatformIndicatorMode::None;
+            default:
+                return fallbackPlatformIndicatorMode();
+        }
+    }
+
+    if (!value.isString())
+    {
+        return std::nullopt;
+    }
+
+    const auto text = value.toString().trimmed();
+    if (text.isEmpty())
+    {
+        return fallbackPlatformIndicatorMode();
+    }
+
+    if (auto parsed = qmagicenum::enumCast<PlatformIndicatorMode>(
+            text, qmagicenum::CASE_INSENSITIVE))
+    {
+        return parsed;
+    }
+
+    const auto normalized = text.toLower();
+    auto compacted = normalized;
+    compacted.remove(QChar(' '));
+    compacted.remove(QChar('-'));
+    compacted.remove(QChar('_'));
+
+    if (compacted == u"highlights" || compacted == u"highlight" ||
+        compacted == u"linecolor" || compacted == u"platformlinecolor" ||
+        compacted == u"platformhighlights" ||
+        compacted == u"platformhighlights(default)")
+    {
+        return PlatformIndicatorMode::LineColor;
+    }
+    if (compacted == u"logos" || compacted == u"logo" ||
+        compacted == u"badge" || compacted == u"platformbadge" ||
+        compacted == u"platformbadge(default)" ||
+        compacted == u"platformlogo" || compacted == u"platformlogos")
+    {
+        return PlatformIndicatorMode::Badge;
+    }
+    if (compacted == u"platformlinecolor+badge" ||
+        compacted == u"platformhighlights+logos")
+    {
+        return PlatformIndicatorMode::Both;
+    }
+    if (compacted == u"none")
+    {
+        return PlatformIndicatorMode::None;
+    }
+
+    return fallbackPlatformIndicatorMode();
+}
+
+std::optional<MessagePlatform> loadMessagePlatform(const QJsonValue &value)
+{
+    if (value.isDouble())
+    {
+        switch (value.toInt(-1))
+        {
+            case static_cast<int>(MessagePlatform::AnyOrTwitch):
+                return MessagePlatform::AnyOrTwitch;
+            case static_cast<int>(MessagePlatform::Kick):
+                return MessagePlatform::Kick;
+            case static_cast<int>(MessagePlatform::YouTube):
+                return MessagePlatform::YouTube;
+            case static_cast<int>(MessagePlatform::TikTok):
+                return MessagePlatform::TikTok;
+            default:
+                return std::nullopt;
+        }
+    }
+
+    if (!value.isString())
+    {
+        return std::nullopt;
+    }
+
+    auto compacted = value.toString().trimmed().toLower();
+    compacted.remove(QChar(' '));
+    compacted.remove(QChar('-'));
+    compacted.remove(QChar('_'));
+
+    if (compacted == u"twitch" || compacted == u"anyortwitch")
+    {
+        return MessagePlatform::AnyOrTwitch;
+    }
+    if (compacted == u"kick")
+    {
+        return MessagePlatform::Kick;
+    }
+    if (compacted == u"youtube")
+    {
+        return MessagePlatform::YouTube;
+    }
+    if (compacted == u"tiktok")
+    {
+        return MessagePlatform::TikTok;
+    }
+
+    return std::nullopt;
+}
+
+std::vector<MessagePlatform> loadMessagePlatforms(const QJsonValue &value)
+{
+    std::vector<MessagePlatform> platforms;
+    if (!value.isArray())
+    {
+        return platforms;
+    }
+
+    const auto array = value.toArray();
+    platforms.reserve(array.size());
+    for (const auto &item : array)
+    {
+        if (auto platform = loadMessagePlatform(item))
+        {
+            platforms.push_back(*platform);
+        }
+    }
+    return platforms;
 }
 
 template <typename T>
@@ -138,6 +283,12 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
         root.value("slowerChatMessagesPerSecond").toDouble(5.0);
     descriptor.slowerChatMessageAnimations_ =
         root.value("slowerChatMessageAnimations").toBool(true);
+    descriptor.streamDatabaseBadgeFeedVisible_ =
+        root.value("streamDatabaseBadgeFeedVisible").toBool(true);
+    descriptor.titleSettingsButtonVisible_ =
+        root.value("titleSettingsButtonVisible").toBool(true);
+    descriptor.chatModeIndicatorVisible_ =
+        root.value("chatModeIndicatorVisible").toBool(true);
     if (root["viewerCountEnabled"].isBool())
     {
         descriptor.viewerCountEnabled_ =
@@ -149,13 +300,22 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
         root.value("kickActivityMinimumKicks").toInt(100));
     descriptor.tiktokActivityMinimumDiamonds_ = static_cast<uint32_t>(
         root.value("tiktokActivityMinimumDiamonds").toInt(0));
-    if (auto platformIndicatorMode = root["platformIndicatorMode"];
-        platformIndicatorMode.isString())
+    if (auto platformIndicatorMode =
+            loadPlatformIndicatorMode(root["platformIndicatorMode"]))
     {
-        descriptor.platformIndicatorMode_ = qmagicenum::enumCast<
-            PlatformIndicatorMode>(platformIndicatorMode.toString(),
-                                   qmagicenum::CASE_INSENSITIVE);
+        descriptor.platformIndicatorMode_ = *platformIndicatorMode;
     }
+    if (auto selectedSendPlatform =
+            loadMessagePlatform(root["selectedSendPlatform"]))
+    {
+        descriptor.selectedSendPlatform_ = *selectedSendPlatform;
+    }
+    descriptor.selectedSendAllPlatforms_ =
+        root.value("selectedSendAllPlatforms").toBool(false);
+    descriptor.customSelectedSendPlatforms_ =
+        loadMessagePlatforms(root["customSelectedSendPlatforms"]);
+    descriptor.enabledSendPlatforms_ =
+        loadMessagePlatforms(root["enabledSendPlatforms"]);
     if (data.contains("channel"))
     {
         descriptor.channelName_ = data.value("channel").toString();
@@ -202,6 +362,12 @@ TabDescriptor TabDescriptor::loadFromJSON(const QJsonObject &tabObj)
     if (titleVal.isString())
     {
         tab.customTitle_ = titleVal.toString();
+    }
+
+    QJsonValue folderIdVal = tabObj.value("folderId");
+    if (folderIdVal.isString())
+    {
+        tab.folderId_ = folderIdVal.toString();
     }
 
     // Load tab selected state
@@ -282,6 +448,23 @@ WindowLayout WindowLayout::loadFromFile(const QString &path)
         }
 
         bool hasSetASelectedTab = false;
+
+        // Load tab folders
+        QJsonArray tabFolders = windowObj.value("tabFolders").toArray();
+        for (const auto &folderVal : tabFolders)
+        {
+            const auto folderObj = folderVal.toObject();
+            TabFolderDescriptor folder;
+            folder.id_ = folderObj.value("id").toString();
+            if (folder.id_.isEmpty())
+            {
+                continue;
+            }
+            folder.title_ =
+                folderObj.value("title").toString(QStringLiteral("Folder"));
+            folder.expanded_ = folderObj.value("expanded").toBool(true);
+            window.tabFolders_.emplace_back(std::move(folder));
+        }
 
         // Load window tabs
         QJsonArray tabs = windowObj.value("tabs").toArray();

@@ -90,6 +90,8 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
+#include <tuple>
+
 namespace {
 
 using namespace chatterino;
@@ -546,19 +548,29 @@ int Application::run()
         }
 #endif
 
-        const auto showPostUpdateDialog = [&mainWindow] {
+        const auto markPostUpdateShown = [] {
+            auto *settings = getSettings();
+            if (settings->pendingPostUpdateVersion.getValue() ==
+                CHATTERINO_VERSION)
+            {
+                settings->pendingPostUpdateVersion = "";
+            }
+            settings->currentVersion.setValue(CHATTERINO_VERSION);
+            settings->requestSave();
+        };
+
+        const auto markStreamDatabaseIntroShown = [] {
+            auto *settings = getSettings();
+            settings->streamDatabaseIntroShown = true;
+            settings->streamDatabaseIntroShownVersion = CHATTERINO_VERSION;
+            settings->requestSave();
+        };
+
+        const auto showPostUpdateDialog = [&mainWindow, markPostUpdateShown] {
+            markPostUpdateShown();
+
             auto *dialog =
                 new PostUpdateDialog(CHATTERINO_DISPLAY_VERSION, &mainWindow);
-            QObject::connect(dialog, &QObject::destroyed, &mainWindow, [] {
-                auto *settings = getSettings();
-                if (settings->pendingPostUpdateVersion.getValue() ==
-                    CHATTERINO_VERSION)
-                {
-                    settings->pendingPostUpdateVersion = "";
-                }
-                settings->currentVersion.setValue(CHATTERINO_VERSION);
-                settings->requestSave();
-            });
             const auto position = mainWindow.mapToGlobal(QPoint{
                 (mainWindow.width() - dialog->width()) / 2,
                 48,
@@ -569,24 +581,56 @@ int Application::run()
             dialog->activateWindow();
         };
 
+        const auto showStreamDatabaseUpdateDialog =
+            [&mainWindow, markStreamDatabaseIntroShown, showPostUpdateDialog](
+                bool continueToPatchNotes) {
+                auto *dialog = new StreamDatabaseUpdateDialog(
+                    &mainWindow,
+                    continueToPatchNotes ? showPostUpdateDialog
+                                         : std::function<void()>{});
+                QObject::connect(dialog, &QObject::destroyed, &mainWindow,
+                                 [markStreamDatabaseIntroShown] {
+                                     markStreamDatabaseIntroShown();
+                                 });
+
+                const auto position = mainWindow.mapToGlobal(QPoint{
+                    (mainWindow.width() - dialog->width()) / 2,
+                    48,
+                });
+                widgets::showAndMoveWindowTo(
+                    dialog, position, widgets::BoundsChecking::DesiredPosition);
+                dialog->raise();
+                dialog->activateWindow();
+            };
+
+        const auto showStartupDialogs = [this, &mainWindow,
+                                         showStreamDatabaseUpdateDialog,
+                                         showPostUpdateDialog] {
 #ifdef USEWINSDK
-        QTimer::singleShot(0, &mainWindow, [this, &mainWindow,
-                                            showPostUpdateDialog] {
             if (maybePromptForStartup(&mainWindow))
             {
                 return;
             }
-            if (!this->previousVersionForPatchNotes_.isEmpty())
+#endif
+
+            const bool showStreamDatabaseIntro =
+                CHATTERINO_VERSION == QStringLiteral("1.3.2") &&
+                getSettings()->streamDatabaseIntroShownVersion.getValue() !=
+                    CHATTERINO_VERSION;
+            const bool showPostUpdate =
+                !this->previousVersionForPatchNotes_.isEmpty();
+
+            if (showStreamDatabaseIntro)
+            {
+                showStreamDatabaseUpdateDialog(true);
+            }
+            else if (showPostUpdate)
             {
                 showPostUpdateDialog();
             }
-        });
-#else
-        if (!this->previousVersionForPatchNotes_.isEmpty())
-        {
-            QTimer::singleShot(0, &mainWindow, showPostUpdateDialog);
-        }
-#endif
+        };
+
+        QTimer::singleShot(0, &mainWindow, showStartupDialogs);
         QTimer::singleShot(3000, &mainWindow, [] {
             getApp()->getUpdates().checkForUpdates();
         });

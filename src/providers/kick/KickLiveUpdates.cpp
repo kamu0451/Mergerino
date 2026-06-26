@@ -257,6 +257,7 @@ public:
 
     std::shared_ptr<KickLiveUpdatesClient> makeClient();
     void checkHeartbeats();
+    void reconnect();
 
     std::chrono::milliseconds heartbeatInterval = MAX_HEARTBEAT_INTERVAL;
     QTimer heartbeatTimer;
@@ -302,6 +303,14 @@ void KickLiveUpdatesPrivate::checkHeartbeats()
     }
 }
 
+void KickLiveUpdatesPrivate::reconnect()
+{
+    for (const auto &[id, client] : this->clients())
+    {
+        client->close();
+    }
+}
+
 KickLiveUpdates::KickLiveUpdates()
     : private_(new KickLiveUpdatesPrivate)
 {
@@ -329,6 +338,11 @@ void KickLiveUpdates::leaveRoom(uint64_t roomID, uint64_t channelID)
     this->private_->unsubscribe(u"channel_" % QString::number(channelID));
     this->private_->unsubscribe(u"predictions-channel-" %
                                 QString::number(channelID));
+}
+
+void KickLiveUpdates::reconnect()
+{
+    this->private_->reconnect();
 }
 
 }  // namespace chatterino

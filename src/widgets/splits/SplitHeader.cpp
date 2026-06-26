@@ -42,17 +42,18 @@
 
 #include <QDrag>
 #include <QDateTime>
+#include <QCursor>
 #include <QDesktopServices>
 #include <QEvent>
 #include <QFileDialog>
 #include <QFontMetrics>
 #include <QHBoxLayout>
-#include <QInputDialog>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMimeData>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPixmap>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QSaveFile>
@@ -61,6 +62,7 @@
 #include <QTimer>
 #include <QUrl>
 
+#include <algorithm>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -77,49 +79,82 @@ constexpr const int BUTTON_WIDTH = 28;
 ///
 /// This matches the scrollbar's full width.
 constexpr const int ADD_SPLIT_BUTTON_WIDTH = 16;
+constexpr const int TITLE_SETTINGS_BUTTON_WIDTH = 20;
+constexpr const int TITLE_SETTINGS_BUTTON_GAP = 4;
+constexpr const int TITLE_LABEL_LEFT_PADDING = 2;
+constexpr const int TITLE_LABEL_RIGHT_PADDING =
+    TITLE_SETTINGS_BUTTON_WIDTH + TITLE_SETTINGS_BUTTON_GAP;
 constexpr const int QUEUED_SLOW_CHAT_COUNT_DIGITS = 4;
+constexpr auto STREAMDATABASE_LOGIN = "streamdatabase";
 
 // 5 minutes
 constexpr const qint64 THUMBNAIL_MAX_AGE_MS = 5LL * 60 * 1000;
 
-auto formatRoomModeUnclean(const TwitchChannel::RoomModes &modes) -> QString
-{
+struct RoomModePresentation {
     QString text;
+    QString tooltip;
+};
+
+QString roomModeSentence(const QString &mode)
+{
+    return QStringLiteral("This chat is currently in %1 mode.").arg(mode);
+}
+
+RoomModePresentation formatRoomModes(const TwitchChannel::RoomModes &modes)
+{
+    QStringList labels;
+    QStringList tooltips;
 
     if (modes.r9k)
     {
-        text += "r9k, ";
+        labels.append(QStringLiteral("R9K"));
+        tooltips.append(roomModeSentence(QStringLiteral("R9K")));
     }
     if (modes.slowMode > 0)
     {
-        text += QString("slow(%1), ").arg(localizeNumbers(modes.slowMode));
+        const auto duration = formatDurationExact(
+            std::chrono::seconds{modes.slowMode});
+        labels.append(QStringLiteral("Slow"));
+        tooltips.append(QStringLiteral("This chat is currently in slow mode "
+                                       "with a %1 delay.")
+                            .arg(duration));
     }
     if (modes.emoteOnly)
     {
-        text += "emote, ";
+        labels.append(QStringLiteral("Emote-only"));
+        tooltips.append(roomModeSentence(QStringLiteral("emote-only")));
     }
     if (modes.submode)
     {
-        text += "sub, ";
+        labels.append(QStringLiteral("Sub-only"));
+        tooltips.append(roomModeSentence(QStringLiteral("subscribers-only")));
     }
     if (modes.followerOnly != -1)
     {
         if (modes.followerOnly != 0)
         {
-            text += QString("follow(%1), ")
-                        .arg(formatDurationExact(
-                            std::chrono::minutes{modes.followerOnly}));
+            const auto duration = formatDurationExact(
+                std::chrono::minutes{modes.followerOnly});
+            labels.append(QStringLiteral("Followers"));
+            tooltips.append(
+                QStringLiteral("This chat is currently in followers-only mode. "
+                               "You must have followed for at least %1 to chat.")
+                    .arg(duration));
         }
         else
         {
-            text += QString("follow, ");
+            labels.append(QStringLiteral("Followers"));
+            tooltips.append(roomModeSentence(QStringLiteral("followers-only")));
         }
     }
 
-    return text;
+    return {
+        labels.join(QStringLiteral(", ")),
+        tooltips.join(QChar('\n')),
+    };
 }
 
-QString formatRoomModeUnclean(const KickChannel::RoomModes &modes)
+RoomModePresentation formatRoomModes(const KickChannel::RoomModes &modes)
 {
     TwitchChannel::RoomModes twitch{
         .submode = modes.subscribersMode,
@@ -137,31 +172,47 @@ QString formatRoomModeUnclean(const KickChannel::RoomModes &modes)
     {
         twitch.slowMode = static_cast<int>(modes.slowModeDuration->count());
     }
-    return formatRoomModeUnclean(twitch);
+    return formatRoomModes(twitch);
 }
 
-void cleanRoomModeText(QString &text, bool hasModRights)
+void appendRoomModePresentation(RoomModePresentation &target,
+                                const RoomModePresentation &source)
 {
-    if (text.length() > 2)
+    if (source.text.isEmpty())
     {
-        text = text.mid(0, text.size() - 2);
+        return;
     }
 
-    if (!text.isEmpty())
-    {
-        static QRegularExpression commaReplacement("^(.+?, .+?,) (.+)$");
+    auto targetLabels =
+        target.text.split(QStringLiteral(", "), Qt::SkipEmptyParts);
+    auto targetTooltips = target.tooltip.split(QChar('\n'), Qt::SkipEmptyParts);
+    const auto sourceLabels =
+        source.text.split(QStringLiteral(", "), Qt::SkipEmptyParts);
+    const auto sourceTooltips =
+        source.tooltip.split(QChar('\n'), Qt::SkipEmptyParts);
 
-        auto match = commaReplacement.match(text);
-        if (match.hasMatch())
+    for (int i = 0; i < sourceLabels.size(); ++i)
+    {
+        const auto label = sourceLabels.at(i).trimmed();
+        if (label.isEmpty() ||
+            targetLabels.contains(label, Qt::CaseInsensitive))
         {
-            text = match.captured(1) + '\n' + match.captured(2);
+            continue;
+        }
+
+        targetLabels.append(label);
+        if (i < sourceTooltips.size())
+        {
+            const auto tooltip = sourceTooltips.at(i).trimmed();
+            if (!tooltip.isEmpty())
+            {
+                targetTooltips.append(tooltip);
+            }
         }
     }
 
-    if (text.isEmpty() && hasModRights)
-    {
-        text = "none";
-    }
+    target.text = targetLabels.join(QStringLiteral(", "));
+    target.tooltip = targetTooltips.join(QChar('\n'));
 }
 
 auto formatTooltip(const TwitchChannel::StreamStatus &s, QString thumbnail,
@@ -613,6 +664,64 @@ const TwitchChannel *viewerListTwitchChannel(Channel *channel)
     return nullptr;
 }
 
+const TwitchChannel *streamDatabaseTwitchChannel(Channel *channel)
+{
+    if (auto *twitch = dynamic_cast<TwitchChannel *>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel))
+    {
+        return dynamic_cast<TwitchChannel *>(merged->twitchChannel().get());
+    }
+
+    return nullptr;
+}
+
+TwitchChannel *roomModeTwitchChannel(Channel *channel)
+{
+    if (auto *twitch = dynamic_cast<TwitchChannel *>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel))
+    {
+        return dynamic_cast<TwitchChannel *>(merged->twitchChannel().get());
+    }
+
+    return nullptr;
+}
+
+KickChannel *roomModeKickChannel(Channel *channel)
+{
+    if (auto *kick = dynamic_cast<KickChannel *>(channel))
+    {
+        return kick;
+    }
+
+    if (auto *merged = dynamic_cast<MergedChannel *>(channel))
+    {
+        return dynamic_cast<KickChannel *>(merged->kickChannel().get());
+    }
+
+    return nullptr;
+}
+
+bool splitIsStreamDatabase(const Split *split)
+{
+    if (split == nullptr)
+    {
+        return false;
+    }
+
+    auto *twitch = streamDatabaseTwitchChannel(split->getChannel().get());
+    return twitch != nullptr &&
+           twitch->getName().compare(QString::fromLatin1(STREAMDATABASE_LOGIN),
+                                     Qt::CaseInsensitive) == 0;
+}
+
 class ClickableSubmenuActionFilter final : public QObject
 {
 public:
@@ -651,6 +760,60 @@ private:
     QMenu *menu_{};
     QAction *action_{};
     std::function<void()> onClick_;
+};
+
+class TitleSettingsButton final : public SvgButton
+{
+public:
+    TitleSettingsButton(Src source, BaseWidget *parent = nullptr,
+                        QSize padding = {6, 3})
+        : SvgButton(std::move(source), parent, padding)
+    {
+        this->updateIconColor();
+    }
+
+protected:
+    void paintEvent(QPaintEvent * /*event*/) override
+    {
+        QPixmap iconLayer(this->size() * this->devicePixelRatio());
+        iconLayer.setDevicePixelRatio(this->devicePixelRatio());
+        iconLayer.fill(Qt::transparent);
+
+        {
+            QPainter iconPainter(&iconLayer);
+            this->paintContent(iconPainter);
+        }
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::SmoothPixmapTransform);
+        painter.drawPixmap(this->rect(), iconLayer, {{}, iconLayer.size()});
+    }
+
+    void themeChangedEvent() override
+    {
+        SvgButton::themeChangedEvent();
+        this->updateIconColor();
+    }
+
+    void mouseOverUpdated() override
+    {
+        this->updateIconColor();
+    }
+
+private:
+    void updateIconColor()
+    {
+        if (this->mouseOver())
+        {
+            this->setColor(this->theme->isLightTheme() ? QColor(24, 24, 24)
+                                                       : QColor(255, 255, 255));
+            return;
+        }
+
+        auto color = this->theme->splits.header.text;
+        color.setAlpha(this->theme->isLightTheme() ? 120 : 150);
+        this->setColor(color);
+    }
 };
 
 }  // namespace
@@ -694,6 +857,11 @@ SplitHeader::SplitHeader(Split *split)
     getSettings()->headerStreamTitle.connect(_, this->managedConnections_);
     getSettings()->headerGame.connect(_, this->managedConnections_);
     getSettings()->headerUptime.connect(_, this->managedConnections_);
+    getSettings()->headerChatModeIndicator.connect(
+        [this](const auto &, const auto &) {
+            this->updateRoomModes();
+        },
+        this->managedConnections_);
 
     auto *window = dynamic_cast<BaseWindow *>(this->window());
     if (window)
@@ -784,6 +952,18 @@ void SplitHeader::initializeLayout()
     this->clearActivityButton_->setScaleIndependentSize(BUTTON_WIDTH, 24);
     this->clearActivityButton_->hide();
 
+    this->titleSettingsButton_ = new TitleSettingsButton(
+        {
+            .dark = ":/buttons/settings-darkMode.svg",
+            .light = ":/buttons/settings-lightMode.svg",
+        },
+        this, {3, 3});
+    this->titleSettingsButton_->setContentSize(QSize{13, 13});
+    this->titleSettingsButton_->setScaleIndependentSize(
+        TITLE_SETTINGS_BUTTON_WIDTH, BUTTON_WIDTH);
+    this->titleSettingsButton_->setToolTip("Tab settings");
+    this->titleSettingsButton_->hide();
+
     /// XXX: this never gets disconnected
     QObject::connect(this->dropdownButton_, &Button::leftMousePress, this,
                      [this] {
@@ -800,7 +980,9 @@ void SplitHeader::initializeLayout()
             w->setSizePolicy(QSizePolicy::MinimumExpanding,
                              QSizePolicy::Preferred);
             w->setCentered(true);
-            w->setPadding(QMargins{});
+            w->setShouldElide(true);
+            w->setPadding(QMargins(TITLE_LABEL_LEFT_PADDING, -1,
+                                   TITLE_LABEL_RIGHT_PADDING, 1));
         }),
         // space
         makeWidget<BaseWidget>([](auto w) {
@@ -886,6 +1068,11 @@ void SplitHeader::initializeLayout()
     QObject::connect(this->addButton_, &Button::leftClicked, this, [this]() {
         this->split_->addSibling();
     });
+    QObject::connect(this->titleSettingsButton_, &Button::leftClicked, this,
+                     [this] {
+                         this->hideHoverTooltip();
+                         this->openTabSettings();
+                     });
 
     getSettings()->customURIScheme.connect(
         [this] {
@@ -901,7 +1088,9 @@ void SplitHeader::initializeLayout()
     this->setLayout(layout);
 
     this->titleLabel_->installEventFilter(this);
+    this->titleSettingsButton_->installEventFilter(this);
     this->viewerCountContainer_->installEventFilter(this);
+    this->modeButton_->installEventFilter(this);
     this->queuedSlowChatCountLabel_->installEventFilter(this);
     this->alertsButton_->installEventFilter(this);
     this->moderationButton_->installEventFilter(this);
@@ -929,15 +1118,49 @@ bool SplitHeader::eventFilter(QObject *watched, QEvent *event)
             }
         }
 
+        if (watched == this->titleSettingsButton_ &&
+            eventType == QEvent::MouseButtonPress)
+        {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::RightButton)
+            {
+                this->hideHoverTooltip();
+                this->popupTitleSettingsButtonMenu(
+                    target->mapToGlobal(mouseEvent->pos()));
+                return true;
+            }
+        }
+
+        if (watched == this->modeButton_ &&
+            eventType == QEvent::MouseButtonPress)
+        {
+            auto *mouseEvent = static_cast<QMouseEvent *>(event);
+            if (mouseEvent->button() == Qt::RightButton)
+            {
+                this->hideHoverTooltip();
+                if (auto *menu = this->modeButton_->menu())
+                {
+                    menu->popup(target->mapToGlobal(mouseEvent->pos()));
+                }
+                return true;
+            }
+        }
+
         if (eventType == QEvent::Enter)
         {
             if (watched == this->titleLabel_)
             {
+                this->setTitleSettingsButtonVisible(true);
                 this->updateChannelText();
                 if (!this->tooltipText_.isEmpty())
                 {
                     this->showHoverTooltip(target, this->tooltipText_, true);
                 }
+            }
+            else if (watched == this->titleSettingsButton_)
+            {
+                this->setTitleSettingsButtonVisible(true);
+                this->hideHoverTooltip();
             }
             else if (watched == this->viewerCountContainer_ &&
                      this->viewerCountContainer_->isVisible() &&
@@ -945,6 +1168,12 @@ bool SplitHeader::eventFilter(QObject *watched, QEvent *event)
             {
                 this->showHoverTooltip(target, this->viewerCountTooltipText_,
                                        false);
+            }
+            else if (watched == this->modeButton_ &&
+                     this->modeButton_->isVisible() &&
+                     !this->modeTooltipText_.isEmpty())
+            {
+                this->showHoverTooltip(target, this->modeTooltipText_, true);
             }
             else if (watched == this->queuedSlowChatCountLabel_ &&
                      !this->queuedSlowChatCountLabel_->getText().isEmpty())
@@ -965,8 +1194,16 @@ bool SplitHeader::eventFilter(QObject *watched, QEvent *event)
                 this->showHoverTooltip(target, "Toggle moderation mode.", false);
             }
         }
-        else if (eventType == QEvent::Leave || eventType == QEvent::Hide ||
-                 eventType == QEvent::MouseButtonPress)
+        else if ((watched == this->titleLabel_ ||
+                  watched == this->titleSettingsButton_) &&
+                 eventType == QEvent::Leave)
+        {
+            QTimer::singleShot(0, this, [this] {
+                this->setTitleSettingsButtonVisible(
+                    this->isTitleSettingsButtonHoverArea());
+            });
+        }
+        else if (eventType == QEvent::Hide || eventType == QEvent::MouseButtonPress)
         {
             this->hideHoverTooltip();
         }
@@ -1195,6 +1432,39 @@ std::unique_ptr<QMenu> SplitHeader::createMainMenu()
     else
     {
         menu->addAction("Settings", this->split_, &Split::changeChannel);
+    }
+    if (!this->split_->titleSettingsButtonVisible())
+    {
+        menu->addAction("Show settings cog", this, [this] {
+            this->split_->setTitleSettingsButtonVisible(true);
+            this->setTitleSettingsButtonVisible(
+                this->isTitleSettingsButtonHoverArea());
+        });
+    }
+    if (!this->split_->isActivityPane())
+    {
+        auto *modeIndicatorAction = menu->addAction("Chat mode indicator");
+        modeIndicatorAction->setCheckable(true);
+        modeIndicatorAction->setChecked(
+            getSettings()->headerChatModeIndicator &&
+            this->split_->chatModeIndicatorVisible());
+        modeIndicatorAction->setEnabled(getSettings()->headerChatModeIndicator);
+        QObject::connect(modeIndicatorAction, &QAction::toggled, this,
+                         [this](bool checked) {
+                             this->split_->setChatModeIndicatorVisible(checked);
+                         });
+    }
+    if (!this->split_->isActivityPane() && splitIsStreamDatabase(this->split_))
+    {
+        auto *badgeFeedAction = menu->addAction("Badge feed");
+        badgeFeedAction->setCheckable(true);
+        badgeFeedAction->setChecked(
+            this->split_->streamDatabaseBadgeFeedVisible());
+        QObject::connect(badgeFeedAction, &QAction::toggled, this,
+                         [this](bool checked) {
+                             this->split_->setStreamDatabaseBadgeFeedVisible(
+                                 checked);
+                         });
     }
     menu->addSeparator();
 
@@ -1542,94 +1812,9 @@ std::unique_ptr<QMenu> SplitHeader::createChatModeMenu()
 {
     auto menu = std::make_unique<QMenu>();
 
-    this->modeActionSetSub = new QAction("Subscriber only", this);
-    this->modeActionSetEmote = new QAction("Emote only", this);
-    this->modeActionSetSlow = new QAction("Slow", this);
-    this->modeActionSetR9k = new QAction("R9K", this);
-    this->modeActionSetFollowers = new QAction("Followers only", this);
-
-    this->modeActionSetFollowers->setCheckable(true);
-    this->modeActionSetSub->setCheckable(true);
-    this->modeActionSetEmote->setCheckable(true);
-    this->modeActionSetSlow->setCheckable(true);
-    this->modeActionSetR9k->setCheckable(true);
-
-    menu->addAction(this->modeActionSetEmote);
-    menu->addAction(this->modeActionSetSub);
-    menu->addAction(this->modeActionSetSlow);
-    menu->addAction(this->modeActionSetR9k);
-    menu->addAction(this->modeActionSetFollowers);
-
-    auto execCommand = [this](const QString &command) {
-        auto text = getApp()->getCommands()->execCommand(
-            command, this->split_->getChannel(), false);
-        this->split_->getChannel()->sendMessage(text);
-    };
-    auto toggle = [execCommand](const QString &command,
-                                QAction *action) mutable {
-        execCommand(command + (action->isChecked() ? "" : "off"));
-        action->setChecked(!action->isChecked());
-    };
-
-    QObject::connect(this->modeActionSetSub, &QAction::triggered, this,
-                     [this, toggle]() mutable {
-                         toggle("/subscribers", this->modeActionSetSub);
-                     });
-
-    QObject::connect(this->modeActionSetEmote, &QAction::triggered, this,
-                     [this, toggle]() mutable {
-                         toggle("/emoteonly", this->modeActionSetEmote);
-                     });
-
-    QObject::connect(this->modeActionSetSlow, &QAction::triggered, this,
-                     [this, execCommand]() {
-                         if (!this->modeActionSetSlow->isChecked())
-                         {
-                             execCommand("/slowoff");
-                             this->modeActionSetSlow->setChecked(false);
-                             return;
-                         };
-                         auto ok = bool();
-                         auto seconds = QInputDialog::getInt(
-                             this, "", "Seconds:", 10, 0, 500, 1, &ok,
-                             Qt::FramelessWindowHint);
-                         if (ok)
-                         {
-                             execCommand(QString("/slow %1").arg(seconds));
-                         }
-                         else
-                         {
-                             this->modeActionSetSlow->setChecked(false);
-                         }
-                     });
-
-    QObject::connect(this->modeActionSetFollowers, &QAction::triggered, this,
-                     [this, execCommand]() {
-                         if (!this->modeActionSetFollowers->isChecked())
-                         {
-                             execCommand("/followersoff");
-                             this->modeActionSetFollowers->setChecked(false);
-                             return;
-                         };
-                         auto ok = bool();
-                         auto time = QInputDialog::getText(
-                             this, "", "Time:", QLineEdit::Normal, "15m", &ok,
-                             Qt::FramelessWindowHint,
-                             Qt::ImhLowercaseOnly | Qt::ImhPreferNumbers);
-                         if (ok)
-                         {
-                             execCommand(QString("/followers %1").arg(time));
-                         }
-                         else
-                         {
-                             this->modeActionSetFollowers->setChecked(false);
-                         }
-                     });
-
-    QObject::connect(this->modeActionSetR9k, &QAction::triggered, this,
-                     [this, toggle]() mutable {
-                         toggle("/r9kbeta", this->modeActionSetR9k);
-                     });
+    menu->addAction("Hide", this, [this] {
+        this->split_->setChatModeIndicatorVisible(false);
+    });
 
     return menu;
 }
@@ -1641,67 +1826,173 @@ void SplitHeader::popupMainMenu(const QPoint &globalPosition)
     menu->popup(globalPosition);
 }
 
+void SplitHeader::openTabSettings()
+{
+    QPointer<Split> split = this->split_;
+    const bool isActivityPane = this->split_->isActivityPane();
+    QTimer::singleShot(0, this, [split, isActivityPane] {
+        if (split == nullptr)
+        {
+            return;
+        }
+
+        if (isActivityPane)
+        {
+            split->showSettingsDialog();
+        }
+        else
+        {
+            split->changeChannel();
+        }
+    });
+}
+
+void SplitHeader::popupTitleSettingsButtonMenu(const QPoint &globalPosition)
+{
+    QMenu menu(this);
+    menu.addAction("Hide settings cog", this, [this] {
+        this->split_->setTitleSettingsButtonVisible(false);
+        this->setTitleSettingsButtonVisible(false);
+    });
+    menu.exec(globalPosition);
+}
+
+void SplitHeader::setTitleSettingsButtonVisible(bool visible)
+{
+    if (this->titleSettingsButton_ == nullptr)
+    {
+        return;
+    }
+
+    if (visible && this->split_->titleSettingsButtonVisible())
+    {
+        this->positionTitleSettingsButton();
+        this->titleSettingsButton_->show();
+        this->titleSettingsButton_->raise();
+        return;
+    }
+
+    this->titleSettingsButton_->hide();
+}
+
+void SplitHeader::positionTitleSettingsButton()
+{
+    if (this->titleLabel_ == nullptr || this->titleSettingsButton_ == nullptr)
+    {
+        return;
+    }
+
+    const auto labelRect = this->titleLabel_->geometry();
+    const int leftPadding = static_cast<int>(
+        std::round(TITLE_LABEL_LEFT_PADDING * this->scale()));
+    const int gap =
+        static_cast<int>(std::round(TITLE_SETTINGS_BUTTON_GAP * this->scale()));
+    const int buttonWidth = this->titleSettingsButton_->width();
+    const int textAreaWidth =
+        std::max(0, labelRect.width() - leftPadding - buttonWidth - gap);
+    const auto text = this->titleLabel_->getText();
+    const auto metrics = getApp()->getFonts()->getFontMetrics(
+        this->titleLabel_->getFontStyle(), this->titleLabel_->scale());
+    const auto visibleText =
+        metrics.elidedText(text, Qt::ElideRight, textAreaWidth);
+    const int visibleTextWidth =
+        static_cast<int>(std::ceil(metrics.horizontalAdvance(visibleText)));
+    int textLeft = labelRect.x() + leftPadding;
+    if (visibleTextWidth < textAreaWidth)
+    {
+        textLeft += (textAreaWidth - visibleTextWidth) / 2;
+    }
+
+    const int minX = labelRect.x() + leftPadding;
+    const int maxX = std::max(minX, labelRect.right() - buttonWidth + 1);
+    int x = textLeft + visibleTextWidth + gap;
+    x = std::clamp(x, minX, maxX);
+    const int y = labelRect.y() +
+                  (labelRect.height() - this->titleSettingsButton_->height()) /
+                      2;
+    this->titleSettingsButton_->move(x, y);
+}
+
+bool SplitHeader::isTitleSettingsButtonHoverArea() const
+{
+    const auto globalCursor = QCursor::pos();
+    if (this->titleLabel_ != nullptr &&
+        this->titleLabel_->rect().contains(
+            this->titleLabel_->mapFromGlobal(globalCursor)))
+    {
+        return true;
+    }
+
+    return this->titleSettingsButton_ != nullptr &&
+           this->titleSettingsButton_->rect().contains(
+               this->titleSettingsButton_->mapFromGlobal(globalCursor));
+}
+
 void SplitHeader::updateRoomModes()
 {
     assert(this->modeButton_ != nullptr);
 
-    // Update the mode button
-    if (auto *twitchChannel =
-            dynamic_cast<TwitchChannel *>(this->split_->getChannel().get()))
-    {
-        this->modeButton_->setEnabled(twitchChannel->hasModRights());
-
-        QString text;
-        {
-            auto roomModes = twitchChannel->accessRoomModes();
-            text = formatRoomModeUnclean(*roomModes);
-
-            // Set menu action
-            this->modeActionSetR9k->setChecked(roomModes->r9k);
-            this->modeActionSetSlow->setChecked(roomModes->slowMode > 0);
-            this->modeActionSetEmote->setChecked(roomModes->emoteOnly);
-            this->modeActionSetSub->setChecked(roomModes->submode);
-            this->modeActionSetFollowers->setChecked(roomModes->followerOnly !=
-                                                     -1);
-        }
-        cleanRoomModeText(text, twitchChannel->hasModRights());
-
-        // set the label text
-
-        if (!text.isEmpty())
-        {
-            this->modeButton_->setText(text);
-            this->modeButton_->show();
-        }
-        else
-        {
-            this->modeButton_->hide();
-        }
-
-        // Update the mode button menu actions
-    }
-    else if (auto *kc =
-                 dynamic_cast<KickChannel *>(this->split_->getChannel().get()))
-    {
-        this->modeButton_->setEnabled(false);
-
-        QString text = formatRoomModeUnclean(kc->roomModes());
-        cleanRoomModeText(text, false);
-
-        if (!text.isEmpty())
-        {
-            this->modeButton_->setText(text);
-            this->modeButton_->show();
-        }
-        else
-        {
-            this->modeButton_->hide();
-        }
-    }
-    else
-    {
+    auto hideModeButton = [this] {
+        this->modeTooltipText_.clear();
         this->modeButton_->hide();
+        if (this->modeButton_->underMouse() && this->tooltipWidget_->isVisible())
+        {
+            this->hideHoverTooltip();
+        }
+    };
+
+    auto applyPresentation = [this,
+                              &hideModeButton](const RoomModePresentation
+                                                   &presentation) {
+        this->modeTooltipText_ = presentation.tooltip;
+
+        if (!presentation.text.isEmpty())
+        {
+            this->modeButton_->setEnabled(true);
+            this->modeButton_->setText(presentation.text);
+            this->modeButton_->show();
+
+            if (this->modeButton_->underMouse() &&
+                this->tooltipWidget_->isVisible() &&
+                !this->modeTooltipText_.isEmpty())
+            {
+                this->showHoverTooltip(this->modeButton_,
+                                       this->modeTooltipText_, true);
+            }
+        }
+        else
+        {
+            hideModeButton();
+        }
+    };
+
+    if (this->split_->isActivityPane() ||
+        !getSettings()->headerChatModeIndicator ||
+        !this->split_->chatModeIndicatorVisible())
+    {
+        hideModeButton();
+        return;
     }
+
+    auto *channel = this->split_->getChannel().get();
+    auto *twitchChannel = roomModeTwitchChannel(channel);
+    auto *kickChannel = roomModeKickChannel(channel);
+
+    RoomModePresentation presentation;
+
+    if (twitchChannel != nullptr)
+    {
+        auto roomModes = twitchChannel->accessRoomModes();
+        appendRoomModePresentation(presentation, formatRoomModes(*roomModes));
+    }
+
+    if (kickChannel != nullptr)
+    {
+        appendRoomModePresentation(presentation,
+                                   formatRoomModes(kickChannel->roomModes()));
+    }
+
+    applyPresentation(presentation);
 }
 
 void SplitHeader::resetThumbnail()
@@ -1750,6 +2041,8 @@ void SplitHeader::scaleChangedEvent(float scale)
 
     this->setFixedHeight(w);
     this->dropdownButton_->setFixedWidth(w);
+    this->titleSettingsButton_->setFixedSize(
+        int(TITLE_SETTINGS_BUTTON_WIDTH * scale), w);
     this->alertsButton_->setFixedWidth(w);
     this->moderationButton_->setFixedWidth(w);
     this->chattersButton_->setFixedWidth(w);
@@ -1766,6 +2059,7 @@ void SplitHeader::scaleChangedEvent(float scale)
     this->queuedSlowChatCountLabel_->setFixedWidth(queuedCountWidth);
 
     this->addButton_->setFixedWidth(addSplitWidth);
+    this->positionTitleSettingsButton();
 }
 
 void SplitHeader::setAddButtonVisible(bool value)
@@ -1794,6 +2088,7 @@ void SplitHeader::updateChannelText()
         this->viewerCountContainer_->hide();
         this->viewerCountLabel_->setText(QString());
         this->titleLabel_->setText(this->split_->activityPaneTitle());
+        this->positionTitleSettingsButton();
         return;
     }
 
@@ -1882,6 +2177,7 @@ void SplitHeader::updateChannelText()
     }
 
     this->titleLabel_->setText(title.isEmpty() ? "<empty>" : title);
+    this->positionTitleSettingsButton();
 }
 
 void SplitHeader::updateIcons()
@@ -2053,23 +2349,7 @@ void SplitHeader::mouseDoubleClickEvent(QMouseEvent *event)
     {
         this->dragging_ = false;
         this->hideHoverTooltip();
-        QPointer<Split> split = this->split_;
-        const bool isActivityPane = this->split_->isActivityPane();
-        QTimer::singleShot(0, this, [split, isActivityPane] {
-            if (split == nullptr)
-            {
-                return;
-            }
-
-            if (isActivityPane)
-            {
-                split->showSettingsDialog();
-            }
-            else
-            {
-                split->changeChannel();
-            }
-        });
+        this->openTabSettings();
         event->accept();
     }
     this->doubleClicked_ = true;
@@ -2083,6 +2363,7 @@ void SplitHeader::enterEvent(QEnterEvent *event)
 void SplitHeader::leaveEvent(QEvent *event)
 {
     this->hideHoverTooltip();
+    this->setTitleSettingsButtonVisible(false);
 
     BaseWidget::leaveEvent(event);
 }

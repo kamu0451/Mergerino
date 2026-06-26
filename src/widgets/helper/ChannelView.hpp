@@ -355,6 +355,8 @@ private:
     std::optional<MessagePtr> transformActivityMessage(
         const MessagePtr &message, int &pendingGiftRecipients,
         bool &suppressNextAnnouncementMessage) const;
+    bool shouldDecorateStreamDatabaseMessage() const;
+    MessagePtr decorateStreamDatabaseMessage(const MessagePtr &message) const;
     bool tryMergeActivityGiftMessage(const MessagePtr &message);
     void rebuildActivityMessages();
     void enqueueOrAddProxyMessage(

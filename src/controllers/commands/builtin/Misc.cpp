@@ -100,6 +100,13 @@ QString user(const CommandContext &ctx)
     QString userName = ctx.words[1];
     stripUserName(userName);
 
+    if (ctx.channel->isKickChannel())
+    {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://kick.com/%1").arg(userName)));
+        return "";
+    }
+
     QString channelName = ctx.channel->getName();
 
     if (ctx.words.size() > 2)

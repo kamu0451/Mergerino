@@ -1,6 +1,7 @@
 #include "providers/kick/KickChatServer.hpp"
 
 #include "Application.hpp"
+#include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "messages/MessageBuilder.hpp"
@@ -9,6 +10,8 @@
 #include "providers/kick/KickEmotes.hpp"
 #include "providers/kick/KickMessageBuilder.hpp"
 #include "providers/seventv/eventapi/Dispatch.hpp"
+#include "providers/seventv/SeventvAPI.hpp"
+#include "providers/seventv/SeventvEmotes.hpp"
 #include "providers/seventv/SeventvEventAPI.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Settings.hpp"
@@ -158,6 +161,7 @@ std::shared_ptr<Channel> KickChatServer::getOrCreate(
         if (existing->userID() != 0)
         {
             this->liveController_.queueNewChannel(existing->userID());
+            this->subscribeSeventvCosmetics(existing);
         }
         return existing;
     }
@@ -178,8 +182,7 @@ std::shared_ptr<Channel> KickChatServer::getOrCreate(
             {
                 this->channelsByUserID[chan->userID()] = weak;
                 this->liveController_.queueNewChannel(chan->userID());
-                getApp()->getSeventvEventAPI()->subscribeKickChannel(
-                    QString::number(chan->userID()));
+                this->subscribeSeventvCosmetics(chan);
             }
         });
     chan->initialize(init);
@@ -256,6 +259,19 @@ void KickChatServer::onChatMessage(KickChannel *channel, BoostJsonObject data)
     auto [msg, highlight] = KickMessageBuilder::makeChatMessage(channel, data);
     if (msg)
     {
+        bool ok = false;
+        const auto userID = msg->userID.toULongLong(&ok);
+        if (ok)
+        {
+            this->requestSeventvCosmetics(userID, msg->displayName);
+        }
+        channel->updateOwnIdentityFromMessage(*msg);
+
+        if (channel->tryReplacePendingSentMessage(msg))
+        {
+            return;
+        }
+
         channel->applySimilarityFilters(msg);
 
         if (!msg->flags.has(MessageFlag::Similar) ||
@@ -276,6 +292,62 @@ void KickChatServer::onChatMessage(KickChannel *channel, BoostJsonObject data)
         }
         channel->addMessage(msg, MessageContext::Original);
     }
+}
+
+void KickChatServer::requestSeventvCosmetics(uint64_t userID,
+                                             const QString &userName)
+{
+    if (userID == 0)
+    {
+        return;
+    }
+
+    {
+        std::lock_guard lock(this->requestedSeventvCosmeticUsersMutex_);
+        if (!this->requestedSeventvCosmeticUsers_.emplace(userID).second)
+        {
+            return;
+        }
+    }
+
+    auto *api = getApp()->getSeventvAPI();
+    if (!api)
+    {
+        std::lock_guard lock(this->requestedSeventvCosmeticUsersMutex_);
+        this->requestedSeventvCosmeticUsers_.erase(userID);
+        return;
+    }
+
+    const QPointer<KickChatServer> weakThis(this);
+    const auto normalizedUserName = userName.toLower();
+    const QJsonObject preferredConnection{
+        {"id", QString::number(userID)},
+        {"platform", "KICK"},
+        {"username", normalizedUserName},
+        {"display_name", userName},
+    };
+    api->getUserByKickID(
+        userID,
+        [weakThis, preferredConnection](const QJsonObject &json) {
+            if (!weakThis)
+            {
+                return;
+            }
+            SeventvEmotes::applyUserCosmetics(json, preferredConnection);
+        },
+        [weakThis, userID](const NetworkResult &result) {
+            if (!weakThis)
+            {
+                return;
+            }
+            const auto status = result.status();
+            if (!status || *status >= 500)
+            {
+                std::lock_guard lock(
+                    weakThis->requestedSeventvCosmeticUsersMutex_);
+                weakThis->requestedSeventvCosmeticUsers_.erase(userID);
+            }
+        });
 }
 
 void KickChatServer::onUserBanned(KickChannel *channel, BoostJsonObject data)
@@ -619,6 +691,27 @@ void KickChatServer::initializeSeventvEventApi(SeventvEventAPI *api)
                 },
                 this);
         });
+
+    this->forEachChannel([api](KickChannel &channel) {
+        if (channel.userID() != 0)
+        {
+            api->subscribeKickChannel(QString::number(channel.userID()));
+        }
+    });
+}
+
+void KickChatServer::subscribeSeventvCosmetics(
+    const std::shared_ptr<KickChannel> &channel) const
+{
+    if (channel == nullptr || channel->userID() == 0)
+    {
+        return;
+    }
+
+    if (auto *api = getApp()->getSeventvEventAPI())
+    {
+        api->subscribeKickChannel(QString::number(channel->userID()));
+    }
 }
 
 }  // namespace chatterino

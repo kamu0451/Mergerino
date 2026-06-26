@@ -48,6 +48,7 @@ extern void qt_set_sequence_auto_mnemonic(bool b);
 
 namespace chatterino {
 namespace {
+
 void installCustomPalette()
 {
     // borrowed from

@@ -24,6 +24,7 @@ namespace chatterino {
 class ChannelView;
 class SplitHeader;
 class SplitInput;
+class StreamDatabaseBadgeBar;
 class TwitchPollsAndPredictionsBar;
 class SplitContainer;
 class SplitOverlay;
@@ -70,6 +71,9 @@ public:
     bool slowerChatEnabled() const;
     qreal slowerChatMessagesPerSecond() const;
     bool slowerChatMessageAnimations() const;
+    bool streamDatabaseBadgeFeedVisible() const;
+    bool titleSettingsButtonVisible() const;
+    bool chatModeIndicatorVisible() const;
     PlatformIndicatorMode platformIndicatorMode() const;
     uint32_t twitchActivityMinimumBits() const;
     uint32_t kickActivityMinimumKicks() const;
@@ -94,6 +98,9 @@ public:
     void setSlowerChatEnabled(bool value);
     void setSlowerChatMessagesPerSecond(qreal value);
     void setSlowerChatMessageAnimations(bool value);
+    void setStreamDatabaseBadgeFeedVisible(bool value);
+    void setTitleSettingsButtonVisible(bool value);
+    void setChatModeIndicatorVisible(bool value);
     void setPlatformIndicatorMode(PlatformIndicatorMode value);
     void setTwitchActivityMinimumBits(uint32_t value);
     void setKickActivityMinimumKicks(uint32_t value);
@@ -206,6 +213,9 @@ private:
     bool slowerChatEnabled_{false};
     qreal slowerChatMessagesPerSecond_{5.0};
     bool slowerChatMessageAnimations_{true};
+    bool streamDatabaseBadgeFeedVisible_{true};
+    bool titleSettingsButtonVisible_{true};
+    bool chatModeIndicatorVisible_{true};
     uint32_t twitchActivityMinimumBits_{100};
     uint32_t kickActivityMinimumKicks_{100};
     uint32_t tiktokActivityMinimumDiamonds_{0};
@@ -217,6 +227,7 @@ private:
 
     QVBoxLayout *const vbox_;
     SplitHeader *const header_;
+    StreamDatabaseBadgeBar *streamDatabaseBadgeBar_{};
     TwitchPollsAndPredictionsBar *const twitchPollsAndPredictionsBar_;
     ChannelView *const view_;
     SplitInput *const input_;

@@ -1129,6 +1129,13 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         ->setTooltip("Show the stream title")
         ->addTo(layout);
 
+    layout.addSubtitle("Chat mode indicator");
+    SettingWidget::checkbox("Show chat mode indicator",
+                            s.headerChatModeIndicator)
+        ->setTooltip("Show the active Twitch/Kick chat mode in normal split "
+                     "headers when a chat mode is enabled")
+        ->addTo(layout);
+
     layout.addSubtitle("Viewer count");
     SettingWidget::checkbox("Show viewer count", s.headerViewerCount)
         ->setTooltip(
@@ -1242,6 +1249,10 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         ->addTo(layout);
     SettingWidget::checkbox("BetterTTV", s.showBadgesBttv)
         ->addKeywords({"bttv"})
+        ->addTo(layout);
+    SettingWidget::checkbox("Kick level badges", s.showKickLevelBadges)
+        ->addKeywords({"kick", "level"})
+        ->setTooltip("Level badges shown in Kick chat")
         ->addTo(layout);
     layout.addSeparator();
     SettingWidget::checkbox("Use custom FrankerFaceZ moderator badges",

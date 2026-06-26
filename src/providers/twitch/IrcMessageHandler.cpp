@@ -21,6 +21,7 @@
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchAccountManager.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "providers/twitch/CurrentUserBadges.hpp"
 #include "providers/twitch/TwitchHelpers.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/twitch/UserColor.hpp"
@@ -422,12 +423,15 @@ void IrcMessageHandler::parsePrivMessageInto(
     TwitchChannel *channel)
 {
     auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
-    if (message->tag("user-id") == currentUser->getUserId())
+    if (!currentUser->isAnon() &&
+        message->tag("user-id") == currentUser->getUserId())
     {
         auto badgesTag = message->tag("badges");
         if (badgesTag.isValid())
         {
             auto parsedBadges = parseBadges(badgesTag.toString());
+            twitch::updateCurrentUserBadgesForChannel(channel->getName(),
+                                                      parsedBadges);
             channel->setMod(parsedBadges.contains("moderator") ||
                             parsedBadges.contains("lead_moderator"));
             channel->setVIP(parsedBadges.contains("vip"));
@@ -666,6 +670,8 @@ void IrcMessageHandler::handleUserStateMessage(Communi::IrcMessage *message)
         if (badgesTag.isValid())
         {
             auto parsedBadges = parseBadges(badgesTag.toString());
+            twitch::updateCurrentUserBadgesForChannel(channelName,
+                                                      parsedBadges);
             tc->setVIP(parsedBadges.contains("vip"));
             tc->setStaff(parsedBadges.contains("staff"));
 

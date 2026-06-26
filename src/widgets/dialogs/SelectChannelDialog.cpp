@@ -10,10 +10,14 @@
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/tiktok/TikTokLiveChat.hpp"
 #include "singletons/Settings.hpp"
+#include "singletons/WindowManager.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Theme.hpp"
+#include "widgets/Notebook.hpp"
+#include "widgets/Window.hpp"
 #include "widgets/helper/MicroNotebook.hpp"
+#include "widgets/splits/Split.hpp"
 
 #include <QCheckBox>
 #include <QCloseEvent>
@@ -22,8 +26,8 @@
 #include <QDoubleSpinBox>
 #include <QFontMetrics>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGraphicsOpacityEffect>
-#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -37,6 +41,8 @@
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVBoxLayout>
+
+#include <array>
 
 namespace chatterino::detail {
 
@@ -52,37 +58,147 @@ namespace chatterino {
 
 namespace {
 
-int indicatorModeIndex(PlatformIndicatorMode mode)
+constexpr auto STREAMDATABASE_LOGIN = "streamdatabase";
+
+void setIndicatorModeCombo(QComboBox *combo, PlatformIndicatorMode mode)
 {
-    switch (mode)
+    if (combo == nullptr)
     {
-        case PlatformIndicatorMode::LineColor:
-            return 1;
-        case PlatformIndicatorMode::Badge:
-            return 2;
-        case PlatformIndicatorMode::Both:
-            return 3;
-        case PlatformIndicatorMode::None:
-            return 0;
-        default:
-            return 0;
+        return;
+    }
+
+    auto index = combo->findData(static_cast<int>(mode));
+    if (index < 0)
+    {
+        index =
+            combo->findData(static_cast<int>(PlatformIndicatorMode::LineColor));
+    }
+    if (index >= 0)
+    {
+        combo->setCurrentIndex(index);
     }
 }
 
-PlatformIndicatorMode indicatorModeFromIndex(int index)
+int indicatorModeCountIndex(PlatformIndicatorMode mode)
+{
+    switch (mode)
+    {
+        case PlatformIndicatorMode::Badge:
+            return 0;
+        case PlatformIndicatorMode::LineColor:
+            return 1;
+        case PlatformIndicatorMode::Both:
+            return 2;
+        case PlatformIndicatorMode::None:
+            return 3;
+    }
+    return -1;
+}
+
+PlatformIndicatorMode indicatorModeFromCountIndex(int index)
 {
     switch (index)
     {
+        case 0:
+            return PlatformIndicatorMode::Badge;
         case 1:
             return PlatformIndicatorMode::LineColor;
         case 2:
-            return PlatformIndicatorMode::Badge;
-        case 3:
             return PlatformIndicatorMode::Both;
-        case 0:
+        case 3:
             return PlatformIndicatorMode::None;
         default:
-            return PlatformIndicatorMode::LineColor;
+            return getSettings()->mergedPlatformIndicatorMode.getEnum();
+    }
+}
+
+PlatformIndicatorMode addTabDefaultIndicatorMode()
+{
+    const auto fallback = getSettings()->mergedPlatformIndicatorMode.getEnum();
+    std::array<int, 4> counts = {0, 0, 0, 0};
+
+    getApp()->getWindows()->getMainWindow().getNotebook().forEachSplit(
+        [&](Split *split) {
+            if (split == nullptr || split->isActivityPane())
+            {
+                return;
+            }
+
+            const auto channel = split->getChannel();
+            if (!channel || channel->isEmpty())
+            {
+                return;
+            }
+
+            const auto index = indicatorModeCountIndex(
+                split->platformIndicatorMode());
+            if (index >= 0 && index < static_cast<int>(counts.size()))
+            {
+                ++counts[static_cast<size_t>(index)];
+            }
+        });
+
+    int bestIndex = -1;
+    int bestCount = 0;
+    bool tied = false;
+    for (int i = 0; i < static_cast<int>(counts.size()); ++i)
+    {
+        if (counts[static_cast<size_t>(i)] > bestCount)
+        {
+            bestIndex = i;
+            bestCount = counts[static_cast<size_t>(i)];
+            tied = false;
+        }
+        else if (counts[static_cast<size_t>(i)] == bestCount && bestCount > 0)
+        {
+            tied = true;
+        }
+    }
+
+    if (bestIndex < 0 || tied)
+    {
+        return fallback;
+    }
+
+    return indicatorModeFromCountIndex(bestIndex);
+}
+
+void populateIndicatorModeCombo(QComboBox *combo,
+                                PlatformIndicatorMode defaultMode)
+{
+    combo->addItem("None", static_cast<int>(PlatformIndicatorMode::None));
+    combo->addItem("Highlights",
+                   static_cast<int>(PlatformIndicatorMode::LineColor));
+    combo->addItem("Logos", static_cast<int>(PlatformIndicatorMode::Badge));
+    combo->addItem("Both", static_cast<int>(PlatformIndicatorMode::Both));
+    setIndicatorModeCombo(combo, defaultMode);
+}
+
+PlatformIndicatorMode indicatorModeFromCombo(const QComboBox *combo,
+                                             PlatformIndicatorMode fallback)
+{
+    if (combo == nullptr)
+    {
+        return fallback;
+    }
+
+    bool ok = false;
+    const auto value = combo->currentData().toInt(&ok);
+    if (!ok)
+    {
+        return fallback;
+    }
+
+    const auto mode = static_cast<PlatformIndicatorMode>(value);
+    switch (mode)
+    {
+        case PlatformIndicatorMode::None:
+        case PlatformIndicatorMode::LineColor:
+        case PlatformIndicatorMode::Badge:
+        case PlatformIndicatorMode::Both:
+            return mode;
+        default:
+            return fallback;
     }
 }
 
@@ -391,6 +507,15 @@ QString buildDialogTooltipStyleSheet()
              theme->window.text.name(QColor::HexArgb));
 }
 
+QString addTabSectionStyleSheet()
+{
+    return QStringLiteral(
+        "QFrame#AddTabSection {"
+        " border: 1px solid rgba(90, 90, 90, 75);"
+        " background: transparent;"
+        "}");
+}
+
 QToolButton *createInfoButton(QWidget *parent, const QString &tooltip)
 {
     auto *button = new InstantTooltipButton(parent);
@@ -486,6 +611,13 @@ void applyAnimatedRowProgress(QWidget *widget, qreal progress)
 }  // namespace
 
 SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
+    : SelectChannelDialog(showSpecialPage, false, parent)
+{
+}
+
+SelectChannelDialog::SelectChannelDialog(bool showSpecialPage,
+                                         bool allowFolderSelection,
+                                         QWidget *parent)
     : BaseWindow(
           {
               BaseWindow::Flags::EnableCustomFrame,
@@ -504,11 +636,14 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     rootLayout->setSpacing(4);
 
     ui.notebook = new MicroNotebook(this->getLayoutContainer());
+    ui.notebook->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     rootLayout->addWidget(ui.notebook);
 
     ui.mergedPage = new QWidget;
+    ui.mergedPage->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *mergedLayout = new QVBoxLayout(ui.mergedPage);
     mergedLayout->setContentsMargins(6, 6, 6, 0);
+    mergedLayout->setAlignment(Qt::AlignTop);
     mergedLayout->setSpacing(5);
 
     auto *intro = new QLabel(
@@ -518,17 +653,26 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     intro->setWordWrap(true);
     mergedLayout->addWidget(intro);
 
-    auto *baseGroup = new QGroupBox;
+    auto *baseGroup = new QFrame;
+    baseGroup->setObjectName(QStringLiteral("AddTabSection"));
+    baseGroup->setFrameShape(QFrame::NoFrame);
+    baseGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+    baseGroup->setStyleSheet(addTabSectionStyleSheet());
     auto *baseLayout = new QFormLayout(baseGroup);
     baseLayout->setContentsMargins(8, 8, 8, 8);
     baseLayout->setHorizontalSpacing(6);
     baseLayout->setVerticalSpacing(4);
+
     ui.tabName = new QLineEdit();
     ui.tabName->setPlaceholderText("Streamer / tab name");
     baseLayout->addRow("Tab name", ui.tabName);
     mergedLayout->addWidget(baseGroup);
 
-    auto *platformGroup = new QGroupBox;
+    auto *platformGroup = new QFrame;
+    platformGroup->setObjectName(QStringLiteral("AddTabSection"));
+    platformGroup->setFrameShape(QFrame::NoFrame);
+    platformGroup->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+    platformGroup->setStyleSheet(addTabSectionStyleSheet());
     auto *platformLayout = new QFormLayout(platformGroup);
     platformLayout->setContentsMargins(8, 8, 8, 8);
     platformLayout->setHorizontalSpacing(6);
@@ -538,14 +682,12 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     ui.enableTwitch->setChecked(true);
     platformLayout->addRow(ui.enableTwitch);
     ui.twitchName = new QLineEdit();
-    ui.twitchName->setPlaceholderText("Same as tab name");
     platformLayout->addRow("Twitch channel", ui.twitchName);
 
     ui.enableKick = new QCheckBox("Enable Kick");
     ui.enableKick->setChecked(true);
     platformLayout->addRow(ui.enableKick);
     ui.kickName = new QLineEdit();
-    ui.kickName->setPlaceholderText("Same as tab name");
     platformLayout->addRow("Kick channel", ui.kickName);
 
     ui.enableYouTube = new QCheckBox("Enable YouTube");
@@ -561,10 +703,9 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     platformLayout->addRow("TikTok", ui.tiktokSource);
 
     ui.indicatorMode = new QComboBox();
-    ui.indicatorMode->addItem("None");
-    ui.indicatorMode->addItem("Highlights");
-    ui.indicatorMode->addItem("Logos");
-    ui.indicatorMode->addItem("Both");
+    populateIndicatorModeCombo(ui.indicatorMode,
+                               getSettings()->mergedPlatformIndicatorMode
+                                   .getEnum());
     const auto platformStyleTooltip = QStringLiteral(
         "Show no platform indicator, platform color, logo, or both.");
     platformLayout->addRow(
@@ -607,6 +748,13 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
     platformLayout->addRow(
         createCheckboxRow(ui.viewerCount, viewerCountTooltip, this));
 
+    ui.streamDatabaseBadgeFeed = new QCheckBox("Badge feed");
+    const auto streamDatabaseBadgeFeedTooltip = QStringLiteral(
+        "Show the StreamDatabase badge feed on StreamDatabase tabs.");
+    ui.streamDatabaseBadgeFeedRow = createCheckboxRow(
+        ui.streamDatabaseBadgeFeed, streamDatabaseBadgeFeedTooltip, this);
+    platformLayout->addRow(ui.streamDatabaseBadgeFeedRow);
+
     mergedLayout->addWidget(platformGroup);
 
     QObject::connect(ui.enableTwitch, &QCheckBox::toggled, this,
@@ -619,6 +767,13 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
                      [this](bool) { this->syncMergedFieldState(); });
     QObject::connect(ui.slowerChat, &QCheckBox::toggled, this,
                      [this](bool) { this->updateSlowerChatVisibility(); });
+    QObject::connect(ui.tabName, &QLineEdit::textChanged, this,
+                     [this] {
+                         this->updatePlatformOverridePlaceholders();
+                         this->updateStreamDatabaseBadgeFeedVisibility();
+                     });
+    QObject::connect(ui.twitchName, &QLineEdit::textChanged, this,
+                     [this] { this->updateStreamDatabaseBadgeFeedVisibility(); });
     QObject::connect(ui.enableActivity, &QCheckBox::toggled, this,
                      [this](bool enabled) {
                          if (enabled && this->ui_.filterActivity != nullptr &&
@@ -652,6 +807,11 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
         ui.live = new detail::AutoCheckedRadioButton("Live");
         ui.automod = new detail::AutoCheckedRadioButton("AutoMod");
 
+        if (allowFolderSelection)
+        {
+            ui.folder = new detail::AutoCheckedRadioButton("Folder");
+            specialLayout->addWidget(ui.folder);
+        }
         specialLayout->addWidget(ui.whispers);
         specialLayout->addWidget(ui.mentions);
         specialLayout->addWidget(ui.watching);
@@ -667,6 +827,7 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
 
     auto *buttonBox =
         new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+    buttonBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     buttonBox->setContentsMargins({6, 0, 6, 6});
     rootLayout->addWidget(buttonBox);
 
@@ -720,8 +881,9 @@ void SelectChannelDialog::setMergedDefaults()
     this->ui_.slowerChatRate->setValue(5.0);
     this->ui_.viewerCount->setChecked(
         getSettings()->headerViewerCount.getValue());
-    this->ui_.indicatorMode->setCurrentIndex(indicatorModeIndex(
-        getSettings()->mergedPlatformIndicatorMode));
+    this->ui_.streamDatabaseBadgeFeed->setChecked(true);
+    setIndicatorModeCombo(this->ui_.indicatorMode, addTabDefaultIndicatorMode());
+    this->updatePlatformOverridePlaceholders();
 }
 
 void SelectChannelDialog::loadMergedDefaultsFromChannel(
@@ -853,7 +1015,7 @@ void SelectChannelDialog::setPlatformIndicatorMode(PlatformIndicatorMode mode)
 {
     if (this->ui_.indicatorMode)
     {
-        this->ui_.indicatorMode->setCurrentIndex(indicatorModeIndex(mode));
+        setIndicatorModeCombo(this->ui_.indicatorMode, mode);
     }
 }
 
@@ -890,6 +1052,14 @@ void SelectChannelDialog::setViewerCountEnabled(bool enabled)
     }
 }
 
+void SelectChannelDialog::setStreamDatabaseBadgeFeedVisible(bool visible)
+{
+    if (this->ui_.streamDatabaseBadgeFeed)
+    {
+        this->ui_.streamDatabaseBadgeFeed->setChecked(visible);
+    }
+}
+
 IndirectChannel SelectChannelDialog::getSelectedChannel() const
 {
     return this->selectedChannel_;
@@ -911,10 +1081,12 @@ PlatformIndicatorMode SelectChannelDialog::platformIndicatorMode() const
 {
     if (this->ui_.indicatorMode == nullptr)
     {
-        return PlatformIndicatorMode::Badge;
+        return getSettings()->mergedPlatformIndicatorMode.getEnum();
     }
 
-    return indicatorModeFromIndex(this->ui_.indicatorMode->currentIndex());
+    return indicatorModeFromCombo(
+        this->ui_.indicatorMode,
+        getSettings()->mergedPlatformIndicatorMode.getEnum());
 }
 
 bool SelectChannelDialog::slowerChatEnabled() const
@@ -934,9 +1106,20 @@ bool SelectChannelDialog::viewerCountEnabled() const
            this->ui_.viewerCount->isChecked();
 }
 
+bool SelectChannelDialog::streamDatabaseBadgeFeedVisible() const
+{
+    return this->ui_.streamDatabaseBadgeFeed == nullptr ||
+           this->ui_.streamDatabaseBadgeFeed->isChecked();
+}
+
 bool SelectChannelDialog::hasSeletedChannel() const
 {
     return this->hasSelectedChannel_;
+}
+
+bool SelectChannelDialog::selectedFolder() const
+{
+    return this->selectedFolder_;
 }
 
 void SelectChannelDialog::updateDialogSize()
@@ -947,18 +1130,23 @@ void SelectChannelDialog::updateDialogSize()
 
     if (this->ui_.notebook != nullptr)
     {
+        this->ui_.notebook->setMinimumHeight(0);
+        this->ui_.notebook->setMaximumHeight(QWIDGETSIZE_MAX);
         this->ui_.notebook->updateGeometry();
+        this->ui_.notebook->setFixedHeight(
+            this->ui_.notebook->sizeHint().height());
     }
 
     if (auto *layout = this->getLayoutContainer()->layout())
     {
+        layout->invalidate();
         layout->activate();
     }
 
     const auto targetHeight =
-        this->sizeHint().expandedTo(this->minimumSizeHint()).height();
-    this->resize(ADD_TAB_DIALOG_WIDTH, targetHeight);
-    this->setMinimumHeight(targetHeight);
+        this->layout()->sizeHint().expandedTo(this->layout()->minimumSize())
+            .height();
+    this->setFixedSize(ADD_TAB_DIALOG_WIDTH, targetHeight);
 }
 
 void SelectChannelDialog::syncMergedFieldState()
@@ -967,6 +1155,49 @@ void SelectChannelDialog::syncMergedFieldState()
     this->ui_.kickName->setEnabled(this->ui_.enableKick->isChecked());
     this->ui_.youtubeUrl->setEnabled(this->ui_.enableYouTube->isChecked());
     this->ui_.tiktokSource->setEnabled(this->ui_.enableTikTok->isChecked());
+    this->updateStreamDatabaseBadgeFeedVisibility();
+}
+
+void SelectChannelDialog::updatePlatformOverridePlaceholders()
+{
+    auto placeholder = this->ui_.tabName->text().trimmed();
+    if (placeholder.isEmpty())
+    {
+        placeholder = QStringLiteral("Same as tab name");
+    }
+
+    this->ui_.twitchName->setPlaceholderText(placeholder);
+    this->ui_.kickName->setPlaceholderText(placeholder);
+}
+
+void SelectChannelDialog::updateStreamDatabaseBadgeFeedVisibility()
+{
+    if (this->ui_.streamDatabaseBadgeFeedRow == nullptr)
+    {
+        return;
+    }
+
+    const auto tabName = this->ui_.tabName->text().trimmed();
+    const auto twitchName = this->ui_.twitchName->text().trimmed();
+    const auto effectiveTwitchName = twitchName.isEmpty() ? tabName : twitchName;
+    const bool visible =
+        this->ui_.enableTwitch->isChecked() &&
+        effectiveTwitchName.compare(QString::fromLatin1(STREAMDATABASE_LOGIN),
+                                    Qt::CaseInsensitive) == 0;
+
+    const bool rowShown = !this->ui_.streamDatabaseBadgeFeedRow->isHidden();
+    if (rowShown == visible)
+    {
+        return;
+    }
+
+    if (!rowShown && visible)
+    {
+        setIndicatorModeCombo(this->ui_.indicatorMode,
+                              PlatformIndicatorMode::LineColor);
+    }
+    this->ui_.streamDatabaseBadgeFeedRow->setVisible(visible);
+    this->updateDialogSize();
 }
 
 void SelectChannelDialog::applySlowerChatRateVisibilityProgress(qreal progress)
@@ -1029,6 +1260,8 @@ void SelectChannelDialog::updateSlowerChatVisibility(bool animate)
 
 bool SelectChannelDialog::buildMergedSelection()
 {
+    this->selectedFolder_ = false;
+
     const auto youtubeChannel = normalizeYouTubeSource(this->ui_.youtubeUrl->text());
     const auto tiktokSource = normalizeTikTokSource(this->ui_.tiktokSource->text());
     MergedChannelConfig config{
@@ -1092,7 +1325,13 @@ bool SelectChannelDialog::buildMergedSelection()
 
 bool SelectChannelDialog::buildSpecialSelection()
 {
-    if (this->ui_.watching->isChecked())
+    this->selectedFolder_ = false;
+
+    if (this->ui_.folder != nullptr && this->ui_.folder->isChecked())
+    {
+        this->selectedFolder_ = true;
+    }
+    else if (this->ui_.watching->isChecked())
     {
         this->selectedChannel_ = getApp()->getTwitch()->getWatchingChannel();
     }
@@ -1155,6 +1394,10 @@ void SelectChannelDialog::scaleChangedEvent(float newScale)
     if (this->ui_.viewerCount)
     {
         this->ui_.viewerCount->setFont(uiFont);
+    }
+    if (this->ui_.streamDatabaseBadgeFeed)
+    {
+        this->ui_.streamDatabaseBadgeFeed->setFont(uiFont);
     }
 
     this->applySlowerChatRateVisibilityProgress(

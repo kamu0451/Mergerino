@@ -16,7 +16,9 @@
 #include "providers/emoji/Emojis.hpp"
 #include "providers/kick/KickAccount.hpp"
 #include "providers/kick/KickApi.hpp"
+#include "providers/kick/KickBadges.hpp"
 #include "providers/kick/KickChatServer.hpp"
+#include "providers/kick/KickEmotes.hpp"
 #include "providers/kick/KickLiveUpdates.hpp"
 #include "providers/kick/KickMessageBuilder.hpp"
 #include "providers/seventv/eventapi/Dispatch.hpp"
@@ -33,6 +35,8 @@
 #include <boost/json/parse.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <cstdint>
 
 using namespace Qt::Literals;
 using namespace std::chrono_literals;
@@ -40,6 +44,53 @@ using namespace std::chrono_literals;
 namespace chatterino {
 
 namespace {
+
+std::atomic_uint64_t NEXT_LOCAL_MESSAGE_ID = 1;
+constexpr uint16_t KICK_LEVEL_BADGE_IMAGE_SIZE = 17;
+constexpr int LOCAL_SENT_MESSAGE_DELAY_MS = 250;
+
+QString makeLocalKickMessageID()
+{
+    return u"local-kick-"_s %
+           QString::number(QDateTime::currentMSecsSinceEpoch()) % u'-' %
+           QString::number(NEXT_LOCAL_MESSAGE_ID.fetch_add(1));
+}
+
+bool isKickLevelBadge(const KickPrivateUserBadgeInfo &badge)
+{
+    auto type = badge.type.toLower();
+    return type == u"level"_s || type == u"kick_level"_s ||
+           type == u"kick-level"_s || type == u"level_badge"_s ||
+           type == u"level-badge"_s || type.contains(u"level"_s) ||
+           badge.level > 0 ||
+           badge.imageUrl.contains(u"/chat/badges/"_s, Qt::CaseInsensitive);
+}
+
+std::unique_ptr<MessageElement> makeKickLevelBadgeElement(
+    const KickPrivateUserBadgeInfo &badge, const QString &slug)
+{
+    if (badge.imageUrl.isEmpty())
+    {
+        return nullptr;
+    }
+
+    auto name = badge.text;
+    if (name.isEmpty() || name.compare(u"level"_s, Qt::CaseInsensitive) == 0)
+    {
+        name = badge.level > 0 ? u"Level "_s % QString::number(badge.level)
+                               : u"Kick Level"_s;
+    }
+
+    auto emote = std::make_shared<const Emote>(Emote{
+        .name = {name},
+        .images = ImageSet(Image::fromAutoscaledUrl(
+            {badge.imageUrl}, KICK_LEVEL_BADGE_IMAGE_SIZE)),
+        .tooltip = Tooltip{name},
+        .homePage = {u"https://kick.com/" % slug},
+    });
+    return std::make_unique<BadgeElement>(emote,
+                                          MessageElementFlag::BadgeKickLevel);
+}
 
 void normalizeRecentMessageMetadata(boost::json::object &message)
 {
@@ -84,6 +135,15 @@ std::vector<MessagePtr> buildKickRecentMessages(
             continue;
         }
 
+        bool ok = false;
+        const auto userID = msg->userID.toULongLong(&ok);
+        if (ok)
+        {
+            getApp()->getKickChatServer()->requestSeventvCosmetics(
+                userID, msg->displayName);
+        }
+        channel->updateOwnIdentityFromMessage(*msg);
+
         msg->flags.set(MessageFlag::RecentMessage);
         messages.emplace_back(std::move(msg));
     }
@@ -127,6 +187,7 @@ KickChannel::KickChannel(const QString &name)
     , ChannelChatters(static_cast<Channel &>(*this))
     , displayName_(name)
     , slug_(KickApi::slugify(this->getName()))
+    , kickChannelEmotes_(std::make_shared<const EmoteMap>())
     , seventvEmotes_(std::make_shared<const EmoteMap>())
 {
     this->setMentionFlag(MessageElementFlag::KickUsername);
@@ -200,6 +261,11 @@ std::pair<std::shared_ptr<MessageThread>, MessagePtr>
 
 // FIXME: These are largely the same as in TwitchChannel. They should be
 // combined. However, we also want to avoid merge conflicts as much as possible.
+
+std::shared_ptr<const EmoteMap> KickChannel::kickChannelEmotes() const
+{
+    return this->kickChannelEmotes_.get();
+}
 
 void KickChannel::reloadSeventvEmotes(bool manualRefresh)
 {
@@ -402,10 +468,45 @@ void KickChannel::sendReply(const QString &message, const QString &replyToId)
         return;
     }
 
+    QString localID;
+    if (auto pending = KickMessageBuilder::makeSentMessage(
+            this, prepared, makeLocalKickMessageID()))
+    {
+        localID = pending->id;
+        this->pendingSentMessages_.push_back(PendingSentMessage{
+            .localID = localID,
+            .messageText = pending->messageText,
+            .createdAt = pending->serverReceivedTime,
+        });
+        QTimer::singleShot(
+            LOCAL_SENT_MESSAGE_DELAY_MS,
+            [weak = this->weakFromThis(), localID, pending]() {
+                auto self = weak.lock();
+                if (!self)
+                {
+                    return;
+                }
+
+                const auto pendingIt = std::find_if(
+                    self->pendingSentMessages_.begin(),
+                    self->pendingSentMessages_.end(),
+                    [&](const auto &pendingSentMessage) {
+                        return pendingSentMessage.localID == localID;
+                    });
+                if (pendingIt == self->pendingSentMessages_.end() ||
+                    self->findMessageByID(localID))
+                {
+                    return;
+                }
+
+                self->addMessage(pending, MessageContext::Original);
+            });
+    }
+
     this->updateSevenTVActivity();
     getKickApi()->sendMessage(
         this->userID(), prepared, replyToId,
-        [weak = this->weakFromThis()](const auto &res) {
+        [weak = this->weakFromThis(), localID](const auto &res) {
             auto self = weak.lock();
             if (!self)
             {
@@ -421,10 +522,130 @@ void KickChannel::sendReply(const QString &message, const QString &replyToId)
             }
             if (self)
             {
+                self->markPendingSentMessageFailed(localID);
                 self->addSystemMessage(u"Failed to send message: " %
                                        res.error());
             }
         });
+}
+
+void KickChannel::updateOwnIdentityFromMessage(const Message &message)
+{
+    auto account = getApp()->getAccounts()->kick.current();
+    if (!account || account->isAnonymous())
+    {
+        return;
+    }
+
+    bool ok = false;
+    const auto messageUserID = message.userID.toULongLong(&ok);
+    if (!ok || messageUserID != account->userID())
+    {
+        return;
+    }
+
+    CachedOwnIdentity identity;
+    identity.displayName = message.displayName;
+    identity.loginName = message.loginName;
+    identity.userID = message.userID;
+    identity.usernameColor = message.usernameColor;
+
+    for (const auto &element : message.elements)
+    {
+        if (!element ||
+            !element->getFlags().hasAny({MessageElementFlag::Badges}))
+        {
+            continue;
+        }
+        identity.badges.emplace_back(element->clone());
+    }
+
+    if (!identity.displayName.isEmpty())
+    {
+        this->ownIdentity_.emplace(std::move(identity));
+    }
+}
+
+const KickChannel::CachedOwnIdentity *KickChannel::ownIdentity() const
+{
+    if (!this->ownIdentity_)
+    {
+        return nullptr;
+    }
+    return &*this->ownIdentity_;
+}
+
+bool KickChannel::tryReplacePendingSentMessage(const MessagePtr &message)
+{
+    auto account = getApp()->getAccounts()->kick.current();
+    if (!account || account->isAnonymous() ||
+        message->userID != QString::number(account->userID()))
+    {
+        return false;
+    }
+
+    this->prunePendingSentMessages(QDateTime::currentDateTime());
+
+    for (auto it = this->pendingSentMessages_.begin();
+         it != this->pendingSentMessages_.end(); ++it)
+    {
+        if (it->messageText != message->messageText)
+        {
+            continue;
+        }
+
+        if (auto pending = this->findMessageByID(it->localID))
+        {
+            this->replaceMessage(pending, message);
+            this->pendingSentMessages_.erase(it);
+            return true;
+        }
+
+        this->pendingSentMessages_.erase(it);
+        return false;
+    }
+
+    return false;
+}
+
+void KickChannel::prunePendingSentMessages(const QDateTime &now)
+{
+    auto it = this->pendingSentMessages_.begin();
+    while (it != this->pendingSentMessages_.end())
+    {
+        if (it->createdAt.msecsTo(now) > 30'000 ||
+            !this->findMessageByID(it->localID))
+        {
+            it = this->pendingSentMessages_.erase(it);
+            continue;
+        }
+        ++it;
+    }
+}
+
+void KickChannel::markPendingSentMessageFailed(const QString &localID)
+{
+    if (localID.isEmpty())
+    {
+        return;
+    }
+
+    auto it = std::find_if(this->pendingSentMessages_.begin(),
+                           this->pendingSentMessages_.end(),
+                           [&](const auto &pending) {
+                               return pending.localID == localID;
+                           });
+    if (it != this->pendingSentMessages_.end())
+    {
+        this->pendingSentMessages_.erase(it);
+    }
+
+    if (auto pending = this->findMessageByID(localID))
+    {
+        auto replacement = pending->clone();
+        replacement->flags.set(MessageFlag::Disabled);
+        this->replaceMessage(pending, replacement);
+    }
 }
 
 void KickChannel::deleteMessage(const QString &messageID)
@@ -472,7 +693,25 @@ void KickChannel::setVip(bool vip)
 
 bool KickChannel::isBroadcaster() const
 {
-    return this->userID() == getApp()->getAccounts()->kick.current()->userID();
+    auto *app = tryGetApp();
+    if (app == nullptr)
+    {
+        return false;
+    }
+
+    auto *accounts = app->getAccounts();
+    if (accounts == nullptr)
+    {
+        return false;
+    }
+
+    auto currentUser = accounts->kick.current();
+    if (!currentUser)
+    {
+        return false;
+    }
+
+    return this->userID() == currentUser->userID();
 }
 
 bool KickChannel::hasModRights() const
@@ -488,6 +727,38 @@ bool KickChannel::hasHighRateLimit() const
 bool KickChannel::isLive() const
 {
     return this->streamData_.isLive;
+}
+
+bool KickChannel::canReconnect() const
+{
+    return true;
+}
+
+void KickChannel::reconnect()
+{
+    this->resolveChannelInfo();
+
+    if (this->roomID() == 0 || this->channelID() == 0)
+    {
+        this->loadRecentMessagesReconnect();
+        return;
+    }
+
+    const auto roomID = this->roomID();
+    const auto channelID = this->channelID();
+    auto *server = getApp()->getKickChatServer();
+    server->liveUpdates().reconnect();
+    server->liveUpdates().leaveRoom(roomID, channelID);
+    this->loadRecentMessagesReconnect([weak = this->weakFromThis(), roomID,
+                                       channelID] {
+        auto self = weak.lock();
+        if (!self)
+        {
+            return;
+        }
+        getApp()->getKickChatServer()->liveUpdates().joinRoom(roomID,
+                                                               channelID);
+    });
 }
 
 QString KickChannel::getCurrentStreamID() const
@@ -688,7 +959,173 @@ void KickChannel::resolveChannelInfo()
                 .followersModeDuration = res->chatroom.followersModeDuration,
             });
             self->updateStreamData(*res);
+            self->reloadKickChannelEmotes();
+            self->refreshOwnIdentity();
         });
+}
+
+void KickChannel::reloadKickChannelEmotes()
+{
+    auto weak = this->weakFromThis();
+    KickApi::privateEmotesInChannel(
+        this->slug_,
+        [weak](const ExpectedStr<std::vector<KickPrivateEmoteSetInfo>> &res) {
+            auto self = weak.lock();
+            if (!self)
+            {
+                return;
+            }
+
+            if (!res)
+            {
+                qCWarning(chatterinoKick)
+                    << *self << "Failed to fetch channel emotes:"
+                    << res.error();
+                self->kickChannelEmotes_.set(EMPTY_EMOTE_MAP);
+                return;
+            }
+
+            auto emotes = std::make_shared<EmoteMap>();
+            for (const auto &set : *res)
+            {
+                if (!set.userID)
+                {
+                    continue;  // global set
+                }
+
+                for (const auto &emoteInfo : set.emotes)
+                {
+                    if (emoteInfo.emoteID == 0 || emoteInfo.name.isEmpty())
+                    {
+                        continue;
+                    }
+
+                    auto id = QString::number(emoteInfo.emoteID);
+                    auto emote = KickEmotes::emoteForID(id, emoteInfo.name);
+                    (*emotes)[emote->name] = emote;
+                }
+            }
+
+            self->kickChannelEmotes_.set(std::move(emotes));
+            qCDebug(chatterinoKick)
+                << "Loaded" << self->kickChannelEmotes_.get()->size()
+                << "channel emotes for" << *self;
+        });
+}
+
+void KickChannel::refreshOwnIdentity()
+{
+    auto account = getApp()->getAccounts()->kick.current();
+    if (!account || account->isAnonymous())
+    {
+        this->ownIdentity_.reset();
+        return;
+    }
+
+    auto weak = this->weakFromThis();
+    KickApi::privateUserInChannelInfo(
+        account->username(), this->getName(),
+        [weak](const ExpectedStr<KickPrivateUserInChannelInfo> &res) {
+            auto self = weak.lock();
+            if (!self || !res)
+            {
+                return;
+            }
+            self->cacheOwnIdentityFromUserInfo(*res);
+        });
+}
+
+void KickChannel::cacheOwnIdentityFromUserInfo(
+    const KickPrivateUserInChannelInfo &info)
+{
+    auto account = getApp()->getAccounts()->kick.current();
+    if (!account || account->isAnonymous())
+    {
+        return;
+    }
+    if (info.userID != 0 && info.userID != account->userID())
+    {
+        return;
+    }
+
+    CachedOwnIdentity identity;
+    identity.displayName =
+        info.username.isEmpty() ? account->username() : info.username;
+    identity.loginName = identity.displayName.toLower();
+    const auto ownUserID = info.userID == 0 ? account->userID() : info.userID;
+    identity.userID = QString::number(ownUserID);
+    identity.usernameColor = this->getUserColor(identity.displayName);
+    getApp()->getKickChatServer()->requestSeventvCosmetics(
+        ownUserID, identity.displayName);
+
+    bool hasMod = false;
+    bool hasVip = false;
+    bool hasSubscriberBadge = false;
+    std::vector<std::unique_ptr<MessageElement>> levelBadges;
+    for (const auto &badge : info.badges)
+    {
+        if (!badge.active || !badge.selected)
+        {
+            continue;
+        }
+
+        const auto type = badge.type.toLower();
+        if (type == u"moderator"_s)
+        {
+            hasMod = true;
+        }
+        else if (type == u"vip"_s)
+        {
+            hasVip = true;
+        }
+
+        if (isKickLevelBadge(badge))
+        {
+            if (auto element = makeKickLevelBadgeElement(badge, this->slug_))
+            {
+                levelBadges.emplace_back(std::move(element));
+            }
+            continue;
+        }
+
+        auto [emote, flag] = [&] {
+            if (type == u"subscriber"_s)
+            {
+                hasSubscriberBadge = true;
+                if (auto subscriberBadge =
+                        this->subscriberBadgeForMonths(badge.count))
+                {
+                    return std::pair{subscriberBadge,
+                                     MessageElementFlag::BadgeSubscription};
+                }
+            }
+            return KickBadges::lookup(type.toStdString());
+        }();
+        if (emote)
+        {
+            identity.badges.emplace_back(
+                std::make_unique<BadgeElement>(emote, flag));
+        }
+    }
+
+    if (!hasSubscriberBadge && info.subscriptionMonths)
+    {
+        if (auto subscriberBadge =
+                this->subscriberBadgeForMonths(*info.subscriptionMonths))
+        {
+            identity.badges.emplace_back(std::make_unique<BadgeElement>(
+                subscriberBadge, MessageElementFlag::BadgeSubscription));
+        }
+    }
+
+    for (auto &levelBadge : levelBadges)
+    {
+        identity.badges.emplace_back(std::move(levelBadge));
+    }
+
+    this->setMod(hasMod);
+    this->setVip(hasVip);
+    this->ownIdentity_.emplace(std::move(identity));
 }
 
 void KickChannel::setSubscriberBadges(
@@ -854,10 +1291,6 @@ void KickChannel::loadRecentMessages(std::function<void()> onDone)
                 qCDebug(chatterinoKick)
                     << *self
                     << "Failed to load Kick message history:" << res.error();
-                self->addSystemMessage(
-                    QStringLiteral(
-                        "Kick message history unavailable (Error: %1)")
-                        .arg(res.error()));
                 self->loadingRecentMessages_.clear();
                 finish();
                 return;
@@ -869,6 +1302,94 @@ void KickChannel::loadRecentMessages(std::function<void()> onDone)
             {
                 self->addMessagesAtStart(messages);
                 self->loadedRecentMessages_.store(true);
+            }
+            self->loadingRecentMessages_.clear();
+
+            std::vector<MessagePtr> mentionMessages;
+            for (const auto &msg : messages)
+            {
+                const auto highlighted =
+                    msg->flags.has(MessageFlag::Highlighted);
+                const auto showInMentions =
+                    msg->flags.has(MessageFlag::ShowInMentions);
+                if (highlighted && showInMentions)
+                {
+                    mentionMessages.push_back(msg);
+                }
+            }
+
+            if (!mentionMessages.empty())
+            {
+                getApp()->getTwitch()->getMentionsChannel()
+                    ->fillInMissingMessages(mentionMessages);
+            }
+
+            finish();
+        });
+}
+
+void KickChannel::loadRecentMessagesReconnect(std::function<void()> onDone)
+{
+    if (!getSettings()->loadTwitchMessageHistoryOnConnect)
+    {
+        if (onDone)
+        {
+            onDone();
+        }
+        return;
+    }
+
+    if (this->roomID() == 0)
+    {
+        if (onDone)
+        {
+            onDone();
+        }
+        return;
+    }
+
+    if (this->loadingRecentMessages_.test_and_set())
+    {
+        if (onDone)
+        {
+            onDone();
+        }
+        return;
+    }
+
+    auto weak = this->weakFromThis();
+    KickApi::privateRecentMessages(
+        this->roomID(), getSettings()->twitchMessageHistoryLimit.getValue(),
+        [weak, onDone = std::move(onDone)](
+            const ExpectedStr<std::vector<boost::json::object>> &res) mutable {
+            auto finish = [&onDone] {
+                if (onDone)
+                {
+                    onDone();
+                }
+            };
+            auto self = weak.lock();
+            if (!self)
+            {
+                finish();
+                return;
+            }
+
+            if (!res)
+            {
+                qCDebug(chatterinoKick)
+                    << *self
+                    << "Failed to refresh Kick message history:" << res.error();
+                self->loadingRecentMessages_.clear();
+                finish();
+                return;
+            }
+
+            auto messages = removeExistingMessages(
+                self.get(), buildKickRecentMessages(self.get(), *res));
+            if (!messages.empty())
+            {
+                self->fillInMissingMessages(messages);
             }
             self->loadingRecentMessages_.clear();
 
@@ -973,14 +1494,24 @@ QString KickChannel::prepareMessage(const QString &message) const
     // We need to manually add the emotes. They're in the format
     // "[emote:{id}:{name}]". If the name doesn't match the emote name, Kick
     // will reject the message.
+    auto channelEmotes = this->kickChannelEmotes();
     auto globalEmotes = getApp()->getKickChatServer()->globalEmotes();
     QString outMessage;
     const QChar *lastEnd = nullptr;
     for (QStringView word : baseMessage.tokenize(u' '))
     {
         EmoteName emote{word.toString()};  // FIXME: get rid of this
-        auto it = globalEmotes->find(emote);
-        if (it == globalEmotes->end())
+        EmotePtr kickEmote;
+        if (auto it = channelEmotes->find(emote); it != channelEmotes->end())
+        {
+            kickEmote = it->second;
+        }
+        else if (auto it = globalEmotes->find(emote); it != globalEmotes->end())
+        {
+            kickEmote = it->second;
+        }
+
+        if (!kickEmote)
         {
             continue;
         }
@@ -996,9 +1527,9 @@ QString KickChannel::prepareMessage(const QString &message) const
 
         lastEnd = word.end();
         outMessage += u"[emote:";
-        outMessage += it->second->id.string;
+        outMessage += kickEmote->id.string;
         outMessage += ':';
-        outMessage += it->second->name.string;
+        outMessage += kickEmote->name.string;
         outMessage += ']';
     }
 

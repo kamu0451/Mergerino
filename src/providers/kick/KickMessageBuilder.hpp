@@ -20,6 +20,10 @@ public:
     static std::pair<MessagePtrMut, HighlightAlert> makeChatMessage(
         KickChannel *kickChannel, BoostJsonObject data);
 
+    static MessagePtrMut makeSentMessage(KickChannel *kickChannel,
+                                         const QString &content,
+                                         const QString &localID);
+
     static MessagePtrMut makeTimeoutMessage(KickChannel *channel,
                                             const QDateTime &now,
                                             BoostJsonObject data);
@@ -60,6 +64,8 @@ private:
     void appendChannelName();
     void appendUsername(BoostJsonObject identityObj);
     void appendUsernameAsSender(const QString &username);
+    void appendUsernameAsSender(const QString &username,
+                                const QColor &userColor);
     void appendMentionedUser(const QString &username, QString &text,
                              bool trailingSpace = true);
 

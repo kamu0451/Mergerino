@@ -138,6 +138,7 @@ private:
     void removeHighlightSource(const ChannelView::ChannelViewID &source);
     void updateHighlightStateDueSourcesChange();
     void queueWheelTabSelection(int delta);
+    void setFolderDropTargetHovered(bool value);
 
     void recreateCloseMultipleTabsMenu(NotebookTabLocation tabLocation);
 
@@ -156,6 +157,10 @@ private:
     bool mouseDownX_{};
     bool isInLastRow_{};
     bool bulkSelected_{};
+    bool folderDropTargetHovered_{};
+    bool floatingDragActive_{};
+    bool ignoreBulkClearOnRelease_{};
+    QPoint floatingDragOffset_;
     int mouseWheelDelta_ = 0;
     int pendingWheelDirection_ = 0;
     bool wheelSelectionQueued_ = false;

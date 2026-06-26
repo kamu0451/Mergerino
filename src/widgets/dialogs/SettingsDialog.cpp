@@ -5,6 +5,7 @@
 #include "widgets/dialogs/SettingsDialog.hpp"
 
 #include "Application.hpp"
+#include "common/Common.hpp"
 #include "common/Args.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/commands/CommandController.hpp"
@@ -27,9 +28,174 @@
 #include "widgets/settingspages/PluginsPage.hpp"
 
 #include <QDialogButtonBox>
+#include <QDesktopServices>
+#include <QEasingCurve>
+#include <QEnterEvent>
 #include <QFile>
+#include <QFontMetrics>
+#include <QIcon>
 #include <QLineEdit>
+#include <QPainter>
+#include <QPaintEvent>
 #include <QShortcut>
+#include <QShowEvent>
+#include <QSize>
+#include <QSizePolicy>
+#include <QStyle>
+#include <QStyleOptionButton>
+#include <QUrl>
+#include <QVariantAnimation>
+
+namespace {
+
+class SettingsDiscordButton final : public QPushButton
+{
+public:
+    explicit SettingsDiscordButton(QWidget *parent = nullptr)
+        : QPushButton(parent)
+        , icon_(QStringLiteral(":/social/discord.svg"))
+    {
+        this->setCursor(Qt::PointingHandCursor);
+        this->setFixedHeight(34);
+        this->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        this->setToolTip(QStringLiteral("Join the Mergerino Discord"));
+        this->setText(this->normalText_);
+        this->setAccessibleName(this->hoverText_);
+        this->setStyleSheet(QStringLiteral(R"(
+            QPushButton {
+                background-color: rgba(255, 255, 255, 18);
+                border: none;
+                border-radius: 6px;
+                color: white;
+                padding: 4px 10px;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background-color: rgba(88, 101, 242, 48);
+            }
+        )"));
+        this->animation_.setDuration(160);
+        this->animation_.setEasingCurve(QEasingCurve::InOutCubic);
+        QObject::connect(&this->animation_, &QVariantAnimation::valueChanged,
+                         this, [this](const QVariant &value) {
+                             this->hoverProgress_ = value.toReal();
+                             this->updateAnimatedWidth();
+                             this->update();
+                         });
+        QObject::connect(this, &QPushButton::clicked, this, [] {
+            QDesktopServices::openUrl(
+                QUrl(chatterino::LINK_MERGERINO_DISCORD.toString()));
+        });
+
+        this->updateAnimatedWidth();
+    }
+
+protected:
+    void enterEvent(QEnterEvent *event) override
+    {
+        QPushButton::enterEvent(event);
+        this->animateTo(1.0);
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        QPushButton::leaveEvent(event);
+        this->animateTo(0.0);
+    }
+
+    void showEvent(QShowEvent *event) override
+    {
+        QPushButton::showEvent(event);
+        this->updateAnimatedWidth();
+    }
+
+    void changeEvent(QEvent *event) override
+    {
+        QPushButton::changeEvent(event);
+        this->updateAnimatedWidth();
+    }
+
+    void paintEvent(QPaintEvent *event) override
+    {
+        Q_UNUSED(event)
+
+        QPainter painter(this);
+        QStyleOptionButton option;
+        this->initStyleOption(&option);
+        option.text.clear();
+        option.icon = QIcon();
+        this->style()->drawControl(QStyle::CE_PushButton, &option, &painter,
+                                   this);
+
+        const int iconSize = 16;
+        const int leftPadding = 11;
+        const int textSpacing = 7;
+        const QRect iconRect(leftPadding, (this->height() - iconSize) / 2,
+                             iconSize, iconSize);
+        this->icon_.paint(&painter, iconRect, Qt::AlignCenter,
+                          this->isEnabled() ? QIcon::Normal : QIcon::Disabled);
+
+        const QRect textRect =
+            this->rect().adjusted(leftPadding + iconSize + textSpacing, 0,
+                                  -8, 0);
+        const auto textColor = option.palette.color(QPalette::ButtonText);
+        const auto drawText = [&](const QString &text, qreal opacity) {
+            if (opacity <= 0.0)
+            {
+                return;
+            }
+
+            painter.setOpacity(opacity);
+            painter.setPen(textColor);
+            painter.drawText(
+                textRect, Qt::AlignLeft | Qt::AlignVCenter,
+                this->fontMetrics().elidedText(text, Qt::ElideRight,
+                                               textRect.width()));
+        };
+
+        drawText(this->normalText_, 1.0 - this->hoverProgress_);
+        drawText(this->hoverText_, this->hoverProgress_);
+        painter.setOpacity(1.0);
+    }
+
+private:
+    int widthForText(const QString &text) const
+    {
+        return 11 + 16 + 7 + this->fontMetrics().horizontalAdvance(text) + 18;
+    }
+
+    void updateAnimatedWidth()
+    {
+        const int collapsedWidth = this->widthForText(this->normalText_);
+        const int expandedWidth = this->widthForText(this->hoverText_);
+        const auto progress = this->hoverProgress_;
+        const int width = static_cast<int>(
+            collapsedWidth + (expandedWidth - collapsedWidth) * progress + 0.5);
+        this->setMinimumWidth(width);
+        this->setMaximumWidth(width);
+        this->updateGeometry();
+    }
+
+    void animateTo(qreal target)
+    {
+        if (this->animation_.state() == QAbstractAnimation::Running)
+        {
+            this->animation_.stop();
+        }
+
+        this->animation_.setStartValue(this->hoverProgress_);
+        this->animation_.setEndValue(target);
+        this->animation_.start();
+    }
+
+    const QString normalText_ = QStringLiteral("Discord");
+    const QString hoverText_ = QStringLiteral("Join Mergerino");
+    QIcon icon_;
+    QVariantAnimation animation_;
+    qreal hoverProgress_ = 0.0;
+};
+
+}  // namespace
 
 namespace chatterino {
 
@@ -296,6 +462,9 @@ void SettingsDialog::addTabs()
                  SettingsTabId::None, {"plugin"});
 #endif
     this->ui_.tabContainer->addStretch(1);
+
+    auto *discordButton = new SettingsDiscordButton(this);
+    this->ui_.tabContainer->addWidget(discordButton, 0, Qt::AlignBottom);
     // clang-format on
 }
 

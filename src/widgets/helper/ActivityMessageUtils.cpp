@@ -10,6 +10,7 @@
 #include <QRegularExpression>
 #include <QTime>
 
+#include <limits>
 #include <ranges>
 
 namespace {
@@ -64,6 +65,27 @@ std::optional<ActivityGiftBombSummary> activityGiftBombSummary(
     if (!message.flags.has(MessageFlag::Subscription))
     {
         return std::nullopt;
+    }
+
+    if (message.giftedSubscriptionRecipientCount > 0)
+    {
+        auto name = message.displayName.trimmed();
+        if (name.isEmpty())
+        {
+            name = message.loginName.trimmed();
+        }
+
+        const auto count =
+            message.giftedSubscriptionRecipientCount >
+                    static_cast<uint32_t>(std::numeric_limits<int>::max())
+                ? std::numeric_limits<int>::max()
+                : static_cast<int>(message.giftedSubscriptionRecipientCount);
+
+        return ActivityGiftBombSummary{
+            .name = name,
+            .count = count,
+            .unit = QStringLiteral("subs"),
+        };
     }
 
     if (const auto match =

@@ -228,6 +228,11 @@ Settings::Settings(const Args &args, const QString &settingsDirectory,
             });
     }
 
+    if (isTest)
+    {
+        this->mergedPlatformIndicatorMode = "badge";
+    }
+
     settingsInstance->setBackupEnabled(true);
     settingsInstance->setBackupSlots(9);
     settingsInstance->saveMethod = static_cast<

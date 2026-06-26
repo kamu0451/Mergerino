@@ -164,7 +164,19 @@ QColor dockEventHighlightColor(const Message &message)
 
     if (message.flags.has(MessageFlag::Subscription))
     {
-        return softenedDockOverlay(*colors.color(ColorType::Subscription));
+        const auto subscriptionColor = colors.color(ColorType::Subscription);
+        if (message.platform == MessagePlatform::AnyOrTwitch)
+        {
+            return softenedDockOverlay(*subscriptionColor);
+        }
+
+        auto color =
+            message.platformAccentColor.value_or(defaultPlatformAccent(message.platform));
+        if (subscriptionColor && subscriptionColor->isValid())
+        {
+            color.setAlpha(subscriptionColor->alpha());
+        }
+        return softenedDockOverlay(color);
     }
 
     if (message.flags.has(MessageFlag::RedeemedHighlight) ||

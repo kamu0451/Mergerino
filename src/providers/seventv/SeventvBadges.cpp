@@ -5,93 +5,19 @@
 #include "providers/seventv/SeventvBadges.hpp"
 
 #include "Application.hpp"
-#include "common/Channel.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"  // IWYU pragma: keep
-#include "messages/Message.hpp"
-#include "messages/MessageElement.hpp"
-#include "providers/seventv/SeventvAPI.hpp"
-#include "providers/kick/KickChatServer.hpp"
 #include "providers/seventv/SeventvEmotes.hpp"
-#include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/seventv/SeventvAPI.hpp"
 #include "singletons/Settings.hpp"
+#include "singletons/WindowManager.hpp"
 #include "util/PostToThread.hpp"
 
-#include <algorithm>
-#include <unordered_map>
 #include <unordered_set>
-#include <vector>
 
 using namespace Qt::StringLiterals;
 
 namespace {
-
-using namespace chatterino;
-
-const auto SEVENTV_BADGE_PREFIX = u"7tv:"_s;
-
-bool hasUsernameElement(const Message &message)
-{
-    return std::ranges::any_of(message.elements, [](const auto &element) {
-        return element->getFlags().has(MessageElementFlag::Username);
-    });
-}
-
-void refreshBadgeOnMessage(Channel &channel, const MessagePtr &message,
-                           const std::optional<EmotePtr> &badge)
-{
-    if (!message || !hasUsernameElement(*message))
-    {
-        return;
-    }
-
-    auto cloned = message->clone();
-    bool changed = false;
-
-    auto &elements = cloned->elements;
-    const auto oldBadgeEnd = std::remove_if(
-        elements.begin(), elements.end(), [](const auto &element) {
-            return element->getFlags().has(MessageElementFlag::BadgeSevenTV);
-        });
-    if (oldBadgeEnd != elements.end())
-    {
-        elements.erase(oldBadgeEnd, elements.end());
-        changed = true;
-    }
-
-    auto &externalBadges = cloned->externalBadges;
-    const auto oldExternalEnd =
-        std::remove_if(externalBadges.begin(), externalBadges.end(),
-                       [](const QString &badgeName) {
-                           return badgeName.startsWith(SEVENTV_BADGE_PREFIX);
-                       });
-    if (oldExternalEnd != externalBadges.end())
-    {
-        externalBadges.erase(oldExternalEnd, externalBadges.end());
-        changed = true;
-    }
-
-    if (badge)
-    {
-        const auto usernameIt = std::find_if(
-            elements.begin(), elements.end(), [](const auto &element) {
-                return element->getFlags().has(MessageElementFlag::Username);
-            });
-        elements.insert(
-            usernameIt,
-            std::make_unique<BadgeElement>(*badge,
-                                           MessageElementFlag::BadgeSevenTV));
-        externalBadges.push_back((*badge)->name.string);
-        changed = true;
-    }
-
-    if (!changed)
-    {
-        return;
-    }
-
-    channel.replaceMessage(message, cloned);
-}
 
 }  // namespace
 
@@ -177,71 +103,15 @@ void SeventvBadges::onBadgeUsersChanged(
         return;
     }
 
-    const std::vector<QString> twitchIDs(twitchUserIDs.begin(),
-                                         twitchUserIDs.end());
-    const std::vector<uint64_t> kickIDs(kickUserIDs.begin(), kickUserIDs.end());
-
-    postToThread([twitchIDs, kickIDs] {
-        auto *app = getApp();
-        std::unordered_map<QString, std::optional<EmotePtr>> twitchBadges;
-        twitchBadges.reserve(twitchIDs.size());
-        for (const auto &userID : twitchIDs)
+    postToThread([] {
+        auto *app = tryGetApp();
+        if (app == nullptr || app->isTest())
         {
-            twitchBadges.emplace(userID,
-                                 app->getSeventvBadges()->getBadge({userID}));
+            return;
         }
-
-        std::unordered_map<uint64_t, std::optional<EmotePtr>> kickBadges;
-        kickBadges.reserve(kickIDs.size());
-        for (const auto userID : kickIDs)
+        if (auto *windows = app->getWindows())
         {
-            kickBadges.emplace(userID,
-                               app->getSeventvBadges()->getKickBadge(userID));
-        }
-
-        if (!twitchBadges.empty())
-        {
-            app->getTwitch()->forEachChannelAndSpecialChannels(
-                [&](const ChannelPtr &channel) {
-                    for (const auto &message : channel->getMessageSnapshot())
-                    {
-                        if (message->userID.isEmpty())
-                        {
-                            continue;
-                        }
-
-                        const auto it = twitchBadges.find(message->userID);
-                        if (it == twitchBadges.end())
-                        {
-                            continue;
-                        }
-
-                        refreshBadgeOnMessage(*channel, message, it->second);
-                    }
-                });
-        }
-
-        if (!kickBadges.empty())
-        {
-            app->getKickChatServer()->forEachChannel([&](KickChannel &channel) {
-                for (const auto &message : channel.getMessageSnapshot())
-                {
-                    bool ok = false;
-                    const auto userID = message->userID.toULongLong(&ok);
-                    if (!ok)
-                    {
-                        continue;
-                    }
-
-                    const auto it = kickBadges.find(userID);
-                    if (it == kickBadges.end())
-                    {
-                        continue;
-                    }
-
-                    refreshBadgeOnMessage(channel, message, it->second);
-                }
-            });
+            windows->invalidateChannelViewBuffers();
         }
     });
 }

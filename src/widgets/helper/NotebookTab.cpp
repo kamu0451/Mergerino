@@ -122,7 +122,7 @@ NotebookTab::NotebookTab(Notebook *notebook)
 
     // XXX: this doesn't update after changing hotkeys
 
-    this->menu_.addAction("Close Tab",
+    this->menu_.addAction("Delete tab",
                           getApp()->getHotkeys()->getDisplaySequence(
                               HotkeyCategory::Window, "removeTab"),
                           [this]() {
@@ -884,6 +884,13 @@ void NotebookTab::moveAnimated(QPoint targetPos, bool animated)
 
 void NotebookTab::paintEvent(QPaintEvent *)
 {
+    if (this->folderDropTargetHovered_)
+    {
+        QPainter painter(this);
+        painter.fillRect(this->rect(), getApp()->getThemes()->window.background);
+        return;
+    }
+
     auto *app = getApp();
     QPainter painter(this);
     float scale = this->scale();
@@ -1106,10 +1113,14 @@ bool NotebookTab::shouldDrawXButton() const
 
 void NotebookTab::mousePressEvent(QMouseEvent *event)
 {
+    this->setFolderDropTargetHovered(false);
+    this->floatingDragActive_ = false;
+
     if (event->button() == Qt::LeftButton)
     {
         this->mouseDown_ = true;
         this->mouseDownX_ = this->getXRect().contains(event->pos());
+        this->floatingDragOffset_ = event->pos();
 
         const auto modifiers = event->modifiers();
         const auto canBulkSelect =
@@ -1119,6 +1130,7 @@ void NotebookTab::mousePressEvent(QMouseEvent *event)
         if (canBulkSelect && modifiers.testFlag(Qt::ShiftModifier))
         {
             this->mouseDown_ = false;
+            this->ignoreBulkClearOnRelease_ = true;
             this->notebook_->selectBulkRangeTo(
                 this, modifiers.testFlag(Qt::ControlModifier));
             this->update();
@@ -1129,7 +1141,21 @@ void NotebookTab::mousePressEvent(QMouseEvent *event)
         if (canBulkSelect && modifiers.testFlag(Qt::ControlModifier))
         {
             this->mouseDown_ = false;
+            this->ignoreBulkClearOnRelease_ = true;
             this->notebook_->toggleBulkSelectedTab(this);
+            this->update();
+            event->accept();
+            return;
+        }
+
+        if (canBulkSelect && this->notebook_->bulkSelectedTabCount() > 0)
+        {
+            if (!this->bulkSelected_)
+            {
+                this->mouseDown_ = false;
+                this->mouseDownX_ = false;
+                this->notebook_->clearBulkSelectedTabs();
+            }
             this->update();
             event->accept();
             return;
@@ -1173,7 +1199,12 @@ void NotebookTab::mousePressEvent(QMouseEvent *event)
 
 void NotebookTab::mouseReleaseEvent(QMouseEvent *event)
 {
+    const QPoint relPoint =
+        this->notebook_->mapFromGlobal(event->globalPosition().toPoint());
+
     this->mouseDown_ = false;
+    const bool ignoreBulkClearOnRelease = this->ignoreBulkClearOnRelease_;
+    this->ignoreBulkClearOnRelease_ = false;
 
     auto removeThisPage = [this] {
         auto reply = QMessageBox::question(
@@ -1186,6 +1217,43 @@ void NotebookTab::mouseReleaseEvent(QMouseEvent *event)
             this->notebook_->removePage(this->page);
         }
     };
+
+    if (event->button() == Qt::LeftButton &&
+        this->notebook_->getAllowUserTabManagement())
+    {
+        if (this->floatingDragActive_)
+        {
+            this->floatingDragActive_ = false;
+            this->notebook_->finishFloatingTabDrag(this->page, relPoint);
+            this->setFolderDropTargetHovered(false);
+            this->mouseDownX_ = false;
+            this->update();
+            event->accept();
+            return;
+        }
+
+        if (!ignoreBulkClearOnRelease && !this->mouseDownX_ &&
+            this->notebook_->bulkSelectedTabCount() > 0 &&
+            this->getDesiredRect().contains(relPoint))
+        {
+            this->notebook_->clearBulkSelectedTabs();
+            this->setFolderDropTargetHovered(false);
+            this->mouseDownX_ = false;
+            this->update();
+            event->accept();
+            return;
+        }
+
+        if (!this->getDesiredRect().contains(relPoint) &&
+            this->notebook_->movePageIntoFolderAt(this->page, relPoint))
+        {
+            this->setFolderDropTargetHovered(false);
+            this->mouseDownX_ = false;
+            this->update();
+            event->accept();
+            return;
+        }
+    }
 
     if (event->button() == Qt::MiddleButton &&
         this->notebook_->getAllowUserTabManagement())
@@ -1209,6 +1277,8 @@ void NotebookTab::mouseReleaseEvent(QMouseEvent *event)
             this->update();
         }
     }
+
+    this->setFolderDropTargetHovered(false);
 }
 
 void NotebookTab::mouseDoubleClickEvent(QMouseEvent *event)
@@ -1242,6 +1312,10 @@ void NotebookTab::leaveEvent(QEvent *event)
 {
     this->mouseOverX_ = false;
     this->mouseOver_ = false;
+    if (!this->mouseDown_ && !this->floatingDragActive_)
+    {
+        this->setFolderDropTargetHovered(false);
+    }
 
     this->update();
 
@@ -1313,11 +1387,43 @@ void NotebookTab::mouseMoveEvent(QMouseEvent *event)
         }
     }
 
-    QPoint relPoint = this->mapToParent(event->pos());
+    QPoint relPoint =
+        this->notebook_->mapFromGlobal(event->globalPosition().toPoint());
 
-    if (this->mouseDown_ && !this->getDesiredRect().contains(relPoint) &&
-        this->notebook_->getAllowUserTabManagement())
+    if (this->mouseDown_ && this->floatingDragActive_)
     {
+        this->moveAnimated(relPoint - this->floatingDragOffset_, false);
+        this->raise();
+        this->notebook_->updateFloatingTabDrag(this->page, relPoint);
+        Button::mouseMoveEvent(event);
+        return;
+    }
+
+    const bool canManageTabs = this->notebook_->getAllowUserTabManagement();
+    if (this->mouseDown_ && !this->getDesiredRect().contains(relPoint) &&
+        canManageTabs)
+    {
+        if (this->notebook_->hasTabFolders() &&
+            this->notebook_->beginFloatingTabDrag(this->page))
+        {
+            this->floatingDragActive_ = true;
+            this->setFolderDropTargetHovered(false);
+            this->moveAnimated(relPoint - this->floatingDragOffset_, false);
+            this->raise();
+            this->notebook_->updateFloatingTabDrag(this->page, relPoint);
+            Button::mouseMoveEvent(event);
+            return;
+        }
+
+        if (this->notebook_->isFolderHeaderAt(relPoint))
+        {
+            this->setFolderDropTargetHovered(true);
+            Button::mouseMoveEvent(event);
+            return;
+        }
+
+        this->setFolderDropTargetHovered(false);
+
         int index;
         QWidget *clickedPage =
             this->notebook_->tabAt(relPoint, index, this->width());
@@ -1330,6 +1436,10 @@ void NotebookTab::mouseMoveEvent(QMouseEvent *event)
                 this->notebook_->rearrangePage(this->page, index);
             }
         }
+    }
+    else
+    {
+        this->setFolderDropTargetHovered(false);
     }
 
     Button::mouseMoveEvent(event);
@@ -1366,6 +1476,18 @@ void NotebookTab::queueWheelTabSelection(int delta)
         direction > 0 ? this->notebook_->selectPreviousTab(false)
                       : this->notebook_->selectNextTab(false);
     });
+}
+
+void NotebookTab::setFolderDropTargetHovered(bool value)
+{
+    if (this->folderDropTargetHovered_ == value)
+    {
+        return;
+    }
+
+    this->folderDropTargetHovered_ = value;
+    this->notebook_->setFolderDropPreviewPage(value ? this->page : nullptr);
+    this->update();
 }
 
 void NotebookTab::wheelEvent(QWheelEvent *event)

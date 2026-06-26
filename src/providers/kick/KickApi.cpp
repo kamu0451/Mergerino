@@ -177,6 +177,24 @@ KickPrivateSubscriberBadgeInfo::KickPrivateSubscriberBadgeInfo(
     this->imageUrl = badgeImage["src"].toQString();
 }
 
+KickPrivateUserBadgeInfo::KickPrivateUserBadgeInfo(BoostJsonObject obj)
+{
+    this->type = obj["type"].toQString(obj["name"].toQString());
+    if (this->type.isEmpty())
+    {
+        this->type = obj["badge_type"].toQString();
+    }
+    this->text = obj["text"].toQString(obj["label"].toQString());
+    this->imageUrl = obj["image_url"].toQString(obj["src"].toQString());
+    this->count = obj["count"].toUint64();
+    this->sortOrder = obj["sort_order"].toUint64(1000);
+    this->active = obj["active"].toBool(true);
+    this->selected = obj["selected"].toBool(true);
+
+    auto metadata = obj["metadata"].toObject();
+    this->level = metadata["level"].toUint64(obj["level"].toUint64());
+}
+
 KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
     : channelID(obj["id"].toUint64())
     , followersCount(obj["followers_count"].toUint64())
@@ -223,8 +241,33 @@ KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
 
 KickPrivateUserInChannelInfo::KickPrivateUserInChannelInfo(BoostJsonObject obj)
     : userID(obj["id"].toUint64())
+    , username(obj["username"].toQString())
 
 {
+    auto badgesV2 = obj["badges_v2"].toArray();
+    this->badges.reserve(badgesV2.size() + obj["badges"].toArray().size());
+    for (auto badgeValue : badgesV2)
+    {
+        if (badgeValue.isObject())
+        {
+            this->badges.emplace_back(badgeValue.toObject());
+        }
+    }
+
+    auto badges = obj["badges"].toArray();
+    for (auto badgeValue : badges)
+    {
+        if (badgeValue.isObject())
+        {
+            this->badges.emplace_back(badgeValue.toObject());
+        }
+    }
+
+    std::stable_sort(this->badges.begin(), this->badges.end(),
+                     [](const auto &lhs, const auto &rhs) {
+                         return lhs.sortOrder < rhs.sortOrder;
+                     });
+
     auto followingSinceStr = obj["following_since"].toQString();
     if (!followingSinceStr.isEmpty())
     {
@@ -278,6 +321,15 @@ KickPrivateEmoteSetInfo::KickPrivateEmoteSetInfo(BoostJsonObject obj)
 {
     auto userIDVal = obj["user_id"];
     if (userIDVal.isString())
+    {
+        bool ok = false;
+        auto userID = userIDVal.toQString().toULongLong(&ok);
+        if (ok)
+        {
+            this->userID = userID;
+        }
+    }
+    else if (userIDVal.isInt64())
     {
         this->userID = userIDVal.toUint64();
     }

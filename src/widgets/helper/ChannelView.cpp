@@ -91,6 +91,7 @@ constexpr size_t TOOLTIP_EMOTE_ENTRIES_LIMIT = 7;
 using namespace chatterino;
 
 constexpr int SCROLLBAR_PADDING = 8;
+constexpr int BOTTOM_MESSAGE_PADDING = 8;
 constexpr int MESSAGE_BUFFER_RETAIN_VIEWPORTS = 1;
 constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY = 0.4;
 constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY_HOLD = 0.0;
@@ -276,8 +277,30 @@ bool hasPlatformBadgeElement(const Message &message)
     });
 }
 
+QColor defaultActivityPlatformAccent(MessagePlatform platform)
+{
+    switch (platform)
+    {
+        case MessagePlatform::Kick:
+            return QColor(83, 252, 24, 36);
+        case MessagePlatform::YouTube:
+            return QColor(255, 48, 64, 60);
+        case MessagePlatform::TikTok:
+            return QColor(37, 244, 238, 48);
+        case MessagePlatform::AnyOrTwitch:
+        default:
+            return QColor(145, 70, 255, 36);
+    }
+}
+
 void insertActivityPlatformBadge(Message &message)
 {
+    if (!message.platformAccentColor)
+    {
+        message.platformAccentColor =
+            defaultActivityPlatformAccent(message.platform);
+    }
+
     const auto badge = MergedChannel::platformBadge(message.platform);
     if (!badge)
     {
@@ -1015,7 +1038,14 @@ void ChannelView::updateColorTheme()
 
 void ChannelView::refreshPlatformIndicatorMode()
 {
-    this->messagesUpdated();
+    if (this->underlyingChannel_)
+    {
+        this->refreshMessages();
+    }
+    else
+    {
+        this->messagesUpdated();
+    }
     this->queueUpdate();
 }
 
@@ -1218,7 +1248,7 @@ void ChannelView::updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
     }
 
     /// Layout the messages at the bottom
-    qreal h = this->height() - 8;
+    qreal h = this->height() - BOTTOM_MESSAGE_PADDING;
     auto flags = this->getFlags();
     auto layoutWidth = this->getLayoutWidth();
     auto showScrollbar = false;
@@ -1564,6 +1594,50 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
                                   this->resolvedActivityTimeDisplayMode());
 }
 
+bool ChannelView::shouldDecorateStreamDatabaseMessage() const
+{
+    if (this->isActivityPaneView())
+    {
+        return false;
+    }
+
+    const auto channel =
+        this->underlyingChannel_ != nullptr ? this->underlyingChannel_
+                                            : this->channel_;
+    return channel != nullptr && channel->getType() == Channel::Type::Twitch &&
+           channel->getName().compare(QStringLiteral("streamdatabase"),
+                                      Qt::CaseInsensitive) == 0;
+}
+
+MessagePtr ChannelView::decorateStreamDatabaseMessage(
+    const MessagePtr &message) const
+{
+    if (!this->shouldDecorateStreamDatabaseMessage() || !message)
+    {
+        return message;
+    }
+
+    const bool needsAccent = !message->platformAccentColor &&
+                             !message->flags.has(MessageFlag::DoNotLog);
+    const bool needsBadge = !message->flags.has(MessageFlag::System) &&
+                            !hasPlatformBadgeElement(*message);
+    if (!needsAccent && !needsBadge)
+    {
+        return message;
+    }
+
+    auto copy = message->clone();
+    if (needsAccent)
+    {
+        copy->platformAccentColor = defaultActivityPlatformAccent(copy->platform);
+    }
+    if (needsBadge)
+    {
+        insertActivityPlatformBadge(*copy);
+    }
+    return copy;
+}
+
 bool ChannelView::tryMergeActivityGiftMessage(const MessagePtr &message)
 {
     const auto currentSummary = activityCompactGiftSummary(*message);
@@ -1722,10 +1796,12 @@ void ChannelView::appendProxyMessage(const MessagePtr &message,
                                      std::optional<MessageFlags> overridingFlags,
                                      bool emitAddedToChannel)
 {
-    this->channel_->addMessage(message, MessageContext::Repost, overridingFlags);
+    auto proxyMessage = this->decorateStreamDatabaseMessage(message);
+    this->channel_->addMessage(proxyMessage, MessageContext::Repost,
+                               overridingFlags);
     if (emitAddedToChannel)
     {
-        auto emittedMessage = message;
+        auto emittedMessage = proxyMessage;
         this->messageAddedToChannel(emittedMessage);
     }
 }
@@ -2048,10 +2124,14 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
         underlyingChannel->messagesAddedAtStart,
         [this](std::vector<MessagePtr> &messages) {
             std::vector<MessagePtr> filtered;
-            std::copy_if(messages.begin(), messages.end(),
-                         std::back_inserter(filtered), [this](const auto &msg) {
-                             return this->shouldIncludeMessage(msg);
-                         });
+            filtered.reserve(messages.size());
+            for (const auto &msg : messages)
+            {
+                if (this->shouldIncludeMessage(msg))
+                {
+                    filtered.push_back(this->decorateStreamDatabaseMessage(msg));
+                }
+            }
 
             if (!filtered.empty())
             {
@@ -2064,16 +2144,31 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
         [this](auto index, const auto &prev, const auto &replacement) {
             const bool shouldIncludeReplacement =
                 this->shouldIncludeMessage(replacement);
+            auto proxyReplacement =
+                shouldIncludeReplacement
+                    ? this->decorateStreamDatabaseMessage(replacement)
+                    : MessagePtr{};
 
             if (this->updatePendingSlowChatMessage(
-                    prev, shouldIncludeReplacement ? replacement : MessagePtr{}))
+                    prev, proxyReplacement))
             {
                 return;
             }
 
             if (shouldIncludeReplacement)
             {
-                this->channel_->replaceMessage(index, prev, replacement);
+                auto proxyPrev = prev;
+                if (this->shouldDecorateStreamDatabaseMessage() &&
+                    prev != nullptr && !prev->id.isEmpty())
+                {
+                    if (auto existing =
+                            this->channel_->findMessageByID(prev->id))
+                    {
+                        proxyPrev = existing;
+                    }
+                }
+                this->channel_->replaceMessage(index, proxyPrev,
+                                               proxyReplacement);
             }
         });
 
@@ -2081,10 +2176,13 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
         underlyingChannel->filledInMessages, [this](const auto &messages) {
             std::vector<MessagePtr> filtered;
             filtered.reserve(messages.size());
-            std::copy_if(messages.begin(), messages.end(),
-                         std::back_inserter(filtered), [this](const auto &msg) {
-                             return this->shouldIncludeMessage(msg);
-                         });
+            for (const auto &msg : messages)
+            {
+                if (this->shouldIncludeMessage(msg))
+                {
+                    filtered.push_back(this->decorateStreamDatabaseMessage(msg));
+                }
+            }
             this->channel_->fillInMissingMessages(filtered);
         });
 
@@ -2105,7 +2203,8 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
             continue;
         }
 
-        auto messageLayout = std::make_shared<MessageLayout>(msg);
+        auto proxyMessage = this->decorateStreamDatabaseMessage(msg);
+        auto messageLayout = std::make_shared<MessageLayout>(proxyMessage);
 
         if (this->lastMessageHasAlternateBackground_)
         {
@@ -2121,13 +2220,13 @@ void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
 
         this->messages_.pushBack(messageLayout);
 
-        this->channel_->addMessage(msg, MessageContext::Repost);
+        this->channel_->addMessage(proxyMessage, MessageContext::Repost);
 
         nMessagesAdded++;
         if (this->showScrollbarHighlights())
         {
             this->scrollBar_->addHighlight(
-                this->scrollbarHighlightForMessage(msg));
+                this->scrollbarHighlightForMessage(proxyMessage));
         }
     }
 

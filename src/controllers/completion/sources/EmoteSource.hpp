@@ -11,9 +11,14 @@
 
 #include <QString>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
+
+namespace chatterino {
+enum class MessagePlatform : std::uint8_t;
+}  // namespace chatterino
 
 namespace chatterino::completion {
 
@@ -44,7 +49,8 @@ public:
     /// @param callback ActionCallback to invoke upon InputCompletionItem selection.
     /// See InputCompletionItem::action(). Can be nullptr.
     EmoteSource(const Channel *channel, std::unique_ptr<EmoteStrategy> strategy,
-                ActionCallback callback = nullptr);
+                ActionCallback callback = nullptr,
+                std::vector<MessagePlatform> platformFilter = {});
 
     void update(const QString &query) override;
     void addToListModel(GenericListModel &model,
@@ -59,6 +65,7 @@ private:
 
     std::unique_ptr<EmoteStrategy> strategy_;
     ActionCallback callback_;
+    std::vector<MessagePlatform> platformFilter_;
 
     std::vector<EmoteItem> items_{};
     std::vector<EmoteItem> output_{};

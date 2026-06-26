@@ -158,6 +158,21 @@ TEST(ActivityMessageUtils, CompactsKickGiftedSubscriptionLists)
     EXPECT_TRUE(shouldShowMessageInActivityPane(message));
 }
 
+TEST(ActivityMessageUtils, CompactsStructuredKickGiftedSubscriptionLists)
+{
+    Message message;
+    message.platform = MessagePlatform::Kick;
+    message.flags.set(MessageFlag::Subscription);
+    message.flags.set(MessageFlag::Collapsed);
+    message.loginName = "GiftLord";
+    message.giftedSubscriptionRecipientCount = 10;
+    message.messageText = "GiftLord gifted subscriptions to a list of viewers";
+
+    ASSERT_EQ(getActivityGiftBombRecipientCount(message), 10);
+    EXPECT_EQ(compactActivityGiftBombText(message), "GiftLord gifted 10 subs");
+    EXPECT_TRUE(shouldShowMessageInActivityPane(message));
+}
+
 TEST(ActivityMessageUtils, CompactsSingleCountedGiftWithoutRecipientName)
 {
     Message message;

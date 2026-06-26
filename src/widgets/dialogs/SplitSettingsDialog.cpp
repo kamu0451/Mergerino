@@ -36,38 +36,82 @@ namespace chatterino {
 
 namespace {
 
-int indicatorModeIndex(PlatformIndicatorMode mode)
+void setIndicatorModeCombo(QComboBox *combo, PlatformIndicatorMode mode)
 {
-    switch (mode)
+    if (combo == nullptr)
     {
-        case PlatformIndicatorMode::LineColor:
-            return 1;
-        case PlatformIndicatorMode::Badge:
-            return 2;
-        case PlatformIndicatorMode::Both:
-            return 3;
-        case PlatformIndicatorMode::None:
-            return 0;
-        default:
-            return 0;
+        return;
+    }
+
+    auto index = combo->findData(static_cast<int>(mode));
+    if (index < 0)
+    {
+        index =
+            combo->findData(static_cast<int>(PlatformIndicatorMode::LineColor));
+    }
+    if (index >= 0)
+    {
+        combo->setCurrentIndex(index);
     }
 }
 
-PlatformIndicatorMode indicatorModeFromIndex(int index)
+void populateIndicatorModeCombo(QComboBox *combo,
+                                PlatformIndicatorMode defaultMode)
 {
-    switch (index)
+    combo->addItem("None", static_cast<int>(PlatformIndicatorMode::None));
+    combo->addItem("Highlights",
+                   static_cast<int>(PlatformIndicatorMode::LineColor));
+    combo->addItem("Logos", static_cast<int>(PlatformIndicatorMode::Badge));
+    combo->addItem("Both", static_cast<int>(PlatformIndicatorMode::Both));
+    setIndicatorModeCombo(combo, defaultMode);
+}
+
+PlatformIndicatorMode indicatorModeFromCombo(const QComboBox *combo,
+                                             PlatformIndicatorMode fallback)
+{
+    if (combo == nullptr)
     {
-        case 1:
-            return PlatformIndicatorMode::LineColor;
-        case 2:
-            return PlatformIndicatorMode::Badge;
-        case 3:
-            return PlatformIndicatorMode::Both;
-        case 0:
-            return PlatformIndicatorMode::None;
-        default:
-            return PlatformIndicatorMode::LineColor;
+        return fallback;
     }
+
+    bool ok = false;
+    const auto value = combo->currentData().toInt(&ok);
+    if (!ok)
+    {
+        return fallback;
+    }
+
+    const auto mode = static_cast<PlatformIndicatorMode>(value);
+    switch (mode)
+    {
+        case PlatformIndicatorMode::None:
+        case PlatformIndicatorMode::LineColor:
+        case PlatformIndicatorMode::Badge:
+        case PlatformIndicatorMode::Both:
+            return mode;
+        default:
+            return fallback;
+    }
+}
+
+PlatformIndicatorMode defaultIndicatorModeForDialog(bool isActivityPane)
+{
+    if (isActivityPane)
+    {
+        return PlatformIndicatorMode::LineColor;
+    }
+
+    return getSettings()->mergedPlatformIndicatorMode.getEnum();
+}
+
+PlatformIndicatorMode fallbackIndicatorModeForDialog(bool isActivityPane)
+{
+    if (isActivityPane)
+    {
+        return PlatformIndicatorMode::LineColor;
+    }
+
+    return getSettings()->mergedPlatformIndicatorMode.getEnum();
 }
 
 int activityTimeDisplayModeIndex(ActivityTimeDisplayMode mode)
@@ -353,6 +397,7 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
                                          bool showTwitchBitsMinimum,
                                          bool showKickKicksMinimum,
                                          bool showTikTokGiftMinimum,
+                                         bool showStreamDatabaseBadgeFeed,
                                          QWidget *parent)
     : BaseWindow(
           {
@@ -366,6 +411,7 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
     , showTwitchBitsMinimum_(showTwitchBitsMinimum)
     , showKickKicksMinimum_(showKickKicksMinimum)
     , showTikTokGiftMinimum_(showTikTokGiftMinimum)
+    , showStreamDatabaseBadgeFeed_(showStreamDatabaseBadgeFeed)
 {
     this->setWindowTitle(isActivityPane ? "Activity settings"
                                         : "Split settings");
@@ -378,12 +424,11 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
     auto *appearanceLayout = new QFormLayout(appearanceGroup);
 
     this->ui_.indicatorMode = new QComboBox();
-    this->ui_.indicatorMode->addItem("None");
-    this->ui_.indicatorMode->addItem("Highlights");
-    this->ui_.indicatorMode->addItem("Logos");
-    this->ui_.indicatorMode->addItem("Both");
-    const auto platformStyleTooltip =
-        QStringLiteral("Show no platform indicator, platform color, logo, or both.");
+    populateIndicatorModeCombo(this->ui_.indicatorMode,
+                               defaultIndicatorModeForDialog(
+                                   this->isActivityPane_));
+    const auto platformStyleTooltip = QStringLiteral(
+        "Show no platform indicator, platform color, logo, or both.");
     const auto addPlatformStyleRow = [this, appearanceLayout,
                                       platformStyleTooltip] {
         appearanceLayout->addRow(
@@ -433,6 +478,16 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
             "Show the viewer count in this split header.");
         appearanceLayout->addRow(createCheckboxRow(this->ui_.viewerCount,
                                                    viewerCountTooltip, this));
+
+        if (this->showStreamDatabaseBadgeFeed_)
+        {
+            this->ui_.streamDatabaseBadgeFeed = new QCheckBox("Badge feed");
+            const auto streamDatabaseBadgeFeedTooltip = QStringLiteral(
+                "Show the StreamDatabase badge feed on StreamDatabase tabs.");
+            appearanceLayout->addRow(
+                createCheckboxRow(this->ui_.streamDatabaseBadgeFeed,
+                                  streamDatabaseBadgeFeedTooltip, this));
+        }
 
         QObject::connect(this->ui_.slowerChat, &QCheckBox::toggled, this,
                          [this] {
@@ -527,18 +582,15 @@ void SplitSettingsDialog::setPlatformIndicatorMode(PlatformIndicatorMode mode)
 {
     if (this->ui_.indicatorMode)
     {
-        this->ui_.indicatorMode->setCurrentIndex(indicatorModeIndex(mode));
+        setIndicatorModeCombo(this->ui_.indicatorMode, mode);
     }
 }
 
 PlatformIndicatorMode SplitSettingsDialog::platformIndicatorMode() const
 {
-    if (this->ui_.indicatorMode == nullptr)
-    {
-        return PlatformIndicatorMode::Badge;
-    }
-
-    return indicatorModeFromIndex(this->ui_.indicatorMode->currentIndex());
+    return indicatorModeFromCombo(
+        this->ui_.indicatorMode,
+        fallbackIndicatorModeForDialog(this->isActivityPane_));
 }
 
 void SplitSettingsDialog::setFilterActivity(bool enabled)
@@ -648,6 +700,20 @@ bool SplitSettingsDialog::viewerCountEnabled() const
     return this->ui_.viewerCount && this->ui_.viewerCount->isChecked();
 }
 
+void SplitSettingsDialog::setStreamDatabaseBadgeFeedVisible(bool visible)
+{
+    if (this->ui_.streamDatabaseBadgeFeed)
+    {
+        this->ui_.streamDatabaseBadgeFeed->setChecked(visible);
+    }
+}
+
+bool SplitSettingsDialog::streamDatabaseBadgeFeedVisible() const
+{
+    return this->ui_.streamDatabaseBadgeFeed == nullptr ||
+           this->ui_.streamDatabaseBadgeFeed->isChecked();
+}
+
 void SplitSettingsDialog::setTwitchActivityMinimumBits(uint32_t value)
 {
     if (this->ui_.twitchBitsMinimum)
@@ -753,6 +819,10 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     if (this->ui_.viewerCount)
     {
         this->ui_.viewerCount->setFont(uiFont);
+    }
+    if (this->ui_.streamDatabaseBadgeFeed)
+    {
+        this->ui_.streamDatabaseBadgeFeed->setFont(uiFont);
     }
     if (this->ui_.twitchBitsMinimum)
     {

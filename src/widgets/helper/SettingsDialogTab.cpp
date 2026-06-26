@@ -10,6 +10,8 @@
 #include <QPainter>
 #include <QStyleOption>
 
+#include <cmath>
+
 namespace chatterino {
 
 SettingsDialogTab::SettingsDialogTab(SettingsDialog *_dialog,
@@ -101,7 +103,7 @@ void SettingsDialogTab::paintEvent(QPaintEvent *)
 
     painter.drawPixmap(pad, pad, pixmap);
 
-    pad = (3 * pad) + iconSize;
+    pad = (3 * pad) + iconSize + static_cast<int>(std::round(2 * this->scale()));
 
     this->style()->drawItemText(
         &painter, QRect(pad, 0, this->width() - pad, this->height()),

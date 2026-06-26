@@ -158,11 +158,11 @@ constexpr std::optional<std::string_view> qmagicenumDisplayName(
     switch (value)
     {
         case PlatformIndicatorMode::Badge:
-            return "Platform badge (default)";
+            return "Platform logos";
         case PlatformIndicatorMode::LineColor:
-            return "Platform line color";
+            return "Platform highlights (default)";
         case PlatformIndicatorMode::Both:
-            return "Platform line color + badge";
+            return "Platform highlights + logos";
         case PlatformIndicatorMode::None:
             return "None";
     }
@@ -328,7 +328,7 @@ public:
     BoolSetting colorUsernames = {"/appearance/messages/colorUsernames", true};
     EnumStringSetting<PlatformIndicatorMode> mergedPlatformIndicatorMode = {
         "/appearance/messages/mergedPlatformIndicatorMode",
-        PlatformIndicatorMode::Badge,
+        PlatformIndicatorMode::LineColor,
     };
     EnumStringSetting<PlatformEventHighlightStyle> platformEventHighlightStyle =
         {"/appearance/messages/platformEventHighlightStyle",
@@ -385,6 +385,7 @@ public:
         "/appearance/badges/useCustomFfzVipBadges", true};
     BoolSetting showBadgesBttv = {"/appearance/badges/bttv", true};
     BoolSetting showBadgesSevenTV = {"/appearance/badges/seventv", true};
+    BoolSetting showKickLevelBadges = {"/appearance/badges/kickLevel", true};
     BoolSetting animateSevenTVBadges = {"/appearance/badges/animateSeventv",
                                         true};
     QSizeSetting lastPopupSize = {
@@ -835,6 +836,14 @@ public:
         "/misc/pendingPostUpdateVersion",
         "",
     };
+    BoolSetting streamDatabaseIntroShown = {
+        "/misc/streamDatabaseIntroShown",
+        false,
+    };
+    QStringSetting streamDatabaseIntroShownVersion = {
+        "/misc/streamDatabaseIntroShownVersion",
+        "",
+    };
     BoolSetting activityPanePlatformStyleHighlightsMigrationDone = {
         "/misc/activityPanePlatformStyleHighlightsMigrationDone",
         false,
@@ -1013,6 +1022,10 @@ public:
     BoolSetting activityPaneRelativeTimeMigrationDone = {
         "/misc/activityPaneRelativeTimeMigrationDone",
         false,
+    };
+    BoolSetting headerChatModeIndicator = {
+        "/appearance/splitheader/showChatModeIndicator",
+        true,
     };
 
 private:

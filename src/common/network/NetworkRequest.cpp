@@ -43,7 +43,13 @@ NetworkRequest::NetworkRequest(const QUrl &url, NetworkRequestType requestType)
     this->initializeDefaultValues();
 }
 
-NetworkRequest::~NetworkRequest() = default;
+NetworkRequest::~NetworkRequest()
+{
+    // A built-but-never-executed request silently does nothing (the data is
+    // just dropped). Assert so a forgotten execute() fails loudly in debug
+    // instead of vanishing. A moved-from request has null data and is fine.
+    assert(!this->data || this->executed_);
+}
 
 NetworkRequest NetworkRequest::type(NetworkRequestType newRequestType) &&
 {

@@ -2,6 +2,7 @@
 
 ## Unversioned
 
+- Bugfix: Fixed 7TV emotes never loading from the network. A refactor (commit b909cd9) dropped the `.execute()` on the shared 7TV fetch helper, so every 7TV request (Twitch/Kick channel, global, and personal emote sets) was built and silently discarded -- with no error message -- leaving only whatever was in the on-disk cache. Restored the `NetworkRequest` debug assert that previously caught a forgotten `.execute()`.
 - Minor: Added a "Hide chat bot messages" setting that hides messages from known chat bots, detected via FFZ's "Bot" badge on Twitch (NightBot, StreamElements, ...) and Kick's native "Bot" badge. Toggling it applies immediately.
 - Minor: Added a "Hide command messages" setting that hides chat commands (any message starting with "!" followed by a letter or digit, e.g. !drops, !uptime) across all platforms. Toggling it applies immediately.
 - Minor: Added a local, cross-platform user block. Right-click a user in chat and choose "Block ... (local)" to hide their messages on every platform (Twitch/Kick/YouTube/TikTok) -- unlike the Twitch-only block, which never worked for Kick. Manage the list under Settings -> Ignores -> Users. Applies immediately.

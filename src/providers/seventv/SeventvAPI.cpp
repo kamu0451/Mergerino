@@ -107,7 +107,8 @@ void getSeventvJson(const QString &url, int timeoutMs, int retriesLeft,
                 return;
             }
             onError(result);
-        });
+        })
+        .execute();
 }
 
 }  // namespace

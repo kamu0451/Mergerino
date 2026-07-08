@@ -156,6 +156,7 @@ Args::Args(const QApplication &app, const Paths &paths)
         "setting that will stick around. If you have issues where you feel "
         "like you have to use this, please report it in the Mergerino "
         "repository.");
+    auto activateAfterImportOption = hiddenOption("activate-after-import");
 
 #ifndef NDEBUG
     QCommandLineOption useLocalEventsubOption(
@@ -177,6 +178,7 @@ Args::Args(const QApplication &app, const Paths &paths)
         channelLayout,
         activateOption,
         useOldScalingOption,
+        activateAfterImportOption,
 #ifndef NDEBUG
         useLocalEventsubOption,
 #endif
@@ -252,6 +254,10 @@ Args::Args(const QApplication &app, const Paths &paths)
     if (parser.isSet(useOldScalingOption))
     {
         this->useOldScaling = true;
+    }
+    if (parser.isSet(activateAfterImportOption))
+    {
+        this->activateAfterImport = true;
     }
 
 #ifndef NDEBUG

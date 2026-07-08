@@ -5,6 +5,7 @@
 #include "widgets/dialogs/SettingsDialog.hpp"
 
 #include "Application.hpp"
+#include "common/Common.hpp"
 #include "common/Args.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/commands/CommandController.hpp"
@@ -27,8 +28,174 @@
 #include "widgets/settingspages/PluginsPage.hpp"
 
 #include <QDialogButtonBox>
+#include <QDesktopServices>
+#include <QEasingCurve>
+#include <QEnterEvent>
 #include <QFile>
+#include <QFontMetrics>
+#include <QIcon>
 #include <QLineEdit>
+#include <QPainter>
+#include <QPaintEvent>
+#include <QShortcut>
+#include <QShowEvent>
+#include <QSize>
+#include <QSizePolicy>
+#include <QStyle>
+#include <QStyleOptionButton>
+#include <QUrl>
+#include <QVariantAnimation>
+
+namespace {
+
+class SettingsDiscordButton final : public QPushButton
+{
+public:
+    explicit SettingsDiscordButton(QWidget *parent = nullptr)
+        : QPushButton(parent)
+        , icon_(QStringLiteral(":/social/discord.svg"))
+    {
+        this->setCursor(Qt::PointingHandCursor);
+        this->setFixedHeight(34);
+        this->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+        this->setToolTip(QStringLiteral("Join the Mergerino Discord"));
+        this->setText(this->normalText_);
+        this->setAccessibleName(this->hoverText_);
+        this->setStyleSheet(QStringLiteral(R"(
+            QPushButton {
+                background-color: rgba(255, 255, 255, 18);
+                border: none;
+                border-radius: 6px;
+                color: white;
+                padding: 4px 10px;
+                text-align: left;
+            }
+            QPushButton:hover {
+                background-color: rgba(88, 101, 242, 48);
+            }
+        )"));
+        this->animation_.setDuration(160);
+        this->animation_.setEasingCurve(QEasingCurve::InOutCubic);
+        QObject::connect(&this->animation_, &QVariantAnimation::valueChanged,
+                         this, [this](const QVariant &value) {
+                             this->hoverProgress_ = value.toReal();
+                             this->updateAnimatedWidth();
+                             this->update();
+                         });
+        QObject::connect(this, &QPushButton::clicked, this, [] {
+            QDesktopServices::openUrl(
+                QUrl(chatterino::LINK_MERGERINO_DISCORD.toString()));
+        });
+
+        this->updateAnimatedWidth();
+    }
+
+protected:
+    void enterEvent(QEnterEvent *event) override
+    {
+        QPushButton::enterEvent(event);
+        this->animateTo(1.0);
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        QPushButton::leaveEvent(event);
+        this->animateTo(0.0);
+    }
+
+    void showEvent(QShowEvent *event) override
+    {
+        QPushButton::showEvent(event);
+        this->updateAnimatedWidth();
+    }
+
+    void changeEvent(QEvent *event) override
+    {
+        QPushButton::changeEvent(event);
+        this->updateAnimatedWidth();
+    }
+
+    void paintEvent(QPaintEvent *event) override
+    {
+        Q_UNUSED(event)
+
+        QPainter painter(this);
+        QStyleOptionButton option;
+        this->initStyleOption(&option);
+        option.text.clear();
+        option.icon = QIcon();
+        this->style()->drawControl(QStyle::CE_PushButton, &option, &painter,
+                                   this);
+
+        const int iconSize = 16;
+        const int leftPadding = 11;
+        const int textSpacing = 7;
+        const QRect iconRect(leftPadding, (this->height() - iconSize) / 2,
+                             iconSize, iconSize);
+        this->icon_.paint(&painter, iconRect, Qt::AlignCenter,
+                          this->isEnabled() ? QIcon::Normal : QIcon::Disabled);
+
+        const QRect textRect =
+            this->rect().adjusted(leftPadding + iconSize + textSpacing, 0,
+                                  -8, 0);
+        const auto textColor = option.palette.color(QPalette::ButtonText);
+        const auto drawText = [&](const QString &text, qreal opacity) {
+            if (opacity <= 0.0)
+            {
+                return;
+            }
+
+            painter.setOpacity(opacity);
+            painter.setPen(textColor);
+            painter.drawText(
+                textRect, Qt::AlignLeft | Qt::AlignVCenter,
+                this->fontMetrics().elidedText(text, Qt::ElideRight,
+                                               textRect.width()));
+        };
+
+        drawText(this->normalText_, 1.0 - this->hoverProgress_);
+        drawText(this->hoverText_, this->hoverProgress_);
+        painter.setOpacity(1.0);
+    }
+
+private:
+    int widthForText(const QString &text) const
+    {
+        return 11 + 16 + 7 + this->fontMetrics().horizontalAdvance(text) + 18;
+    }
+
+    void updateAnimatedWidth()
+    {
+        const int collapsedWidth = this->widthForText(this->normalText_);
+        const int expandedWidth = this->widthForText(this->hoverText_);
+        const auto progress = this->hoverProgress_;
+        const int width = static_cast<int>(
+            collapsedWidth + (expandedWidth - collapsedWidth) * progress + 0.5);
+        this->setMinimumWidth(width);
+        this->setMaximumWidth(width);
+        this->updateGeometry();
+    }
+
+    void animateTo(qreal target)
+    {
+        if (this->animation_.state() == QAbstractAnimation::Running)
+        {
+            this->animation_.stop();
+        }
+
+        this->animation_.setStartValue(this->hoverProgress_);
+        this->animation_.setEndValue(target);
+        this->animation_.start();
+    }
+
+    const QString normalText_ = QStringLiteral("Discord");
+    const QString hoverText_ = QStringLiteral("Join Mergerino");
+    QIcon icon_;
+    QVariantAnimation animation_;
+    qreal hoverProgress_ = 0.0;
+};
+
+}  // namespace
 
 namespace chatterino {
 
@@ -90,6 +257,12 @@ void SettingsDialog::addShortcuts()
 
     this->shortcuts_ = getApp()->getHotkeys()->shortcutsForCategory(
         HotkeyCategory::PopupWindow, actions, this);
+
+    auto *cancelShortcut = new QShortcut(QKeySequence::Cancel, this);
+    cancelShortcut->setContext(Qt::WindowShortcut);
+    QObject::connect(cancelShortcut, &QShortcut::activated, this,
+                     &SettingsDialog::onCancelClicked);
+    this->shortcuts_.push_back(cancelShortcut);
 }
 void SettingsDialog::setSearchPlaceholderText()
 {
@@ -124,8 +297,15 @@ void SettingsDialog::initUi()
         QPixmap(":/buttons/clearSearch.png"));
     this->ui_.search->installEventFilter(this);
 
+    this->searchFilterTimer_.setSingleShot(true);
+    this->searchFilterTimer_.setInterval(75);
+    QObject::connect(&this->searchFilterTimer_, &QTimer::timeout, this,
+                     [this] {
+                         this->filterElements(this->pendingFilterText_);
+                     });
+
     QObject::connect(edit.getElement(), &QLineEdit::textChanged, this,
-                     &SettingsDialog::filterElements);
+                     &SettingsDialog::scheduleFilterElements);
 
     // CENTER
     auto centerBox =
@@ -173,9 +353,14 @@ void SettingsDialog::filterElements(const QString &text)
     // filter elements and hide pages
     for (auto &&tab : this->tabs_)
     {
+        auto *page = tab->createdPage();
+        const auto tabMatched = tab->matchesSearch(text);
+
         // filterElements returns true if anything on the page matches the search query
-        tab->setVisible(tab->page()->filterElements(text) ||
-                        tab->name().contains(text, Qt::CaseInsensitive));
+        const auto pageMatched =
+            page != nullptr && page->filterElements(text);
+
+        tab->setVisible(tabMatched || pageMatched);
     }
 
     // find next visible page
@@ -213,6 +398,12 @@ void SettingsDialog::filterElements(const QString &text)
     }
 }
 
+void SettingsDialog::scheduleFilterElements(const QString &query)
+{
+    this->pendingFilterText_ = query;
+    this->searchFilterTimer_.start();
+}
+
 void SettingsDialog::setElementFilter(const QString &query)
 {
     this->ui_.search->setText(query);
@@ -241,33 +432,50 @@ void SettingsDialog::addTabs()
     // Constructors are wrapped in std::function to remove some strain from first time loading.
 
     // clang-format off
-    this->addTab([]{return new GeneralPage;},          "General",        ":/settings/about.svg", SettingsTabId::General);
+    this->addTab([]{return new GeneralPage;},          "General",        ":/settings/about.svg", SettingsTabId::General,
+                 {"interface", "chat", "messages", "emotes", "streamer mode", "link previews", "browser integration", "appdata", "cache", "sound", "advanced", "search"});
     this->ui_.tabContainer->addSpacing(16);
-    this->addTab([]{return new AccountsPage;},         "Accounts",       ":/settings/accounts.svg", SettingsTabId::Accounts);
-    this->addTab([]{return new NicknamesPage;},        "Nicknames",      ":/settings/accounts.svg");
+    this->addTab([]{return new AccountsPage;},         "Accounts",       ":/settings/accounts.svg", SettingsTabId::Accounts,
+                 {"twitch", "kick", "login", "account", "oauth"});
+    this->addTab([]{return new NicknamesPage;},        "Nicknames",      ":/settings/accounts.svg",
+                 SettingsTabId::None, {"username", "nickname", "regex"});
     this->ui_.tabContainer->addSpacing(16);
-    this->addTab([]{return new CommandPage;},          "Commands",       ":/settings/commands.svg");
-    this->addTab([]{return new HighlightingPage;},     "Highlights",     ":/settings/notifications.svg");
-    this->addTab([]{return new IgnoresPage;},          "Ignores",        ":/settings/ignore.svg");
-    this->addTab([]{return new FiltersPage;},          "Filters",        ":/settings/filters.svg");
+    this->addTab([]{return new CommandPage;},          "Commands",       ":/settings/commands.svg",
+                 SettingsTabId::None, {"command", "custom command"});
+    this->addTab([]{return new HighlightingPage;},     "Highlights",     ":/settings/notifications.svg",
+                 SettingsTabId::None, {"highlight", "messages", "users", "badges", "blacklisted users", "sound", "regex"});
+    this->addTab([]{return new IgnoresPage;},          "Ignores",        ":/settings/ignore.svg",
+                 SettingsTabId::None, {"ignore", "blocked users", "block", "unblock", "messages", "users", "replacement", "regex"});
+    this->addTab([]{return new FiltersPage;},          "Filters",        ":/settings/filters.svg",
+                 SettingsTabId::None, {"filter"});
     this->ui_.tabContainer->addSpacing(16);
-    this->addTab([]{return new KeyboardSettingsPage;}, "Hotkeys",        ":/settings/keybinds.svg");
-    this->addTab([]{return new ModerationPage;},       "Moderation",     ":/settings/moderation.svg", SettingsTabId::Moderation);
-    this->addTab([]{return new NotificationPage;},     "Live Notifications",  ":/settings/notification2.svg");
-    this->addTab([]{return new ExternalToolsPage;},    "External tools", ":/settings/externaltools.svg");
+    this->addTab([]{return new KeyboardSettingsPage;}, "Hotkeys",        ":/settings/keybinds.svg",
+                 SettingsTabId::None, {"keybinds", "keyboard", "shortcuts"});
+    this->addTab([]{return new ModerationPage;},       "Moderation",     ":/settings/moderation.svg", SettingsTabId::Moderation,
+                 {"logs", "logging", "log", "channels", "users", "moderation buttons", "moderation mode", "timeout", "user timeout buttons", "twitch timestamps", "stream logs"});
+    this->addTab([]{return new NotificationPage;},     "Live Notifications",  ":/settings/notification2.svg",
+                 SettingsTabId::None, {"notification", "live"});
+    this->addTab([]{return new ExternalToolsPage;},    "External tools", ":/settings/externaltools.svg",
+                 SettingsTabId::None, {"external", "tools", "streamlink", "browser", "url", "links"});
 #ifdef CHATTERINO_HAVE_PLUGINS
-    this->addTab([]{return new PluginsPage;},          "Plugins",        ":/settings/plugins.svg");
+    this->addTab([]{return new PluginsPage;},          "Plugins",        ":/settings/plugins.svg",
+                 SettingsTabId::None, {"plugin"});
 #endif
     this->ui_.tabContainer->addStretch(1);
+
+    auto *discordButton = new SettingsDiscordButton(this);
+    this->ui_.tabContainer->addWidget(discordButton, 0, Qt::AlignBottom);
     // clang-format on
 }
 
 void SettingsDialog::addTab(std::function<SettingsPage *()> page,
                             const QString &name, const QString &iconPath,
-                            SettingsTabId id, Qt::Alignment alignment)
+                            SettingsTabId id, QStringList searchKeywords,
+                            Qt::Alignment alignment)
 {
     auto *tab =
-        new SettingsDialogTab(this, std::move(page), name, iconPath, id);
+        new SettingsDialogTab(this, std::move(page), name, iconPath, id,
+                              std::move(searchKeywords));
     tab->setFixedHeight(static_cast<int>(30 * this->dpi_));
 
     this->ui_.tabContainer->addWidget(tab, 0, alignment);
@@ -394,7 +602,10 @@ void SettingsDialog::refresh()
     // Updates tabs.
     for (auto *tab : this->tabs_)
     {
-        tab->page()->onShow();
+        if (auto *page = tab->createdPage())
+        {
+            page->onShow();
+        }
     }
 }
 

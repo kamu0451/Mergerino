@@ -22,7 +22,6 @@
 #include "providers/ffz/FfzEmotes.hpp"
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/links/LinkResolver.hpp"
-#include "providers/pronouns/Pronouns.hpp"
 #include "providers/seventv/SeventvAPI.hpp"
 #include "providers/seventv/SeventvEmotes.hpp"
 #include "providers/twitch/eventsub/Controller.hpp"
@@ -66,17 +65,33 @@
 #include "singletons/Updates.hpp"
 #include "singletons/WindowManager.hpp"
 #include "util/Helpers.hpp"
+#include "util/ChatterinoImport.hpp"
 #include "util/ObsBrowserDockServer.hpp"
 #include "util/PostToThread.hpp"
+#include "util/WidgetHelpers.hpp"
+#include "widgets/dialogs/UpdateDialog.hpp"
 #include "widgets/Notebook.hpp"
 #include "widgets/splits/Split.hpp"
 #include "widgets/Window.hpp"
 
 #include <miniaudio.h>
+#ifdef USEWINSDK
+#    include <Windows.h>
+#endif
 #include <QApplication>
+#include <QCheckBox>
 #include <QDesktopServices>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QTimer>
+#include <QVBoxLayout>
+#include <QWindow>
+
+#include <tuple>
 
 namespace {
 
@@ -89,34 +104,183 @@ std::atomic<bool> STOPPED{false};
 std::atomic<bool> ABOUT_TO_QUIT{false};
 
 #ifdef USEWINSDK
-void maybePromptForStartup(QWidget *parent)
+void activateWindowAfterImport(Window &window)
+{
+    if (window.windowState().testFlag(Qt::WindowMinimized))
+    {
+        window.setWindowState(window.windowState() & ~Qt::WindowMinimized);
+    }
+
+    window.show();
+    window.raise();
+    window.activateWindow();
+    window.setFocus(Qt::ActiveWindowFocusReason);
+
+    if (auto *handle = window.windowHandle())
+    {
+        handle->requestActivate();
+    }
+
+    const auto hwnd = reinterpret_cast<HWND>(window.winId());
+    if (hwnd != nullptr)
+    {
+        if (IsIconic(hwnd))
+        {
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        else
+        {
+            ShowWindow(hwnd, SW_SHOW);
+        }
+        SetForegroundWindow(hwnd);
+        SetFocus(hwnd);
+    }
+}
+
+bool stageChatterinoImportAndRestart(QWidget *parent, bool autorun)
+{
+    const auto reply = QMessageBox::question(
+        parent, "Import from Chatterino",
+        "Import Chatterino settings, ping alerts, commands, user data, and "
+        "accounts, and channel tabs into Mergerino?\n\nMergerino will "
+        "restart. Current Mergerino settings files will be backed up before "
+        "they are replaced.",
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (reply != QMessageBox::Yes)
+    {
+        return false;
+    }
+
+    auto *settings = getSettings();
+    chatterino_import::ImportOptions options;
+    options.startupPromptAcknowledged = true;
+    options.autorun = autorun;
+    options.currentVersion = CHATTERINO_VERSION;
+    options.mergedPlatformIndicatorMode =
+        settings->mergedPlatformIndicatorMode.getValue();
+    options.platformEventHighlightStyle =
+        settings->platformEventHighlightStyle.getValue();
+    options.platformEventHighlightCustomColor =
+        settings->platformEventHighlightCustomColor.getValue();
+
+    auto stage =
+        chatterino_import::stageImportFromDefaultSource(getApp()->getPaths(),
+                                                        options);
+    if (!stage)
+    {
+        QMessageBox::critical(parent, "Chatterino import failed",
+                              "Mergerino could not stage the Chatterino "
+                              "import:\n\n" +
+                                  stage.error());
+        return false;
+    }
+
+    settings->startupPromptAcknowledged = true;
+    settings->autorun = autorun;
+    settings->requestSave();
+
+    if (!chatterino_import::restartApplication())
+    {
+        QMessageBox::critical(
+            parent, "Restart failed",
+            "Mergerino staged the Chatterino import, but could not restart "
+            "itself. Close and reopen Mergerino to finish the import.");
+        return false;
+    }
+
+    QApplication::quit();
+    return true;
+}
+
+bool maybePromptForStartup(QWidget *parent)
 {
     auto *settings = getSettings();
     if (settings->startupPromptAcknowledged)
     {
-        return;
+        return false;
     }
 
     if (settings->autorun)
     {
         settings->startupPromptAcknowledged = true;
-        return;
+        settings->requestSave();
+        return false;
     }
 
-    const auto reply = QMessageBox::question(
-        parent, "Start Mergerino with Windows?",
-        "Add Mergerino to Windows startup?\n\nYou will only see this once.",
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    QDialog dialog(parent);
+    dialog.setWindowTitle("Mergerino quick setup");
+    dialog.setModal(true);
 
-    if (reply == QMessageBox::Yes)
+    auto *layout = new QVBoxLayout(&dialog);
+    layout->setContentsMargins(18, 18, 18, 18);
+    layout->setSpacing(12);
+
+    auto *title = new QLabel("Set up Mergerino");
+    auto font = title->font();
+    font.setPointSize(font.pointSize() + 3);
+    font.setBold(true);
+    title->setFont(font);
+    layout->addWidget(title);
+
+    auto *description = new QLabel(
+        "Bring over your Chatterino setup now, or continue with a fresh "
+        "Mergerino profile.");
+    description->setWordWrap(true);
+    layout->addWidget(description);
+
+    auto *startWithWindows = new QCheckBox("Start Mergerino with Windows");
+    startWithWindows->setChecked(false);
+    layout->addWidget(startWithWindows);
+
+    bool restartStarted = false;
+    if (chatterino_import::defaultSourceSettingsDirectoryExists())
+    {
+        auto *importBox = new QHBoxLayout;
+        auto *importText = new QLabel(
+            "Found Chatterino settings. Import settings, ping alerts, "
+            "commands, user data, accounts, and channel tabs.");
+        importText->setWordWrap(true);
+        auto *importButton = new QPushButton("Import from Chatterino");
+        importBox->addWidget(importText, 1);
+        importBox->addWidget(importButton);
+        layout->addLayout(importBox);
+
+        QObject::connect(importButton, &QPushButton::clicked, &dialog, [&] {
+            restartStarted = stageChatterinoImportAndRestart(
+                &dialog, startWithWindows->isChecked());
+            if (restartStarted)
+            {
+                dialog.accept();
+            }
+        });
+    }
+
+    auto *buttonBox = new QDialogButtonBox(Qt::Horizontal, &dialog);
+    auto *continueButton =
+        buttonBox->addButton("Continue", QDialogButtonBox::AcceptRole);
+    buttonBox->addButton("Skip", QDialogButtonBox::RejectRole);
+    continueButton->setDefault(true);
+    layout->addWidget(buttonBox);
+
+    QObject::connect(buttonBox, &QDialogButtonBox::accepted, &dialog, [&] {
+        settings->startupPromptAcknowledged = true;
+        settings->autorun = startWithWindows->isChecked();
+        settings->requestSave();
+        dialog.accept();
+    });
+    QObject::connect(buttonBox, &QDialogButtonBox::rejected, &dialog, [&] {
+        settings->startupPromptAcknowledged = true;
+        settings->requestSave();
+        dialog.reject();
+    });
+
+    if (dialog.exec() == QDialog::Rejected && !restartStarted)
     {
         settings->startupPromptAcknowledged = true;
-        settings->autorun = true;
+        settings->requestSave();
     }
-    else if (reply == QMessageBox::No)
-    {
-        settings->startupPromptAcknowledged = true;
-    }
+
+    return restartStarted;
 }
 #endif
 
@@ -246,7 +410,6 @@ Application::Application(Settings &_settings, const Paths &paths,
     , linkResolver(new LinkResolver)
     , streamerMode(new StreamerMode)
     , twitchUsers(new TwitchUsers)
-    , pronouns(new pronouns::Pronouns)
     , spellChecker(new SpellChecker)
     , kickChatServer(new KickChatServer)
     , obsBrowserDockServer(new ObsBrowserDockServer)
@@ -270,7 +433,35 @@ void Application::initialize(Settings &settings, const Paths &paths)
 
     if (!this->args_.isFramelessEmbed)
     {
-        getSettings()->currentVersion.setValue(CHATTERINO_VERSION);
+        const auto previousVersion = settings.currentVersion.getValue();
+        const auto pendingPostUpdateVersion =
+            settings.pendingPostUpdateVersion.getValue();
+        const bool pendingPostUpdateForThisVersion =
+            !pendingPostUpdateVersion.isEmpty() &&
+            pendingPostUpdateVersion == CHATTERINO_VERSION &&
+            previousVersion != CHATTERINO_VERSION;
+        // Versions before pendingPostUpdateVersion existed only leave
+        // currentVersion behind after the updater restarts.
+        const bool legacyPostUpdateForThisVersion =
+            pendingPostUpdateVersion.isEmpty() && !previousVersion.isEmpty() &&
+            Updates::isDowngradeOf(previousVersion, CHATTERINO_VERSION);
+
+        if (pendingPostUpdateForThisVersion)
+        {
+            this->previousVersionForPatchNotes_ =
+                previousVersion.isEmpty() ? pendingPostUpdateVersion
+                                          : previousVersion;
+        }
+        else if (legacyPostUpdateForThisVersion)
+        {
+            this->previousVersionForPatchNotes_ = previousVersion;
+        }
+        else if (!pendingPostUpdateVersion.isEmpty())
+        {
+            // Only an explicit updater handoff should show post-update notes.
+            settings.pendingPostUpdateVersion = "";
+        }
+        settings.currentVersion.setValue(CHATTERINO_VERSION);
     }
     this->emotes->initialize();
 
@@ -341,18 +532,109 @@ int Application::run()
 {
     assert(this->initialized);
 
-    this->twitch->connect();
-
     if (!this->args_.isFramelessEmbed)
     {
         auto &mainWindow = this->windows->getMainWindow();
         mainWindow.show();
 
 #ifdef USEWINSDK
-        QTimer::singleShot(0, &mainWindow, [&mainWindow] {
-            maybePromptForStartup(&mainWindow);
-        });
+        if (this->args_.activateAfterImport)
+        {
+            QTimer::singleShot(0, &mainWindow, [&mainWindow] {
+                activateWindowAfterImport(mainWindow);
+            });
+            QTimer::singleShot(250, &mainWindow, [&mainWindow] {
+                activateWindowAfterImport(mainWindow);
+            });
+        }
 #endif
+
+        const auto markPostUpdateShown = [] {
+            auto *settings = getSettings();
+            if (settings->pendingPostUpdateVersion.getValue() ==
+                CHATTERINO_VERSION)
+            {
+                settings->pendingPostUpdateVersion = "";
+            }
+            settings->currentVersion.setValue(CHATTERINO_VERSION);
+            settings->requestSave();
+        };
+
+        const auto markStreamDatabaseIntroShown = [] {
+            auto *settings = getSettings();
+            settings->streamDatabaseIntroShown = true;
+            settings->streamDatabaseIntroShownVersion = CHATTERINO_VERSION;
+            settings->requestSave();
+        };
+
+        const auto showPostUpdateDialog = [&mainWindow, markPostUpdateShown] {
+            markPostUpdateShown();
+
+            auto *dialog =
+                new PostUpdateDialog(CHATTERINO_DISPLAY_VERSION, &mainWindow);
+            const auto position = mainWindow.mapToGlobal(QPoint{
+                (mainWindow.width() - dialog->width()) / 2,
+                48,
+            });
+            widgets::showAndMoveWindowTo(
+                dialog, position, widgets::BoundsChecking::DesiredPosition);
+            dialog->raise();
+            dialog->activateWindow();
+        };
+
+        const auto showStreamDatabaseUpdateDialog =
+            [&mainWindow, markStreamDatabaseIntroShown, showPostUpdateDialog](
+                bool continueToPatchNotes) {
+                auto *dialog = new StreamDatabaseUpdateDialog(
+                    &mainWindow,
+                    continueToPatchNotes ? showPostUpdateDialog
+                                         : std::function<void()>{});
+                QObject::connect(dialog, &QObject::destroyed, &mainWindow,
+                                 [markStreamDatabaseIntroShown] {
+                                     markStreamDatabaseIntroShown();
+                                 });
+
+                const auto position = mainWindow.mapToGlobal(QPoint{
+                    (mainWindow.width() - dialog->width()) / 2,
+                    48,
+                });
+                widgets::showAndMoveWindowTo(
+                    dialog, position, widgets::BoundsChecking::DesiredPosition);
+                dialog->raise();
+                dialog->activateWindow();
+            };
+
+        const auto showStartupDialogs = [this, &mainWindow,
+                                         showStreamDatabaseUpdateDialog,
+                                         showPostUpdateDialog] {
+#ifdef USEWINSDK
+            if (maybePromptForStartup(&mainWindow))
+            {
+                return;
+            }
+#endif
+
+            const bool showStreamDatabaseIntro =
+                CHATTERINO_VERSION == QStringLiteral("1.3.2") &&
+                getSettings()->streamDatabaseIntroShownVersion.getValue() !=
+                    CHATTERINO_VERSION;
+            const bool showPostUpdate =
+                !this->previousVersionForPatchNotes_.isEmpty();
+
+            if (showStreamDatabaseIntro)
+            {
+                showStreamDatabaseUpdateDialog(true);
+            }
+            else if (showPostUpdate)
+            {
+                showPostUpdateDialog();
+            }
+        };
+
+        QTimer::singleShot(0, &mainWindow, showStartupDialogs);
+        QTimer::singleShot(3000, &mainWindow, [] {
+            getApp()->getUpdates().checkForUpdates();
+        });
     }
 
     getSettings()->enableBTTVChannelEmotes.connect(
@@ -370,6 +652,10 @@ int Application::run()
             this->twitch->reloadAllSevenTVChannelEmotes();
         },
         false);
+
+    QTimer::singleShot(0, [this] {
+        this->twitch->connect();
+    });
 
     return QApplication::exec();
 }
@@ -651,14 +937,6 @@ SeventvEventAPI *Application::getSeventvEventAPI()
     return this->seventvEventAPI.get();
 }
 
-pronouns::Pronouns *Application::getPronouns()
-{
-    // pronouns::Pronouns handles its own locks, so we don't need to assert that this is called in the GUI thread
-    assert(this->pronouns);
-
-    return this->pronouns.get();
-}
-
 eventsub::IController *Application::getEventSub()
 {
     assert(this->eventSub);
@@ -709,7 +987,6 @@ void Application::stop()
 #ifdef CHATTERINO_HAVE_PLUGINS
     this->plugins.reset();
 #endif
-    this->pronouns.reset();
     this->twitchUsers.reset();
     this->streamerMode.reset();
     this->linkResolver.reset();

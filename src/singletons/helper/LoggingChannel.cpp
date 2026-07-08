@@ -63,6 +63,7 @@ namespace chatterino {
 LoggingChannel::LoggingChannel(QString _channelName, QString _platform)
     : channelName(std::move(_channelName))
     , platform(std::move(_platform))
+    , fileBaseName(this->channelName)
 {
     if (this->channelName.startsWith("/whispers"))
     {
@@ -80,6 +81,12 @@ LoggingChannel::LoggingChannel(QString _channelName, QString _platform)
     {
         this->subDirectory = "AutoMod";
     }
+    else if (this->channelName.startsWith("/users/"))
+    {
+        this->fileBaseName = this->channelName.mid(7);
+        this->subDirectory =
+            QStringLiteral("Users") + QDir::separator() + this->fileBaseName;
+    }
     else
     {
         this->subDirectory =
@@ -91,18 +98,26 @@ LoggingChannel::LoggingChannel(QString _channelName, QString _platform)
                          this->platform.mid(1).toLower() + QDir::separator() +
                          this->subDirectory;
 
-    getSettings()->logPath.connect([this](const QString &logPath, auto) {
-        this->baseDirectory = logPath.isEmpty()
-                                  ? getApp()->getPaths().messageLogDirectory
-                                  : logPath;
-        this->openLogFile();
-    });
+    getSettings()->logPath.connect(
+        [this](const QString &logPath, auto) {
+            this->baseDirectory = logPath.isEmpty()
+                                      ? getApp()->getPaths().messageLogDirectory
+                                      : logPath;
+            this->openLogFile();
+        },
+        this->settingConnections_);
 }
 
 LoggingChannel::~LoggingChannel()
 {
-    appendLine(this->fileHandle, generateClosingString());
-    this->fileHandle.close();
+    this->settingConnections_.clear();
+
+    if (this->fileHandle.isOpen() && this->fileHandle.isWritable())
+    {
+        appendLine(this->fileHandle, generateClosingString());
+        this->fileHandle.close();
+    }
+
     this->currentStreamFileHandle.close();
 }
 
@@ -117,8 +132,7 @@ void LoggingChannel::openLogFile()
         this->fileHandle.close();
     }
 
-    QString baseFileName = this->channelName + "-" + this->dateString + ".log";
-
+    QString baseFileName = this->fileBaseName + "-" + this->dateString + ".log";
     QString directory =
         this->baseDirectory + QDir::separator() + this->subDirectory;
 
@@ -154,8 +168,7 @@ void LoggingChannel::openStreamLogFile(const QString &streamID)
         this->currentStreamFileHandle.close();
     }
 
-    QString baseFileName = this->channelName + "-" + streamID + ".log";
-
+    QString baseFileName = this->fileBaseName + "-" + streamID + ".log";
     QString directory =
         this->baseDirectory + QDir::separator() + this->subDirectory;
 
@@ -202,7 +215,8 @@ void LoggingChannel::addMessage(const MessagePtr &message,
 
     QString str;
     if (this->channelName.startsWith("/mentions") ||
-        this->channelName.startsWith("/automod"))
+        this->channelName.startsWith("/automod") ||
+        this->channelName.startsWith("/users/"))
     {
         str.append("#" + message->channelName + " ");
     }
@@ -222,17 +236,14 @@ void LoggingChannel::addMessage(const MessagePtr &message,
         // system messages, parts of announcements, subs etc.
         messageText = message->messageText;
     }
+    else if (message->localizedName.isEmpty())
+    {
+        messageText = message->loginName + ": " + message->messageText;
+    }
     else
     {
-        if (message->localizedName.isEmpty())
-        {
-            messageText = message->loginName + ": " + message->messageText;
-        }
-        else
-        {
-            messageText = message->localizedName + " " + message->loginName +
-                          ": " + message->messageText;
-        }
+        messageText = message->localizedName + " " + message->loginName +
+                      ": " + message->messageText;
     }
 
     if ((message->flags.has(MessageFlag::ReplyMessage) &&
@@ -259,7 +270,10 @@ void LoggingChannel::addMessage(const MessagePtr &message,
     str.append(messageText);
     str.append(ENDLINE);
 
-    appendLine(this->fileHandle, str);
+    if (this->fileHandle.isOpen() && this->fileHandle.isWritable())
+    {
+        appendLine(this->fileHandle, str);
+    }
 
     if (!streamID.isEmpty() && getSettings()->separatelyStoreStreamLogs)
     {
@@ -268,7 +282,11 @@ void LoggingChannel::addMessage(const MessagePtr &message,
             this->openStreamLogFile(streamID);
         }
 
-        appendLine(this->currentStreamFileHandle, str);
+        if (this->currentStreamFileHandle.isOpen() &&
+            this->currentStreamFileHandle.isWritable())
+        {
+            appendLine(this->currentStreamFileHandle, str);
+        }
     }
 }
 

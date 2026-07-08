@@ -41,6 +41,9 @@ public:
 
     bool isSelected() const;
     void setSelected(bool value);
+    bool isBulkSelected() const;
+    void setBulkSelected(bool value);
+    void updateVisualState();
 
     void setInLastRow(bool value);
     void setTabLocation(NotebookTabLocation location);
@@ -141,6 +144,8 @@ private:
     void removeHighlightStateChangeSources(const HighlightSources &toRemove);
     void removeHighlightSource(const ChannelView::ChannelViewID &source);
     void updateHighlightStateDueSourcesChange();
+    void queueWheelTabSelection(int delta);
+    void setFolderDropTargetHovered(bool value);
 
     void recreateCloseMultipleTabsMenu(NotebookTabLocation tabLocation);
 
@@ -158,7 +163,14 @@ private:
     bool mouseOverX_{};
     bool mouseDownX_{};
     bool isInLastRow_{};
+    bool bulkSelected_{};
+    bool folderDropTargetHovered_{};
+    bool floatingDragActive_{};
+    bool ignoreBulkClearOnRelease_{};
+    QPoint floatingDragOffset_;
     int mouseWheelDelta_ = 0;
+    int pendingWheelDirection_ = 0;
+    bool wheelSelectionQueued_ = false;
     NotebookTabLocation tabLocation_ = NotebookTabLocation::Top;
 
     HighlightState highlightState_ = HighlightState::None;

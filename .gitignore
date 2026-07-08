@@ -52,6 +52,9 @@ settings.json
 # Ignore any files beginning with activate- as they can be used for account credentials
 activate-*
 
+# Local OAuth credentials for private development builds
+src/providers/youtube/YouTubeOAuthSecrets.local.hpp
+
 .gdb_history
 
 ## Vim Swap

@@ -1,16 +1,17 @@
 # Mergerino
 
-Mergerino is a desktop chat client that combines a Chatterino-style multi-channel workflow with support for Twitch, Kick, YouTube, and TikTok LIVE in one app. The goal is to keep chat fast and practical while making multi-platform viewing easier from a single desktop client.
+Mergerino is a desktop chat client that combines a fast multi-channel workflow with support for Twitch, Kick, YouTube, and TikTok LIVE in one app. The goal is to keep chat fast and practical while making multi-platform viewing easier from a single desktop client.
 
 This repository keeps the source here and ships installable Windows builds through GitHub Releases.
 
 [![Download Windows Build](https://img.shields.io/badge/Download-Windows%20Build-2ea44f?style=for-the-badge)](../../releases/latest/download/Mergerino.zip)
 [![All Releases](https://img.shields.io/badge/GitHub-Releases-1f6feb?style=for-the-badge)](../../releases)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/tAjdrbvxwT)
 
 ## What Is Mergerino?
 
 - Merged desktop chat for Twitch, Kick, YouTube, and TikTok LIVE
-- Chatterino-style multi-channel chat workflow in a standalone app
+- Fast multi-channel chat workflow in a standalone app
 - 7TV, BTTV, and FFZ integration
 - Windows-only builds packaged around `mergerino.exe`
 
@@ -57,3 +58,5 @@ git submodule update --init --recursive
 - Mergerino is intended to provide a merged multi-service chat client and Windows distribution path, not to represent the upstream project.
 - GitHub workflows and release packaging in this repo are Windows-only.
 - The TikTok provider runs TikTok's own webapp inside a hidden WebView2 host. Windows 11 ships the Edge WebView2 Runtime by default; on Windows 10 you may need to install it from Microsoft if TikTok rooms fail to connect.
+- [Privacy Policy](https://fixlation.github.io/Mergerino/privacy/)
+- [Terms of Service](https://fixlation.github.io/Mergerino/terms/)

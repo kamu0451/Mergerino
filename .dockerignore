@@ -1,4 +1,0 @@
-build*
-.mypy_cache
-.cache
-.docker

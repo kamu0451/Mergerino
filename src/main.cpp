@@ -209,46 +209,15 @@ int main(int argc, char **argv)
         qCInfo(chatterinoApp) << "Mergerino Qt SSL active backend protocols:"
                               << QSslSocket::supportedProtocols();
 
-        // First-run import: if this Mergerino install has no settings yet but
-        // Chatterino2 has data in %APPDATA%, offer to copy it over before
-        // Settings reads from disk.
-        if (chatterinoImport::isFreshInstall(paths->rootAppDataDirectory) &&
-            chatterinoImport::chatterino2HasSettings())
+        if (chatterino_import::hasPendingImport(*paths))
         {
-            QMessageBox box;
-            box.setIcon(QMessageBox::Question);
-            box.setWindowTitle(QStringLiteral("Import Chatterino settings?"));
-            box.setText(QStringLiteral(
-                "An existing Chatterino2 installation was detected.\n\n"
-                "Would you like to import its settings into Mergerino?"));
-            box.setInformativeText(QStringLiteral(
-                "This copies your settings, themes, plugins, chat logs, "
-                "highlights, ignores, and nicknames from "
-                "%APPDATA%\\Chatterino2.\n\n"
-                "You will need to re-link your Twitch account afterwards "
-                "(authentication tokens are stored separately and cannot be "
-                "migrated)."));
-            box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-            box.setDefaultButton(QMessageBox::Yes);
-
-            if (box.exec() == QMessageBox::Yes)
+            auto result = chatterino_import::applyPendingImport(*paths);
+            if (!result)
             {
-                auto result = chatterinoImport::importFromChatterino2(
-                    paths->rootAppDataDirectory);
-                if (result.ok)
-                {
-                    qCInfo(chatterinoApp).noquote()
-                        << "Imported" << result.filesCopied
-                        << "files from Chatterino2.";
-                }
-                else
-                {
-                    QMessageBox::warning(
-                        nullptr, QStringLiteral("Import failed"),
-                        QStringLiteral("Could not import Chatterino2 "
-                                       "settings:\n\n") +
-                            result.error);
-                }
+                QMessageBox::warning(
+                    nullptr, "Chatterino import failed",
+                    "Mergerino could not import Chatterino settings:\n\n" +
+                        result.error());
             }
         }
 

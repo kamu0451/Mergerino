@@ -19,6 +19,7 @@ class QVariantAnimation;
 
 namespace chatterino {
 
+enum class ActivityTimeDisplayMode : std::uint8_t;
 enum class PlatformIndicatorMode : std::uint8_t;
 
 class SplitSettingsDialog final : public BaseWindow
@@ -28,6 +29,7 @@ public:
                                  bool showTwitchBitsMinimum,
                                  bool showKickKicksMinimum,
                                  bool showTikTokGiftMinimum,
+                                 bool showStreamDatabaseBadgeFeed,
                                  QWidget *parent = nullptr);
 
     void setPlatformIndicatorMode(PlatformIndicatorMode mode);
@@ -39,12 +41,18 @@ public:
     void setActivityMessageScale(qreal scale);
     qreal activityMessageScale() const;
 
+    void setActivityTimeDisplayMode(ActivityTimeDisplayMode mode);
+    ActivityTimeDisplayMode activityTimeDisplayMode() const;
     void setSlowerChatEnabled(bool enabled);
     bool slowerChatEnabled() const;
     void setSlowerChatMessagesPerSecond(qreal value);
     qreal slowerChatMessagesPerSecond() const;
     void setSlowerChatMessageAnimations(bool enabled);
     bool slowerChatMessageAnimations() const;
+    void setViewerCountEnabled(bool enabled);
+    bool viewerCountEnabled() const;
+    void setStreamDatabaseBadgeFeedVisible(bool visible);
+    bool streamDatabaseBadgeFeedVisible() const;
     void setTwitchActivityMinimumBits(uint32_t value);
     uint32_t twitchActivityMinimumBits() const;
     void setKickActivityMinimumKicks(uint32_t value);
@@ -74,9 +82,12 @@ private:
         QComboBox *indicatorMode{};
         QCheckBox *filterActivity{};
         QComboBox *activityScale{};
+        QComboBox *activityTimeDisplayMode{};
         QCheckBox *slowerChat{};
         QDoubleSpinBox *slowerChatRate{};
-        QCheckBox *messageAnimations{};
+        QCheckBox *slowerChatMessageAnimations{};
+        QCheckBox *viewerCount{};
+        QCheckBox *streamDatabaseBadgeFeed{};
         QSpinBox *twitchBitsMinimum{};
         QSpinBox *kickKicksMinimum{};
         QSpinBox *tiktokGiftMinimum{};
@@ -86,7 +97,6 @@ private:
         QCheckBox *tiktokShowShares{};
         QWidget *slowerChatRateLabel{};
         QWidget *slowerChatRateField{};
-        QWidget *messageAnimationsRow{};
         QVariantAnimation *slowerChatRateAnimation{};
         qreal slowerChatRateVisibilityProgress = 1.0;
     } ui_{};
@@ -95,6 +105,7 @@ private:
     const bool showTwitchBitsMinimum_;
     const bool showKickKicksMinimum_;
     const bool showTikTokGiftMinimum_;
+    const bool showStreamDatabaseBadgeFeed_;
     bool hasAcceptedChanges_{false};
 
     void ok();

@@ -8,6 +8,7 @@
 
 #include <QIcon>
 #include <QPaintEvent>
+#include <QStringList>
 #include <QWidget>
 
 #include <functional>
@@ -32,11 +33,13 @@ public:
     SettingsDialogTab(SettingsDialog *dialog_,
                       std::function<SettingsPage *()> page_,
                       const QString &name, QString imageFileName,
-                      SettingsTabId id);
+                      SettingsTabId id, QStringList searchKeywords = {});
 
     void setSelected(bool selected_);
     SettingsPage *page();
+    SettingsPage *createdPage() const;
     SettingsTabId id() const;
+    bool matchesSearch(const QString &query) const;
 
     const QString &name() const;
 
@@ -58,6 +61,7 @@ private:
     std::function<SettingsPage *()> lazyPage_;
     SettingsTabId id_;
     QString name_;
+    QStringList searchKeywords_;
 
     bool selected_ = false;
 };

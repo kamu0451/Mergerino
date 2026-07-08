@@ -115,6 +115,18 @@ constexpr auto MAX_CHATTERS_TO_FETCH = 5000;
 // From Twitch docs - expected size for a badge (1x)
 constexpr QSize BASE_BADGE_SIZE(18, 18);
 
+bool isAutomaticAccountAuthError(void *caller, const QString &error)
+{
+    if (caller != nullptr)
+    {
+        return false;
+    }
+
+    return error.contains("Invalid OAuth token", Qt::CaseInsensitive) ||
+           (error.contains("user_id", Qt::CaseInsensitive) &&
+            error.contains("OAuth token", Qt::CaseInsensitive));
+}
+
 }  // namespace
 
 TwitchChannel::TwitchChannel(const QString &name)
@@ -211,9 +223,12 @@ TwitchChannel::TwitchChannel(const QString &name)
 
             if (caller == this || caller == nullptr)
             {
-                this->addSystemMessage(
-                    u"Failed to load Twitch subscriber emotes: " %
-                    result.error());
+                if (!isAutomaticAccountAuthError(caller, result.error()))
+                {
+                    this->addSystemMessage(
+                        u"Failed to load Twitch subscriber emotes: " %
+                        result.error());
+                }
             }
         });
 
@@ -945,10 +960,25 @@ void TwitchChannel::setStaff(bool value)
 
 bool TwitchChannel::isBroadcaster() const
 {
-    auto *app = getApp();
+    auto *app = tryGetApp();
+    if (app == nullptr)
+    {
+        return false;
+    }
 
-    return this->getName() ==
-           app->getAccounts()->twitch.getCurrent()->getUserName();
+    auto *accounts = app->getAccounts();
+    if (accounts == nullptr)
+    {
+        return false;
+    }
+
+    auto currentUser = accounts->twitch.getCurrent();
+    if (!currentUser)
+    {
+        return false;
+    }
+
+    return this->getName() == currentUser->getUserName();
 }
 
 bool TwitchChannel::hasHighRateLimit() const
@@ -963,6 +993,7 @@ bool TwitchChannel::canReconnect() const
 
 void TwitchChannel::reconnect()
 {
+    this->loadRecentMessagesReconnect(true);
     getApp()->getTwitch()->connect();
 }
 
@@ -1501,7 +1532,7 @@ void TwitchChannel::loadRecentMessages()
         std::nullopt, false);
 }
 
-void TwitchChannel::loadRecentMessagesReconnect()
+void TwitchChannel::loadRecentMessagesReconnect(bool manualRefresh)
 {
     if (!getSettings()->loadTwitchMessageHistoryOnConnect)
     {
@@ -1515,14 +1546,16 @@ void TwitchChannel::loadRecentMessagesReconnect()
 
     const auto now = std::chrono::system_clock::now();
     int limit = getSettings()->twitchMessageHistoryLimit.getValue();
-    if (this->lastConnectedAt_.has_value())
+    const auto startTime = manualRefresh ? std::optional<std::chrono::system_clock::time_point>{}
+                                         : this->lastConnectedAt_;
+    if (startTime.has_value())
     {
         // calculate how many messages could have occurred
         // while we were not connected to the channel
         // assuming a maximum of 10 messages per second
         const auto secondsSinceDisconnect =
             std::chrono::duration_cast<std::chrono::seconds>(
-                now - this->lastConnectedAt_.value())
+                now - startTime.value())
                 .count();
         limit =
             std::min(static_cast<int>(secondsSinceDisconnect + 1) * 10, limit);
@@ -1562,7 +1595,7 @@ void TwitchChannel::loadRecentMessagesReconnect()
 
             tc->loadingRecentMessages_.clear();
         },
-        limit, this->lastConnectedAt_, now, true);
+        limit, startTime, now, true);
 }
 
 void TwitchChannel::refreshPubSub()
@@ -1874,6 +1907,12 @@ void TwitchChannel::refreshBadges()
 
             switch (error)
             {
+                case HelixGetChannelBadgesError::UserNotAuthenticated: {
+                    errorMessage +=
+                        "Sign in to Twitch to load channel badges.";
+                }
+                break;
+
                 case HelixGetChannelBadgesError::Forwarded: {
                     errorMessage += message;
                 }

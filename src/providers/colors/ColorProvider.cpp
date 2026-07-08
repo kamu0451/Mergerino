@@ -16,12 +16,6 @@ namespace {
 
 QColor mergedSubscriptionFallbackColor()
 {
-    if (mergedPlatformIndicatorShowsLineColor(
-            getSettings()->mergedPlatformIndicatorMode))
-    {
-        return QColor(83, 252, 24, 90);
-    }
-
     return HighlightPhrase::FALLBACK_SUB_COLOR;
 }
 

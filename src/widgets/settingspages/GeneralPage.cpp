@@ -25,6 +25,7 @@
 #include "util/Helpers.hpp"
 #include "util/IncognitoBrowser.hpp"
 #include "widgets/BaseWindow.hpp"
+#include "widgets/dialogs/UpdateDialog.hpp"
 #include "widgets/helper/FontSettingWidget.hpp"
 #include "widgets/settingspages/GeneralPageView.hpp"
 #include "widgets/settingspages/SettingWidget.hpp"
@@ -92,6 +93,66 @@ void addKeyboardModifierSetting(GeneralPageView &layout, const QString &title,
             }
         },
         false);
+}
+
+void importChatterinoFromSettings(QWidget *parent)
+{
+    if (!chatterino_import::defaultSourceSettingsDirectoryExists())
+    {
+        QMessageBox::warning(
+            parent, "Chatterino settings not found",
+            "Mergerino could not find Chatterino settings in the default "
+            "Chatterino2 AppData folder.");
+        return;
+    }
+
+    const auto reply = QMessageBox::question(
+        parent, "Import from Chatterino",
+        "Import Chatterino settings, ping alerts, commands, user data, and "
+        "accounts, and channel tabs into Mergerino?\n\nMergerino will "
+        "restart. Current Mergerino settings files will be backed up before "
+        "they are replaced.",
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (reply != QMessageBox::Yes)
+    {
+        return;
+    }
+
+    auto *settings = getSettings();
+    chatterino_import::ImportOptions options;
+    options.startupPromptAcknowledged =
+        settings->startupPromptAcknowledged.getValue();
+    options.autorun = settings->autorun.getValue();
+    options.currentVersion = CHATTERINO_VERSION;
+    options.mergedPlatformIndicatorMode =
+        settings->mergedPlatformIndicatorMode.getValue();
+    options.platformEventHighlightStyle =
+        settings->platformEventHighlightStyle.getValue();
+    options.platformEventHighlightCustomColor =
+        settings->platformEventHighlightCustomColor.getValue();
+
+    auto stage =
+        chatterino_import::stageImportFromDefaultSource(getApp()->getPaths(),
+                                                        options);
+    if (!stage)
+    {
+        QMessageBox::critical(parent, "Chatterino import failed",
+                              "Mergerino could not stage the Chatterino "
+                              "import:\n\n" +
+                                  stage.error());
+        return;
+    }
+
+    if (!chatterino_import::restartApplication())
+    {
+        QMessageBox::critical(
+            parent, "Restart failed",
+            "Mergerino staged the Chatterino import, but could not restart "
+            "itself. Close and reopen Mergerino to finish the import.");
+        return;
+    }
+
+    QApplication::quit();
 }
 
 }  // namespace
@@ -505,12 +566,16 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                      "message to help better tell them apart.")
         ->addTo(layout);
 
+    SettingWidget::checkbox("Message animations", s.messageAnimations)
+        ->setTooltip("Smoothly animate new messages in every tab.")
+        ->addTo(layout);
+
     SettingWidget::dropdown("Merged platform indicator",
                             s.mergedPlatformIndicatorMode)
         ->setTooltip("Use platform-colored merged rows, platform logo badges, "
-                     "or both together.")
+                     "both together, or neither.")
         ->addKeywords({"merged", "platform", "badge", "line color",
-                       "logo", "both", "twitch", "kick", "youtube"})
+                       "logo", "both", "none", "twitch", "kick", "youtube"})
         ->addTo(layout);
 
     SettingWidget::dropdown("Platform event/alert highlight style",
@@ -1072,68 +1137,6 @@ void GeneralPage::initLayout(GeneralPageView &layout)
 #endif
     });
 
-    if (chatterinoImport::chatterino2HasSettings())
-    {
-        layout.addSubtitle("Import from Chatterino2");
-        layout.addDescription(
-            "Copy settings, themes, plugins, chat logs, highlights, ignores, "
-            "and nicknames from an existing Chatterino2 installation in "
-            "%APPDATA%\\Chatterino2. Existing files with the same name will "
-            "be overwritten. Twitch accounts cannot be migrated and must be "
-            "re-linked manually.");
-        layout.addButton("Import settings from Chatterino2", [this] {
-            auto reply = QMessageBox::question(
-                this->window(), "Import settings from Chatterino2",
-                "This will overwrite any existing files in your Mergerino "
-                "data directory with copies from Chatterino2.\n\n"
-                "Mergerino will restart afterwards so the new tab layout, "
-                "settings, and themes are loaded.\n\nContinue?",
-                QMessageBox::Yes | QMessageBox::No);
-            if (reply != QMessageBox::Yes)
-            {
-                return;
-            }
-
-            auto result = chatterinoImport::importFromChatterino2(
-                getApp()->getPaths().rootAppDataDirectory);
-            if (!result.ok)
-            {
-                QMessageBox::warning(
-                    this->window(), "Import failed",
-                    "Could not import Chatterino2 settings:\n\n" +
-                        result.error);
-                return;
-            }
-
-            QMessageBox doneBox(this->window());
-            doneBox.setWindowTitle("Import complete");
-            doneBox.setIcon(QMessageBox::Information);
-            doneBox.setText(
-                QStringLiteral("Imported %1 file(s) from Chatterino2.")
-                    .arg(result.filesCopied));
-            doneBox.setInformativeText(
-                "Mergerino needs to restart so the imported tab layout, "
-                "settings, and themes can take effect.");
-            auto *restartBtn =
-                doneBox.addButton("Restart now", QMessageBox::AcceptRole);
-            doneBox.addButton("Quit only", QMessageBox::RejectRole);
-            doneBox.setDefaultButton(restartBtn);
-            doneBox.exec();
-
-            // The in-memory window layout would otherwise overwrite the
-            // freshly imported window-layout.json on shutdown. Silence the
-            // debounced save and the closeEvent save before quitting.
-            getApp()->getWindows()->suppressFurtherSaves();
-
-            if (doneBox.clickedButton() == restartBtn)
-            {
-                QProcess::startDetached(QApplication::applicationFilePath(),
-                                        {});
-            }
-            QApplication::quit();
-        });
-    }
-
     layout.addSubtitle("OBS browser dock");
     layout.addDescription(
         "Mergerino exposes the active tab as a local web page that OBS can "
@@ -1151,6 +1154,27 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         "Append URL params to customize, e.g. "
         "<code>?maxMessages=20&amp;fadeAfter=15&amp;fontSize=22"
         "&amp;showTime=1</code>.");
+
+    layout.addSubtitle("Updates");
+    layout.addDescription(
+        "Check GitHub for the latest Mergerino release and install it if one "
+        "is available.");
+    layout.addButton("Check for updates", [] {
+        getApp()->getUpdates().checkForUpdates();
+
+        auto *dialog = new UpdateDialog();
+        dialog->show();
+        dialog->raise();
+        dialog->activateWindow();
+    });
+
+    layout.addSubtitle("Chatterino Import");
+    layout.addDescription(
+        "Import Chatterino settings, ping alerts, commands, user data, and "
+        "accounts, and channel tabs. Mergerino restarts to finish the import.");
+    layout.addButton("Import from Chatterino", [&layout] {
+        importChatterinoFromSettings(layout.window());
+    });
 
     layout.addSubtitle("Temporary files (Cache)");
     layout.addDescription(
@@ -1217,12 +1241,9 @@ void GeneralPage::initLayout(GeneralPageView &layout)
     layout.addTitle("Advanced");
 
     layout.addSubtitle("Chat title");
-    layout.addDescription("In live channels show:");
+    layout.addDescription("In live channels show in the title:");
     SettingWidget::checkbox("Uptime", s.headerUptime)
         ->setTooltip("Show how long the channel has been live")
-        ->addTo(layout);
-    SettingWidget::checkbox("Viewer count", s.headerViewerCount)
-        ->setTooltip("Show how many users are watching")
         ->addTo(layout);
     SettingWidget::checkbox("Category", s.headerGame)
         ->setTooltip("Show what Category the stream is listed under")
@@ -1242,6 +1263,23 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                      "history the header's coloured percentage compares "
                      "against. The label shows the actual span used, so "
                      "shorter values show sooner but with more noise.")
+        ->addTo(layout);
+
+    layout.addSubtitle("Chat mode indicator");
+    SettingWidget::checkbox("Show chat mode indicator",
+                            s.headerChatModeIndicator)
+        ->setTooltip("Show the active Twitch/Kick chat mode in normal split "
+                     "headers when a chat mode is enabled")
+        ->addTo(layout);
+
+    layout.addSubtitle("Viewer count");
+    SettingWidget::checkbox("Show viewer count", s.headerViewerCount)
+        ->setTooltip(
+            "Show a compact viewer count with an icon in the split header")
+        ->addTo(layout);
+    SettingWidget::dropdown("Viewer count source", headerViewerCountModeSetting())
+        ->setTooltip("Choose which platform viewer count is shown")
+        ->conditionallyEnabledBy(s.headerViewerCount)
         ->addTo(layout);
 
     layout.addSubtitle("R9K");
@@ -1347,6 +1385,10 @@ void GeneralPage::initLayout(GeneralPageView &layout)
         ->addTo(layout);
     SettingWidget::checkbox("BetterTTV", s.showBadgesBttv)
         ->addKeywords({"bttv"})
+        ->addTo(layout);
+    SettingWidget::checkbox("Kick level badges", s.showKickLevelBadges)
+        ->addKeywords({"kick", "level"})
+        ->setTooltip("Level badges shown in Kick chat")
         ->addTo(layout);
     layout.addSeparator();
     SettingWidget::checkbox("Use custom FrankerFaceZ moderator badges",
@@ -1626,11 +1668,6 @@ void GeneralPage::initLayout(GeneralPageView &layout)
                             s.lowercaseDomains)
         ->setTooltip(
             "Make all clickable links lowercase to deter phishing attempts.")
-        ->addTo(layout);
-
-    SettingWidget::checkbox("Show user's pronouns in user card", s.showPronouns)
-        ->setDescription(
-            R"(Pronouns are retrieved from <a href="https://pr.alejo.io">pr.alejo.io</a> when a user card is opened.)")
         ->addTo(layout);
 
     SettingWidget::checkbox("Show stream title in live message",

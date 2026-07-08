@@ -14,6 +14,7 @@
 #include "messages/layouts/MessageLayout.hpp"
 #include "providers/colors/ColorProvider.hpp"
 #include "providers/merged/MergedChannel.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/WindowManager.hpp"
 #include "singletons/Theme.hpp"
 #include "util/HttpServer.hpp"
@@ -167,7 +168,19 @@ QColor dockEventHighlightColor(const Message &message)
 
     if (message.flags.has(MessageFlag::Subscription))
     {
-        return softenedDockOverlay(*colors.color(ColorType::Subscription));
+        const auto subscriptionColor = colors.color(ColorType::Subscription);
+        if (message.platform == MessagePlatform::AnyOrTwitch)
+        {
+            return softenedDockOverlay(*subscriptionColor);
+        }
+
+        auto color =
+            message.platformAccentColor.value_or(defaultPlatformAccent(message.platform));
+        if (subscriptionColor && subscriptionColor->isValid())
+        {
+            color.setAlpha(subscriptionColor->alpha());
+        }
+        return softenedDockOverlay(color);
     }
 
     if (message.flags.has(MessageFlag::RedeemedHighlight) ||
@@ -1866,6 +1879,34 @@ QByteArray ObsBrowserDockServer::dockStateJson(const QString &view,
                         QStringLiteral("This tab does not have a chat split to show."));
         }
         return QJsonDocument(root).toJson(QJsonDocument::Compact);
+    }
+
+    if (const auto channel = split->getChannel())
+    {
+        if (auto *merged = dynamic_cast<MergedChannel *>(channel.get()))
+        {
+            const auto &config = merged->config();
+            QJsonObject youtube{
+                {QStringLiteral("enabled"), config.youtubeEnabled},
+                {QStringLiteral("source"), config.youtubeStreamUrl},
+                {QStringLiteral("present"),
+                 merged->youtubeLiveChat() != nullptr},
+            };
+
+            if (auto *liveChat = merged->youtubeLiveChat())
+            {
+                youtube.insert(QStringLiteral("live"), liveChat->isLive());
+                youtube.insert(QStringLiteral("videoId"), liveChat->videoId());
+                youtube.insert(QStringLiteral("statusText"),
+                               liveChat->statusText());
+                youtube.insert(QStringLiteral("liveTitle"),
+                               liveChat->liveTitle());
+                youtube.insert(QStringLiteral("viewerCount"),
+                               QString::number(liveChat->liveViewerCount()));
+            }
+
+            root.insert(QStringLiteral("youtube"), youtube);
+        }
     }
 
     auto &snapshot = split->getChannelView().getMessagesSnapshot();

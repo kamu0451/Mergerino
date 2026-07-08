@@ -19,6 +19,7 @@ public:
 
     void joinRoom(uint64_t roomID, uint64_t channelID);
     void leaveRoom(uint64_t roomID, uint64_t channelID);
+    void reconnect();
 
 private:
     std::unique_ptr<KickLiveUpdatesPrivate> private_;

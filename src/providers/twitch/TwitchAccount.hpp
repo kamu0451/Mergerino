@@ -66,6 +66,10 @@ public:
     // Returns true if the value has changed, otherwise false
     bool setOAuthToken(const QString &newOAuthToken);
 
+    // Attempts to update the users user ID
+    // Returns true if the value has changed, otherwise false
+    bool setUserId(const QString &newUserID);
+
     // Attempts to update the users username
     // Returns true if the value has changed, otherwise false
     bool setUserName(const QString &newUserName);

@@ -9,6 +9,7 @@
 #include "widgets/BasePopup.hpp"
 #include "widgets/listview/GenericListView.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -18,6 +19,7 @@ namespace chatterino {
 
 class Channel;
 using ChannelPtr = std::shared_ptr<Channel>;
+enum class MessagePlatform : std::uint8_t;
 
 class GenericListView;
 
@@ -31,7 +33,8 @@ public:
     InputCompletionPopup(QWidget *parent = nullptr);
 
     void updateCompletion(const QString &text, CompletionKind kind,
-                          ChannelPtr channel);
+                          ChannelPtr channel,
+                          std::vector<MessagePlatform> platformFilter = {});
 
     void setInputAction(ActionCallback callback);
 
@@ -45,7 +48,8 @@ protected:
 
 private:
     void initLayout();
-    void beginCompletion(CompletionKind kind, ChannelPtr channel);
+    void beginCompletion(CompletionKind kind, ChannelPtr channel,
+                         std::vector<MessagePlatform> platformFilter);
     void endCompletion();
 
     std::unique_ptr<completion::Source> getSource() const;
@@ -60,6 +64,7 @@ private:
 
     std::optional<CompletionKind> currentKind_{};
     ChannelPtr currentChannel_{};
+    std::vector<MessagePlatform> currentPlatformFilter_{};
 };
 
 }  // namespace chatterino

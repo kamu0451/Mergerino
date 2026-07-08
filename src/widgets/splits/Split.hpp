@@ -24,11 +24,14 @@ namespace chatterino {
 class ChannelView;
 class SplitHeader;
 class SplitInput;
+class StreamDatabaseBadgeBar;
+class TwitchPollsAndPredictionsBar;
 class SplitContainer;
 class SplitOverlay;
 class SelectChannelDialog;
 class OverlayWindow;
 class SplitSettingsDialog;
+enum class ActivityTimeDisplayMode : std::uint8_t;
 enum class PlatformIndicatorMode : std::uint8_t;
 
 // Each ChatWidget consists of three sub-elements that handle their own part of
@@ -64,9 +67,13 @@ public:
     bool hasLinkedActivityPane();
     QString activityPaneTitle() const;
     qreal activityMessageScale() const;
+    ActivityTimeDisplayMode activityTimeDisplayMode() const;
     bool slowerChatEnabled() const;
     qreal slowerChatMessagesPerSecond() const;
     bool slowerChatMessageAnimations() const;
+    bool streamDatabaseBadgeFeedVisible() const;
+    bool titleSettingsButtonVisible() const;
+    bool chatModeIndicatorVisible() const;
     PlatformIndicatorMode platformIndicatorMode() const;
     uint32_t twitchActivityMinimumBits() const;
     uint32_t kickActivityMinimumKicks() const;
@@ -75,6 +82,8 @@ public:
     bool tiktokActivityShowLikes() const;
     bool tiktokActivityShowFollows() const;
     bool tiktokActivityShowShares() const;
+    bool viewerCountEnabled() const;
+    std::optional<bool> viewerCountEnabledOverride() const;
     bool filterActivity() const;
     bool filterActivityExplicit() const;
 
@@ -89,9 +98,13 @@ public:
     bool getModerationMode() const;
     void setInputEnabled(bool enabled);
     void setActivityMessageScale(qreal value);
+    void setActivityTimeDisplayMode(ActivityTimeDisplayMode value);
     void setSlowerChatEnabled(bool value);
     void setSlowerChatMessagesPerSecond(qreal value);
     void setSlowerChatMessageAnimations(bool value);
+    void setStreamDatabaseBadgeFeedVisible(bool value);
+    void setTitleSettingsButtonVisible(bool value);
+    void setChatModeIndicatorVisible(bool value);
     void setPlatformIndicatorMode(PlatformIndicatorMode value);
     void setTwitchActivityMinimumBits(uint32_t value);
     void setKickActivityMinimumKicks(uint32_t value);
@@ -100,6 +113,8 @@ public:
     void setTikTokActivityShowLikes(bool value);
     void setTikTokActivityShowFollows(bool value);
     void setTikTokActivityShowShares(bool value);
+    void setViewerCountEnabled(bool value);
+    void setViewerCountEnabledOverride(std::optional<bool> value);
     void setFilterActivity(bool value, bool explicitPreference = false);
 
     std::optional<bool> checkSpellingOverride() const;
@@ -202,9 +217,13 @@ private:
     bool filterActivity_{false};
     bool filterActivityExplicit_{false};
     qreal activityMessageScale_{0.9};
+    ActivityTimeDisplayMode activityTimeDisplayMode_;
     bool slowerChatEnabled_{false};
     qreal slowerChatMessagesPerSecond_{5.0};
     bool slowerChatMessageAnimations_{true};
+    bool streamDatabaseBadgeFeedVisible_{true};
+    bool titleSettingsButtonVisible_{true};
+    bool chatModeIndicatorVisible_{true};
     uint32_t twitchActivityMinimumBits_{100};
     uint32_t kickActivityMinimumKicks_{100};
     uint32_t tiktokActivityMinimumDiamonds_{0};
@@ -212,6 +231,7 @@ private:
     bool tiktokActivityShowLikes_{false};
     bool tiktokActivityShowFollows_{false};
     bool tiktokActivityShowShares_{false};
+    std::optional<bool> viewerCountEnabledOverride_;
     PlatformIndicatorMode platformIndicatorMode_;
 
     bool isMouseOver_{};
@@ -219,6 +239,8 @@ private:
 
     QVBoxLayout *const vbox_;
     SplitHeader *const header_;
+    StreamDatabaseBadgeBar *streamDatabaseBadgeBar_{};
+    TwitchPollsAndPredictionsBar *const twitchPollsAndPredictionsBar_;
     ChannelView *const view_;
     SplitInput *const input_;
     SplitOverlay *const overlay_;

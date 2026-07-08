@@ -13,6 +13,12 @@
 #include <memory>
 #include <vector>
 
+namespace chatterino {
+
+class Channel;
+
+}  // namespace chatterino
+
 namespace chatterino::completion {
 
 struct CommandItem {
@@ -31,7 +37,9 @@ public:
     /// @param callback ActionCallback to invoke upon InputCompletionItem selection.
     /// See InputCompletionItem::action(). Can be nullptr.
     CommandSource(std::unique_ptr<CommandStrategy> strategy,
-                  ActionCallback callback = nullptr);
+                  ActionCallback callback = nullptr,
+                  const Channel *channel = nullptr,
+                  bool slashCommandsOnly = false);
 
     void update(const QString &query) override;
     void addToListModel(GenericListModel &model,
@@ -46,6 +54,8 @@ private:
 
     std::unique_ptr<CommandStrategy> strategy_;
     ActionCallback callback_;
+    const Channel *channel_{};
+    bool slashCommandsOnly_{};
 
     std::vector<CommandItem> items_{};
     std::vector<CommandItem> output_{};

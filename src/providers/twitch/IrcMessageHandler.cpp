@@ -21,6 +21,7 @@
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchAccountManager.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "providers/twitch/CurrentUserBadges.hpp"
 #include "providers/twitch/TwitchHelpers.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/twitch/UserColor.hpp"
@@ -34,6 +35,7 @@
 #include <IrcMessage>
 #include <QLocale>
 #include <QStringBuilder>
+#include <QTimer>
 
 #include <memory>
 
@@ -239,8 +241,31 @@ MessagePtr parseNoticeMessage(Communi::IrcNoticeMessage *message)
         const auto linkColor = MessageColor(MessageColor::Link);
         const auto accountsLink = Link(Link::OpenAccountsPage, QString());
         const auto curUser = getApp()->getAccounts()->twitch.getCurrent();
+        const auto expiredUserName = curUser->getUserName();
+        if (!curUser->isAnon())
+        {
+            QTimer::singleShot(0, [expiredUserName] {
+                auto *app = tryGetApp();
+                if (!app)
+                {
+                    return;
+                }
+
+                auto &twitchAccounts = app->getAccounts()->twitch;
+                const auto current = twitchAccounts.getCurrent();
+                if (current->isAnon() ||
+                    current->getUserName().compare(expiredUserName,
+                                                   Qt::CaseInsensitive) != 0)
+                {
+                    return;
+                }
+
+                twitchAccounts.currentUsername = QString{};
+                getSettings()->requestSave();
+            });
+        }
         const auto expirationText = QString("Login expired for user \"%1\"!")
-                                        .arg(curUser->getUserName());
+                                        .arg(expiredUserName);
         const auto loginPromptText = QString("Try adding your account again.");
 
         MessageBuilder builder;
@@ -398,12 +423,15 @@ void IrcMessageHandler::parsePrivMessageInto(
     TwitchChannel *channel)
 {
     auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
-    if (message->tag("user-id") == currentUser->getUserId())
+    if (!currentUser->isAnon() &&
+        message->tag("user-id") == currentUser->getUserId())
     {
         auto badgesTag = message->tag("badges");
         if (badgesTag.isValid())
         {
             auto parsedBadges = parseBadges(badgesTag.toString());
+            twitch::updateCurrentUserBadgesForChannel(channel->getName(),
+                                                      parsedBadges);
             channel->setMod(parsedBadges.contains("moderator") ||
                             parsedBadges.contains("lead_moderator"));
             channel->setVIP(parsedBadges.contains("vip"));
@@ -642,6 +670,8 @@ void IrcMessageHandler::handleUserStateMessage(Communi::IrcMessage *message)
         if (badgesTag.isValid())
         {
             auto parsedBadges = parseBadges(badgesTag.toString());
+            twitch::updateCurrentUserBadgesForChannel(channelName,
+                                                      parsedBadges);
             tc->setVIP(parsedBadges.contains("vip"));
             tc->setStaff(parsedBadges.contains("staff"));
 

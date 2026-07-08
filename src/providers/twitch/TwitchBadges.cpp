@@ -71,6 +71,12 @@ void TwitchBadges::loadTwitchBadges()
 
             switch (error)
             {
+                case HelixGetGlobalBadgesError::UserNotAuthenticated: {
+                    errorMessage +=
+                        "Sign in to Twitch to load Twitch badges.";
+                }
+                break;
+
                 case HelixGetGlobalBadgesError::Forwarded: {
                     errorMessage += message;
                 }

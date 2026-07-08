@@ -438,6 +438,8 @@ void Client::onEntitlementCreate(
     }
 
     auto *badges = app->getSeventvBadges();
+    auto *paints = app->getSeventvPaints();
+
     switch (entitlement.kind)
     {
         case CosmeticKind::Badge: {
@@ -446,8 +448,8 @@ void Client::onEntitlementCreate(
         }
         break;
         case CosmeticKind::Paint: {
-            app->getSeventvPaints()->assignPaintToUsers(
-                entitlement.refID, entitlement.connections);
+            paints->assignPaintToUsers(entitlement.refID,
+                                       entitlement.connections);
         }
         break;
         case CosmeticKind::EmoteSet: {

@@ -10,17 +10,21 @@
 #include <QPainter>
 #include <QStyleOption>
 
+#include <cmath>
+
 namespace chatterino {
 
 SettingsDialogTab::SettingsDialogTab(SettingsDialog *_dialog,
                                      std::function<SettingsPage *()> _lazyPage,
                                      const QString &name, QString imageFileName,
-                                     SettingsTabId id)
+                                     SettingsTabId id,
+                                     QStringList searchKeywords)
     : BaseWidget(_dialog)
     , dialog_(_dialog)
     , lazyPage_(std::move(_lazyPage))
     , id_(id)
     , name_(name)
+    , searchKeywords_(std::move(searchKeywords))
 {
     this->ui_.labelText = name;
     this->ui_.icon.addFile(imageFileName);
@@ -55,6 +59,34 @@ SettingsPage *SettingsDialogTab::page()
     return this->page_;
 }
 
+SettingsPage *SettingsDialogTab::createdPage() const
+{
+    return this->page_;
+}
+
+bool SettingsDialogTab::matchesSearch(const QString &query) const
+{
+    if (query.isEmpty())
+    {
+        return true;
+    }
+
+    if (this->name_.contains(query, Qt::CaseInsensitive))
+    {
+        return true;
+    }
+
+    for (const auto &keyword : this->searchKeywords_)
+    {
+        if (keyword.contains(query, Qt::CaseInsensitive))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 void SettingsDialogTab::paintEvent(QPaintEvent *)
 {
     QPainter painter(this);
@@ -71,7 +103,7 @@ void SettingsDialogTab::paintEvent(QPaintEvent *)
 
     painter.drawPixmap(pad, pad, pixmap);
 
-    pad = (3 * pad) + iconSize;
+    pad = (3 * pad) + iconSize + static_cast<int>(std::round(2 * this->scale()));
 
     this->style()->drawItemText(
         &painter, QRect(pad, 0, this->width() - pad, this->height()),

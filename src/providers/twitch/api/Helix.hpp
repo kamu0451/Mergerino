@@ -344,6 +344,21 @@ struct HelixChatters {
     explicit HelixChatters(const QJsonObject &jsonObject);
 };
 
+struct HelixChatterGroups {
+    std::unordered_set<QString> broadcaster;
+    std::unordered_set<QString> vips;
+    std::unordered_set<QString> moderators;
+    std::unordered_set<QString> staff;
+    std::unordered_set<QString> admins;
+    std::unordered_set<QString> globalMods;
+    std::unordered_set<QString> viewers;
+    int total{};
+
+    HelixChatterGroups() = default;
+
+    explicit HelixChatterGroups(const QJsonObject &jsonObject);
+};
+
 using HelixModerator = HelixVip;
 
 struct HelixModerators {
@@ -540,12 +555,24 @@ struct HelixPrediction {
     QString winningOutcomeID;
     QString status;
     std::vector<HelixPredictionOutcome> outcomes;
+    QDateTime createdAt;
+    QDateTime lockedAt;
+    QDateTime endedAt;
+    int predictionWindow;
 
     explicit HelixPrediction(const QJsonObject &jsonObject)
         : id(jsonObject.value("id").toString())
         , title(jsonObject.value("title").toString())
         , winningOutcomeID(jsonObject.value("winning_outcome_id").toString())
         , status(jsonObject.value("status").toString())
+        , outcomes()
+        , createdAt(QDateTime::fromString(
+              jsonObject.value("created_at").toString(), Qt::ISODate))
+        , lockedAt(QDateTime::fromString(
+              jsonObject.value("locked_at").toString(), Qt::ISODate))
+        , endedAt(QDateTime::fromString(
+              jsonObject.value("ended_at").toString(), Qt::ISODate))
+        , predictionWindow(jsonObject.value("prediction_window").toInt())
     {
         const auto &data = jsonObject.value("outcomes").toArray();
         this->outcomes.reserve(data.size());
@@ -881,6 +908,7 @@ enum class HelixStartCommercialError {
 
 enum class HelixGetGlobalBadgesError {
     Unknown,
+    UserNotAuthenticated,
 
     // The error message is forwarded directly from the Twitch API
     Forwarded,

@@ -5,12 +5,14 @@
 #pragma once
 
 #include "util/QStringHash.hpp"
-#include "util/ThreadGuard.hpp"
 
 #include <QString>
 
+#include <pajlada/signals/signalholder.hpp>
+
 #include <map>
 #include <memory>
+#include <mutex>
 #include <unordered_set>
 
 namespace chatterino {
@@ -51,10 +53,15 @@ private:
     std::map<PlatformName,
              std::map<ChannelName, std::unique_ptr<LoggingChannel>>>
         loggingChannels_;
+    std::mutex loggingChannelsMutex_;
 
-    // Keeps the value of the `loggedChannels` settings
-    std::unordered_set<ChannelName> onlyLogListedChannels;
-    ThreadGuard threadGuard;
+    // Keeps cached values of logging settings for the message ingestion path.
+    std::unordered_set<ChannelName> onlyLogListedChannels_;
+    pajlada::Signals::SignalHolder settingConnections_;
+
+    void addMessageToChannel(const QString &channelName, MessagePtr message,
+                             const QString &platformName,
+                             const QString &streamID);
 };
 
 }  // namespace chatterino

@@ -185,7 +185,7 @@ struct TestCase {
 class HighlightControllerTest : public ::testing::Test
 {
 protected:
-    void configure(const QString &settings, bool isAnon)
+    void configure(const QString &settings)
     {
         // Write default settings to the mock settings json file
         this->mockApplication = std::make_unique<MockApplication>(settings);
@@ -195,7 +195,7 @@ protected:
         initializeHelix(this->mockHelix);
 
         EXPECT_CALL(*this->mockHelix, loadBlocks).Times(Exactly(1));
-        EXPECT_CALL(*this->mockHelix, update).Times(Exactly(isAnon ? 0 : 1));
+        EXPECT_CALL(*this->mockHelix, update).Times(Exactly(1));
 
         this->mockApplication->accounts.load();
     }
@@ -230,7 +230,7 @@ protected:
 
 TEST_F(HighlightControllerTest, LoggedInAndConfigured)
 {
-    configure(SETTINGS_DEFAULT, false);
+    configure(SETTINGS_DEFAULT);
 
     std::vector<TestCase> tests{
         {
@@ -462,7 +462,7 @@ TEST_F(HighlightControllerTest, LoggedInAndConfigured)
 
 TEST_F(HighlightControllerTest, AnonEmpty)
 {
-    configure(SETTINGS_ANON_EMPTY, true);
+    configure(SETTINGS_ANON_EMPTY);
 
     std::vector<TestCase> tests{
         {

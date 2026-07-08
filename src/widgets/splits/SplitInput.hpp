@@ -9,18 +9,26 @@
 #include "widgets/BaseWidget.hpp"
 
 #include <QHBoxLayout>
+#include <QHash>
 #include <QLabel>
 #include <QLineEdit>
+#include <QNetworkAccessManager>
 #include <QPaintEvent>
 #include <QPointer>
 #include <QPropertyAnimation>
+#include <QSet>
 #include <QTextEdit>
+#include <QToolButton>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 #include <QWidget>
 
 #include <memory>
 #include <optional>
 #include <vector>
+
+class QNetworkReply;
+class QCompleter;
 
 namespace chatterino {
 
@@ -29,6 +37,8 @@ class EmotePopup;
 class InputCompletionPopup;
 class InputHighlighter;
 class MessageView;
+class StreamDatabaseBadgePickerPopup;
+class TwitchChannel;
 class LabelButton;
 class ResizingTextEdit;
 class ChannelView;
@@ -42,6 +52,13 @@ class SplitInput : public BaseWidget
     Q_OBJECT
 
 public:
+    struct SendPlatformSelection {
+        MessagePlatform selectedPlatform = MessagePlatform::AnyOrTwitch;
+        bool allPlatforms = false;
+        std::vector<MessagePlatform> customPlatforms;
+        std::vector<MessagePlatform> enabledPlatforms;
+    };
+
     SplitInput(Split *_chatWidget, bool enableInlineReplying = true);
     SplitInput(QWidget *parent, Split *_chatWidget, ChannelView *_channelView,
                bool enableInlineReplying = true);
@@ -56,6 +73,9 @@ public:
     void setReply(MessagePtr target);
     void setPlaceholderText(const QString &text);
     void updatePlatformSelector(bool animate = false);
+    void applyActiveAccountProviderDefault();
+    SendPlatformSelection sendPlatformSelection() const;
+    void restoreSendPlatformSelection(const SendPlatformSelection &selection);
     std::optional<MessagePlatform> selectedSendPlatform() const;
     QString selectedSendPlatformDisplayName() const;
     QString selectedSendAccountName() const;
@@ -125,18 +145,30 @@ protected:
 
     void addShortcuts() override;
     void initLayout();
+    QCompleter *createCompleter(ChannelPtr channel);
     bool eventFilter(QObject *obj, QEvent *event) override;
     void installTextEditEvents();
     void onCursorPositionChanged();
     void onTextChanged();
+    void updateBadgeButton();
+    int badgeButtonTargetWidth() const;
+    void setBadgeButtonShown(bool shown, bool animate);
     void updateEmoteButton();
     void updateCompletionPopup();
     void updatePlatformButtonLayout(int platformCount = 1);
     void showCompletionPopup(const QString &text, CompletionKind kind);
     void hideCompletionPopup();
     void insertCompletionText(const QString &input_) const;
+    void updatePollPredictionButtons();
+    void openPollDialog();
+    void openPredictionDialog();
     void openEmotePopup();
     void updateEmotePopupChannel();
+    void openBadgePickerPopup();
+    void updateBadgePickerContext();
+    void resetBadgeIdentityButtonFetch(bool clearBadges);
+    void requestBadgeIdentityForCurrentTwitchChannel(
+        const std::shared_ptr<TwitchChannel> &twitch);
     void clearReplyTarget();
 
     void updateCancelReplyButton();
@@ -156,18 +188,32 @@ protected:
     int replyMessageWidth() const;
 
     std::vector<MessagePlatform> availableSendPlatforms() const;
+    std::vector<MessagePlatform> cycleSendPlatforms(
+        const std::vector<MessagePlatform> &availablePlatforms) const;
     std::optional<MessagePlatform> replySendPlatform() const;
+    std::vector<MessagePlatform> storedSelectedSendPlatforms(
+        const std::vector<MessagePlatform> &availablePlatforms) const;
     std::vector<MessagePlatform> selectedSendPlatforms() const;
     ChannelPtr channelForSendPlatform(MessagePlatform platform) const;
     bool canSendToPlatform(MessagePlatform platform) const;
+    void normalizeSelectedSendPlatforms(
+        const std::vector<MessagePlatform> &availablePlatforms);
+    void setSelectedSendPlatforms(std::vector<MessagePlatform> platforms);
+    void showPlatformSelectionMenu();
     void selectSendPlatform(MessagePlatform platform);
     void selectAllSendPlatforms();
+    bool tryCycleSendPlatform();
     void cycleSendPlatform();
 
     Split *const split_;
     ChannelView *const channelView_;
     QPointer<EmotePopup> emotePopup_;
+    QPointer<StreamDatabaseBadgePickerPopup> badgePickerPopup_;
     QPointer<InputCompletionPopup> inputCompletionPopup_;
+    QNetworkAccessManager badgeIdentityNetwork_;
+    QHash<QString, QNetworkReply *> pendingBadgeIdentityRequests_;
+    QSet<QString> failedBadgeIdentityChannels_;
+    int badgeIdentityRequestGeneration_ = 0;
 
     struct {
         // vbox for all components
@@ -184,6 +230,8 @@ protected:
         // input widgets
         QWidget *inputWrapper;
         QHBoxLayout *inputHbox;
+        QWidget *badgeButtonWrapper = nullptr;
+        QToolButton *badgeButton = nullptr;
         ResizingTextEdit *textEdit;
         QLabel *textEditLength;
         LabelButton *sendButton;
@@ -191,6 +239,8 @@ protected:
         QVBoxLayout *rightVbox;
         QHBoxLayout *buttonHbox;
         PlatformSwitchButton *platformButton;
+        SvgButton *predictionButton = nullptr;
+        SvgButton *pollButton = nullptr;
         SvgButton *emoteButton;
     } ui_;
 
@@ -203,6 +253,8 @@ protected:
     int prevIndex_ = 0;
     MessagePlatform selectedSendPlatform_ = MessagePlatform::AnyOrTwitch;
     bool selectedSendAllPlatforms_ = false;
+    std::vector<MessagePlatform> customSelectedSendPlatforms_;
+    std::vector<MessagePlatform> enabledSendPlatforms_;
 
     // Hidden denotes whether this split input should be hidden or not
     // This is used instead of the regular QWidget::hide/show because
@@ -225,6 +277,9 @@ protected:
     void setBackgroundColor(QColor newColor);
 
     QPropertyAnimation backgroundColorAnimation;
+    QVariantAnimation badgeButtonVisibilityAnimation_;
+    bool badgeButtonVisibilityInitialized_ = false;
+    bool badgeButtonShown_ = true;
 
     std::optional<bool> checkSpellingOverride_;
     bool shouldCheckSpelling() const;

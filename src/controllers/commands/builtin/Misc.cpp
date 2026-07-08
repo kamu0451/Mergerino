@@ -101,6 +101,13 @@ QString user(const CommandContext &ctx)
     QString userName = ctx.words[1];
     stripUserName(userName);
 
+    if (ctx.channel->isKickChannel())
+    {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://kick.com/%1").arg(userName)));
+        return "";
+    }
+
     QString channelName = ctx.channel->getName();
 
     if (ctx.words.size() > 2)
@@ -845,8 +852,7 @@ QString openUsercard(const CommandContext &ctx)
                "should be open.");
     }
 
-    auto *userPopup =
-        new UserInfoPopup(getSettings()->autoCloseUserPopup, currentSplit);
+    auto *userPopup = new UserInfoPopup(false, currentSplit);
     userPopup->setData(userName, channel);
     userPopup->moveTo(QCursor::pos(), widgets::BoundsChecking::CursorPosition);
     userPopup->show();

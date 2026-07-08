@@ -7,6 +7,7 @@
 #include "buttons/SvgButton.hpp"
 
 #include <QMouseEvent>
+#include <QShortcut>
 #include <QWindow>
 
 #include <chrono>
@@ -40,7 +41,7 @@ DraggablePopup::DraggablePopup(bool closeAutomatically, QWidget *parent)
     , dragTimer_(this)
 
 {
-    if (closeAutomatically)
+    if (this->closeAutomatically_)
     {
         this->windowDeactivateAction = WindowDeactivateAction::Delete;
     }
@@ -48,6 +49,16 @@ DraggablePopup::DraggablePopup(bool closeAutomatically, QWidget *parent)
     {
         this->setAttribute(Qt::WA_DeleteOnClose);
     }
+
+    auto *escapeShortcut = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+    escapeShortcut->setContext(Qt::WindowShortcut);
+    auto closeFromEscape = [this] {
+        this->closeFromEscapeShortcut();
+    };
+    QObject::connect(escapeShortcut, &QShortcut::activated, this,
+                     closeFromEscape);
+    QObject::connect(escapeShortcut, &QShortcut::activatedAmbiguously, this,
+                     closeFromEscape);
 
     // Update the window position according to this->requestedDragPos_ on every trigger
     this->dragTimer_.callOnTimeout(
@@ -112,6 +123,17 @@ void DraggablePopup::togglePinned()
         this->windowDeactivateAction = WindowDeactivateAction::Delete;
         this->pinButton_->setSource(this->pinDisabledSource_);
     }
+}
+
+void DraggablePopup::closeFromEscapeShortcut()
+{
+    if (this->closeAutomatically_)
+    {
+        this->deleteLater();
+        return;
+    }
+
+    this->close();
 }
 Button *DraggablePopup::createPinButton()
 {

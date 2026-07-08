@@ -32,6 +32,7 @@
 #include <QStringBuilder>
 #include <QUrl>
 
+#include <algorithm>
 #include <utility>
 
 namespace {
@@ -320,9 +321,30 @@ void Toasts::sendWindowsNotification(const QString &channelName,
             Toasts::findStringFromReaction(getSettings()->openFromToast);
         mode = mode.toLower();
 
-        templ.setTextField(
-            u"%1 \nClick to %2"_s.arg(channelTitle).arg(mode).toStdWString(),
-            WinToastTemplate::SecondLine);
+        QString sanitizedTitle;
+        sanitizedTitle.reserve(std::min<qsizetype>(channelTitle.size(), 180));
+        for (const auto &ch : channelTitle)
+        {
+            if (sanitizedTitle.size() >= 180)
+            {
+                break;
+            }
+            if (ch.isNull() || ch.isNonCharacter() || ch.isLowSurrogate() ||
+                ch.category() == QChar::Other_Control)
+            {
+                sanitizedTitle.append(u' ');
+                continue;
+            }
+            sanitizedTitle.append(ch);
+        }
+        sanitizedTitle = sanitizedTitle.simplified();
+
+        const auto secondLine = sanitizedTitle.isEmpty()
+                                    ? u"Click to %1"_s.arg(mode)
+                                    : u"%1 - Click to %2"_s.arg(sanitizedTitle,
+                                                                mode);
+        templ.setTextField(secondLine.toStdWString(),
+                           WinToastTemplate::SecondLine);
     }
 
     QString avatarPath;

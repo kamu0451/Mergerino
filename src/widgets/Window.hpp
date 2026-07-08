@@ -53,11 +53,16 @@ private:
     void addShortcuts() override;
     void addLayout();
     void onAccountSelected();
+    void updateTopMostTitlebarButton();
+    void updateBulkSelectionTitlebarButton();
     void addMenuBar();
 
     WindowType type_;
 
     SplitNotebook *notebook_;
+    SvgButton *bulkClearTitlebarButton_ = nullptr;
+    SvgButton *bulkDeleteTitlebarButton_ = nullptr;
+    SvgButton *topMostTitlebarButton_ = nullptr;
     AccountTitlebarButton *accountTitlebarButton_ = nullptr;
     SvgButton *userPlatformButton_ = nullptr;
     LabelButton *userLabel_ = nullptr;

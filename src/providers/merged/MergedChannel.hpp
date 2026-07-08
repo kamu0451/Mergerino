@@ -14,6 +14,7 @@
 #include <pajlada/signals/signalholder.hpp>
 #include <QColor>
 #include <QString>
+#include <QUrl>
 
 #include <deque>
 #include <memory>
@@ -47,6 +48,11 @@ struct MergedChannelConfig {
 class MergedChannel final : public Channel, public ChannelChatters
 {
 public:
+    struct BrowserUrl {
+        QString platformName;
+        QUrl url;
+    };
+
     explicit MergedChannel(MergedChannelConfig config);
     ~MergedChannel() override;
 
@@ -85,9 +91,13 @@ public:
     };
     std::optional<ViewerDelta> viewerCountDeltaPercent() const;
 
+    std::vector<BrowserUrl> liveStreamBrowserUrls() const;
+    std::vector<BrowserUrl> channelBrowserUrls() const;
+
     ChannelPtr twitchChannel() const;
     ChannelPtr kickChannel() const;
     YouTubeLiveChat *youtubeLiveChat() const;
+    static EmotePtr platformBadge(MessagePlatform platform);
 
     pajlada::Signals::NoArgSignal streamStatusChanged;
 
@@ -144,7 +154,6 @@ private:
     void refreshStatusText();
 
     static QColor platformAccent(MessagePlatform platform);
-    static EmotePtr platformBadge(MessagePlatform platform);
 
     void insertMirror(const QString &key, const MessagePtr &merged);
     void eraseMirror(const QString &key);

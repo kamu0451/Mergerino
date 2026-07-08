@@ -5,6 +5,7 @@
 #include <QString>
 #include <QWidget>
 
+#include <functional>
 #include <vector>
 
 namespace chatterino {
@@ -18,6 +19,9 @@ class MicroNotebook : public QWidget
 public:
     MicroNotebook(QWidget *parent = nullptr);
 
+    QSize sizeHint() const override;
+    QSize minimumSizeHint() const override;
+
     int addPage(QWidget *page, QString name);
 
     void select(QWidget *page);
@@ -25,6 +29,7 @@ public:
     bool isSelected(QWidget *page) const;
 
     void setShowHeader(bool showHeader);
+    void onCurrentChanged(QObject *receiver, std::function<void()> callback);
 
 private:
     struct Item {

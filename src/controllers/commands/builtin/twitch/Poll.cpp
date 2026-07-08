@@ -9,11 +9,21 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/commands/CommandContext.hpp"
 #include "controllers/commands/common/ChannelAction.hpp"
+#include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
+#include "providers/twitch/api/TwitchModerationAuth.hpp"
+#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "widgets/dialogs/CreatePollDialog.hpp"
+#include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
+
+#include <QDesktopServices>
+#include <QUrl>
 
 #include <chrono>
+#include <memory>
+#include <optional>
 
 namespace {
 
@@ -22,12 +32,111 @@ using namespace chatterino;
 constexpr auto MIN_POLL_DURATION = std::chrono::seconds(10);
 constexpr auto MAX_POLL_DURATION = std::chrono::seconds(1800);
 
+std::shared_ptr<TwitchChannel> resolveTwitchChannel(const ChannelPtr &channel)
+{
+    if (channel == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (auto twitch = std::dynamic_pointer_cast<TwitchChannel>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto merged = std::dynamic_pointer_cast<MergedChannel>(channel))
+    {
+        return std::dynamic_pointer_cast<TwitchChannel>(
+            merged->twitchChannel());
+    }
+
+    return nullptr;
+}
+
+void notifyPollsAndPredictionsChanged(const ChannelPtr &channel)
+{
+    if (auto twitch = resolveTwitchChannel(channel))
+    {
+        twitch->streamStatusChanged.invoke();
+    }
+}
+
+bool hasBroadcasterPollToken(const TwitchChannel *channel)
+{
+    if (channel == nullptr)
+    {
+        return false;
+    }
+
+    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+    if (currentUser == nullptr || currentUser->isAnon())
+    {
+        return false;
+    }
+
+    const auto roomId = channel->roomId();
+    if (!roomId.isEmpty())
+    {
+        return roomId == currentUser->getUserId();
+    }
+
+    return channel->isBroadcaster();
+}
+
+QUrl pollPopoutUrl(const TwitchChannel &channel)
+{
+    return QUrl(QStringLiteral("https://www.twitch.tv/popout/%1/poll")
+                    .arg(channel.getName()));
+}
+
 }  // namespace
 
 namespace chatterino::commands {
 
 QString createPoll(const CommandContext &ctx)
 {
+    if (ctx.words.size() <= 1)
+    {
+        if (ctx.twitchChannel == nullptr)
+        {
+            const auto err = QStringLiteral(
+                "The /poll command only works in Twitch channels");
+            if (ctx.channel != nullptr)
+            {
+                ctx.channel->addSystemMessage(err);
+            }
+            else
+            {
+                qCWarning(chatterinoCommands)
+                    << "Invalid command context:" << err;
+            }
+            return "";
+        }
+
+        auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+        if (currentUser->isAnon())
+        {
+            ctx.channel->addSystemMessage(
+                "You must be logged in to create a poll!");
+            return "";
+        }
+
+        if (hasBroadcasterPollToken(ctx.twitchChannel))
+        {
+            CreatePollDialog::showDialog(ctx.channel, *ctx.twitchChannel);
+        }
+        else if (ctx.twitchChannel->isMod())
+        {
+            QDesktopServices::openUrl(pollPopoutUrl(*ctx.twitchChannel));
+        }
+        else
+        {
+            ctx.channel->addSystemMessage(
+                "Only the broadcaster or a moderator can create a poll.");
+        }
+        return "";
+    }
+
     const auto command = QStringLiteral("/poll");
     const auto usage = QStringLiteral(
         R"(Usage: "/poll --title "<title>" --duration <duration>[time unit] --choice "<choice1>" --choice "<choice2>" [options...]" - Creates a poll for users to vote among the defined options. Title may not exceed 60 characters. There must be between two and five poll choices. Duration must be a positive integer; time unit (optional, default=s) must be one of s, m; maximum duration is 30 minutes. Options: --points <points> to allow spending the specified channel points for each additional vote.)");
@@ -49,7 +158,7 @@ QString createPoll(const CommandContext &ctx)
     }
 
     auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
-    if (currentUser->isAnon())
+    if (currentUser == nullptr || currentUser->isAnon())
     {
         ctx.channel->addSystemMessage(
             "You must be logged in to create a poll!");
@@ -57,17 +166,56 @@ QString createPoll(const CommandContext &ctx)
     }
 
     const auto &poll = action.value();
-    getHelix()->createPoll(
-        poll.broadcasterID, poll.title, poll.choices, poll.duration,
-        poll.pointsPerVote,
+    if (hasBroadcasterPollToken(ctx.twitchChannel))
+    {
+        getHelix()->createPoll(
+            poll.broadcasterID, poll.title, poll.choices, poll.duration,
+            poll.pointsPerVote,
+            [channel = ctx.channel, poll] {
+                channel->addSystemMessage(
+                    QString("Created poll: '%1'").arg(poll.title));
+                notifyPollsAndPredictionsChanged(channel);
+            },
+            [channel = ctx.channel](const auto &error) {
+                channel->addSystemMessage("Failed to create poll - " + error);
+            });
+        return "";
+    }
+
+    if (!ctx.twitchChannel->isMod())
+    {
+        ctx.channel->addSystemMessage(
+            "Only the broadcaster or a moderator can create a poll.");
+        return "";
+    }
+
+    QString authError;
+    const auto moderationAccount =
+        TwitchModerationAuth::resolveForCurrentUser(currentUser->getUserId(),
+                                                    &authError);
+    if (!moderationAccount.isValid())
+    {
+        ctx.channel->addSystemMessage("Failed to create poll - " + authError);
+        return "";
+    }
+
+    TwitchWebApi::startPoll(
+        poll.broadcasterID, poll.title, poll.choices,
+        static_cast<int>(poll.duration.count()),
+        poll.pointsPerVote > 0 ? std::optional<int>{poll.pointsPerVote}
+                               : std::nullopt,
+        moderationAccount.clientId, moderationAccount.oauthToken,
         [channel = ctx.channel, poll] {
+            TwitchPollsAndPredictionsBar::rememberLocalPoll(
+                poll.broadcasterID, poll.title, poll.choices,
+                static_cast<int>(poll.duration.count()));
             channel->addSystemMessage(
                 QString("Created poll: '%1'").arg(poll.title));
+            notifyPollsAndPredictionsChanged(channel);
         },
         [channel = ctx.channel](const auto &error) {
             channel->addSystemMessage("Failed to create poll - " + error);
         });
-
     return "";
 }
 
@@ -115,6 +263,8 @@ QString endPoll(const CommandContext &ctx)
             getHelix()->endPoll(
                 roomId, poll.id, false,
                 [channel](const HelixPoll &data) {
+                    notifyPollsAndPredictionsChanged(channel);
+
                     // find most popular choice
                     HelixPollChoice winner = data.choices.front();
                     int totalVotes = 0;
@@ -218,6 +368,7 @@ QString cancelPoll(const CommandContext &ctx)
                 [channel](const HelixPoll &data) {
                     channel->addSystemMessage(
                         QString("Canceled poll: '%1'").arg(data.title));
+                    notifyPollsAndPredictionsChanged(channel);
                 },
                 [channel](const auto &error) {
                     channel->addSystemMessage("Failed to cancel the poll - " +

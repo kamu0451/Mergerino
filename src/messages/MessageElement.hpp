@@ -14,6 +14,8 @@
 
 #include <magic_enum/magic_enum.hpp>
 #include <pajlada/signals/signalholder.hpp>
+#include <QColor>
+#include <QDateTime>
 #include <QRect>
 #include <QString>
 #include <QTime>
@@ -25,6 +27,8 @@
 class QJsonObject;
 
 namespace chatterino {
+enum class ActivityTimeDisplayMode : std::uint8_t;
+
 class Channel;
 struct MessageLayoutContainer;
 class MessageLayoutElement;
@@ -48,8 +52,6 @@ enum class MessageElementFlag : int64_t {
     EmoteImage = (1LL << 4),
     EmoteText = (1LL << 5),
     Emote = EmoteImage | EmoteText,
-
-    // unused: (1LL << 7),
 
     ChannelPointReward = (1LL << 8),
     ChannelPointRewardImage = ChannelPointReward | EmoteImage,
@@ -120,9 +122,13 @@ enum class MessageElementFlag : int64_t {
     // - FFZ donator badge
     BadgeFfz = (1LL << 19),
 
+    // Slot 10: Kick
+    // - Chat level badge
+    BadgeKickLevel = (1LL << 7),
+
     Badges = BadgeGlobalAuthority | BadgePredictions | BadgeChannelAuthority |
              BadgeSubscription | BadgeVanity | BadgeChatterino | BadgeSevenTV |
-             BadgeFfz | BadgeSharedChannel | BadgeBttv,
+             BadgeFfz | BadgeSharedChannel | BadgeBttv | BadgeKickLevel,
 
     ChannelName = (1LL << 20),
 
@@ -667,6 +673,35 @@ private:
     QTime time_;
     std::unique_ptr<TextElement> element_;
     QString format_;
+};
+
+class ActivityTimeElement : public MessageElement
+{
+public:
+    static constexpr std::string_view TYPE = "activity-time";
+
+    ActivityTimeElement(QDateTime time, ActivityTimeDisplayMode mode);
+    ~ActivityTimeElement() override = default;
+
+    void addToContainer(MessageLayoutContainer &container,
+                        const MessageLayoutContext &ctx) override;
+
+    MessageElement *setLink(const Link &link) override;
+
+    std::unique_ptr<MessageElement> clone() const override;
+
+    QJsonObject toJson() const override;
+    std::string_view type() const override;
+
+private:
+    QString formatTime() const;
+    void updateTextElement();
+
+    QDateTime time_;
+    ActivityTimeDisplayMode mode_;
+    std::unique_ptr<TextElement> element_;
+    QString text_;
+    QColor color_;
 };
 
 // adds all the custom moderation buttons, adds a variable amount of items

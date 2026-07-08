@@ -10,12 +10,29 @@
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
+#include "providers/twitch/api/TwitchWebApi.hpp"
+#include "providers/twitch/api/TwitchModerationAuth.hpp"
+#include "singletons/Paths.hpp"
+#include "util/Clipboard.hpp"
 #include "util/CancellationToken.hpp"
 #include "util/QMagicEnum.hpp"
 
+#ifdef USEWINSDK
+#    include <Windows.h>
+#endif
+
 #include <magic_enum/magic_enum.hpp>
+#include <QFile>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
+#include <QSaveFile>
 #include <QStringBuilder>
+#include <QUrl>
+#include <QUrlQuery>
+
+#include <algorithm>
 
 namespace {
 
@@ -24,6 +41,34 @@ using namespace chatterino;
 constexpr auto NUM_MODERATORS_TO_FETCH_PER_REQUEST = 100;
 
 constexpr auto NUM_CHATTERS_TO_FETCH = 1000;
+
+std::unordered_set<QString> parseChatterGroup(const QJsonObject &chatters,
+                                              const QString &key)
+{
+    std::unordered_set<QString> users;
+
+    const auto values = chatters.value(key).toArray();
+    for (const auto &value : values)
+    {
+        QString user;
+        if (value.isObject())
+        {
+            user = value.toObject().value(QStringLiteral("login")).toString();
+        }
+        else
+        {
+            user = value.toString();
+        }
+
+        user = user.trimmed().toLower();
+        if (!user.isEmpty())
+        {
+            users.insert(user);
+        }
+    }
+
+    return users;
+}
 
 }  // namespace
 
@@ -43,6 +88,32 @@ HelixChatters::HelixChatters(const QJsonObject &jsonObject)
     {
         auto userLogin = chatter.toObject().value("user_login").toString();
         this->chatters.insert(userLogin);
+    }
+}
+
+HelixChatterGroups::HelixChatterGroups(const QJsonObject &jsonObject)
+    : broadcaster(parseChatterGroup(jsonObject.value("chatters").toObject(),
+                                    QStringLiteral("broadcaster")))
+    , vips(parseChatterGroup(jsonObject.value("chatters").toObject(),
+                             QStringLiteral("vips")))
+    , moderators(parseChatterGroup(jsonObject.value("chatters").toObject(),
+                                   QStringLiteral("moderators")))
+    , staff(parseChatterGroup(jsonObject.value("chatters").toObject(),
+                              QStringLiteral("staff")))
+    , admins(parseChatterGroup(jsonObject.value("chatters").toObject(),
+                               QStringLiteral("admins")))
+    , globalMods(parseChatterGroup(jsonObject.value("chatters").toObject(),
+                                   QStringLiteral("global_mods")))
+    , viewers(parseChatterGroup(jsonObject.value("chatters").toObject(),
+                                QStringLiteral("viewers")))
+    , total(jsonObject.value("chatter_count").toInt())
+{
+    const auto chatters = jsonObject.value("chatters").toObject();
+    this->broadcaster.merge(parseChatterGroup(chatters,
+                                             QStringLiteral("broadcasters")));
+    if (this->total == 0)
+    {
+        this->total = chatters.value(QStringLiteral("count")).toInt();
     }
 }
 
@@ -2862,7 +2933,7 @@ void Helix::getGlobalBadges(
             switch (*result.status())
             {
                 case 401: {
-                    failureCallback(Error::Forwarded, message);
+                    failureCallback(Error::UserNotAuthenticated, message);
                 }
                 break;
 
@@ -2913,9 +2984,13 @@ void Helix::getChannelBadges(
 
             switch (*result.status())
             {
-                case 400:
-                case 401: {
+                case 400: {
                     failureCallback(Error::Forwarded, message);
+                }
+                break;
+
+                case 401: {
+                    failureCallback(Error::UserNotAuthenticated, message);
                 }
                 break;
 
@@ -3933,6 +4008,2140 @@ void Helix::paginate(
     this->makeGet(url, baseQuery)
         .onSuccess(std::move(onSuccessCb))
         .onError(std::move(onError))
+        .execute();
+}
+
+namespace {
+
+constexpr auto TWITCH_WEB_GQL_CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko";
+constexpr auto TWITCH_WEB_GQL_CLIENT_VERSION =
+    "ef928475-9403-42f2-8a34-55784bd08e16";
+constexpr auto TWITCH_WEB_GQL_USER_AGENT =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36";
+constexpr auto TWITCH_TV_CLIENT_ID = "ue6666qo983tsx6so1t0vnawi233wa";
+constexpr auto TWITCH_TV_USER_AGENT =
+    "Mozilla/5.0 (Linux; Android 7.1; Smart Box C1) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36";
+constexpr auto TWITCH_TV_ORIGIN = "https://android.tv.twitch.tv";
+constexpr auto TWITCH_TV_REFERER = "https://android.tv.twitch.tv/";
+constexpr auto TWITCH_TV_SCOPES =
+    "chat:read chat:edit channel:moderate channel:manage:polls "
+    "channel:manage:predictions moderator:manage:announcements "
+    "moderator:manage:chat_messages moderator:manage:chat_settings "
+    "moderator:read:chat_settings moderator:read:followers";
+constexpr auto CREATE_POLL_HASH =
+    "4b1461a13fe166a59044961db192747d606f71a89abc3bfdecf79fe862d205cf";
+constexpr auto CREATE_PREDICTION_HASH =
+    "92268878ac4abe722bcdcba85a4e43acdd7a99d86b05851759e1d8f385cc32ea";
+constexpr int TWITCH_WEB_GQL_TIMEOUT_MS = 15 * 1000;
+constexpr int TWITCH_TV_AUTH_TIMEOUT_MS = 20 * 1000;
+constexpr int TWITCH_AUTH_TOKEN_MAX_LENGTH = 4096;
+
+QString moderationAuthSidecarPath()
+{
+    return getApp()->getPaths().settingsDirectory +
+           QStringLiteral("/twitch-moderation-auth.json");
+}
+
+QJsonObject readJsonObjectFile(const QString &path, bool *found = nullptr)
+{
+    QFile file(path);
+    if (found != nullptr)
+    {
+        *found = file.exists();
+    }
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        return {};
+    }
+
+    const auto document = QJsonDocument::fromJson(file.readAll());
+    if (!document.isObject())
+    {
+        return {};
+    }
+
+    return document.object();
+}
+
+QJsonObject readModerationAuthSidecarObject(bool *found = nullptr)
+{
+    return readJsonObjectFile(moderationAuthSidecarPath(), found);
+}
+
+pajlada::Signals::NoArgSignal &moderationAuthAccountChangedSignal()
+{
+    static pajlada::Signals::NoArgSignal signal;
+    return signal;
+}
+
+QJsonObject readModerationAuthSettingsObject()
+{
+    const auto settingsPath =
+        getApp()->getPaths().settingsDirectory + QStringLiteral("/settings.json");
+    const auto root = readJsonObjectFile(settingsPath);
+
+    const auto object = root.value(QStringLiteral("misc"))
+                            .toObject()
+                            .value(QStringLiteral("twitch"))
+                            .toObject()
+                            .value(QStringLiteral("moderationAuth"))
+                            .toObject();
+    return object;
+}
+
+QString readModerationAuthString(const QJsonObject &object, const QString &key)
+{
+    return object.value(key).toString().trimmed();
+}
+
+QString stripTwitchOAuthPrefix(const QString &oauthToken)
+{
+    auto token = oauthToken.trimmed();
+    for (const auto &prefix : {
+             QStringLiteral("OAuth "),
+             QStringLiteral("Bearer "),
+             QStringLiteral("oauth:"),
+         })
+    {
+        if (token.startsWith(prefix, Qt::CaseInsensitive))
+        {
+            token = token.mid(prefix.size()).trimmed();
+            break;
+        }
+    }
+
+    return token;
+}
+
+QString authResponseText(const NetworkResult &result)
+{
+    const auto body = QString::fromUtf8(result.getData()).trimmed();
+    if (!body.isEmpty())
+    {
+        return body.left(200);
+    }
+
+    return result.formatError();
+}
+
+QString moderationAuthClipboardText()
+{
+#ifdef USEWINSDK
+    if (!OpenClipboard(nullptr))
+    {
+        return {};
+    }
+
+    struct CloseClipboardGuard {
+        ~CloseClipboardGuard()
+        {
+            CloseClipboard();
+        }
+    } guard;
+
+    auto *handle = GetClipboardData(CF_UNICODETEXT);
+    if (handle == nullptr)
+    {
+        return {};
+    }
+
+    auto *text = static_cast<const wchar_t *>(GlobalLock(handle));
+    if (text == nullptr)
+    {
+        return {};
+    }
+
+    auto result = QString::fromWCharArray(text);
+    GlobalUnlock(handle);
+    return result;
+#else
+    return getClipboardText();
+#endif
+}
+
+QString moderationAuthClipboardScript()
+{
+    return QStringLiteral(R"MERGERINO_JS((async () => {
+  const normalize = value => {
+    if (!value) {
+      return '';
+    }
+
+    let text = String(value).trim();
+    return String(text || '')
+      .replace(/^(OAuth|Bearer)\s+/i, '')
+      .replace(/^oauth:/i, '')
+      .trim()
+      .match(/^[A-Za-z0-9._~+/=-]{20,4096}$/)?.[0] || '';
+  };
+
+  const extractFromObject = (value, depth = 0) => {
+    if (!value || depth > 8) {
+      return '';
+    }
+
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (text.startsWith('{') || text.startsWith('[')) {
+        try {
+          const token = extractFromObject(JSON.parse(text), depth + 1);
+          if (token) {
+            return token;
+          }
+        } catch (_) {
+        }
+      }
+
+      return normalize(text);
+    }
+
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        const token = extractFromObject(entry, depth + 1);
+        if (token) {
+          return token;
+        }
+      }
+      return '';
+    }
+
+    if (typeof value === 'object') {
+      const keys = Object.keys(value).sort((a, b) => {
+        const score = key => {
+          const lower = key.toLowerCase();
+          return (lower.includes('token') ? 4 : 0) +
+            (lower.includes('auth') || lower.includes('oauth') ? 3 : 0) +
+            (lower.includes('access') ? 2 : 0);
+        };
+        return score(b) - score(a);
+      });
+
+      for (const key of keys) {
+        const token = extractFromObject(value[key], depth + 1);
+        if (token) {
+          return token;
+        }
+      }
+    }
+
+    return '';
+  };
+
+  const clean = value => extractFromObject(value);
+  const clientId = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+  const randomDeviceId = () => {
+    const fallback = () => Math.random().toString(16).slice(2) +
+      Math.random().toString(16).slice(2);
+    try {
+      if (crypto && crypto.randomUUID) {
+        return crypto.randomUUID().replace(/-/g, '');
+      }
+    } catch (_) {
+    }
+    return fallback().replace(/[^A-Za-z0-9]/g, '').slice(0, 32);
+  };
+  const storageValue = key => {
+    try {
+      return localStorage.getItem(key) || '';
+    } catch (_) {
+      return '';
+    }
+  };
+  const deviceId = clean(storageValue('twilight.deviceId')) ||
+    clean(storageValue('twilight.uniqueID')) ||
+    clean(storageValue('unique_id')) ||
+    randomDeviceId();
+  const configureIntegrity = () => {
+    try {
+      if (window.KPSDK && window.KPSDK.configure) {
+        window.KPSDK.configure([{
+          protocol: 'https:',
+          method: 'POST',
+          domain: 'gql.twitch.tv',
+          path: '/integrity',
+        }]);
+      }
+    } catch (_) {
+    }
+  };
+  const fetchIntegrity = async token => {
+    try {
+      configureIntegrity();
+      const headers = {
+        'Client-ID': clientId,
+        'X-Device-Id': deviceId,
+      };
+      if (token) {
+        headers.Authorization = `OAuth ${token}`;
+      }
+      const response = await fetch('https://gql.twitch.tv/integrity', {
+        method: 'POST',
+        mode: 'cors',
+        credentials: 'omit',
+        headers,
+      });
+      if (!response.ok) {
+        return '';
+      }
+      const body = await response.json();
+      return clean(body && body.token);
+    } catch (_) {
+      return '';
+    }
+  };
+  const cookieToken = () => {
+    const cookies = String(document.cookie || '').split(';');
+    const preferred = [
+      'auth-token',
+      'api_token',
+      'twilight-user',
+      'persistent',
+    ];
+
+    for (const name of preferred) {
+      const prefix = `${name}=`;
+      const entry = cookies.map(cookie => cookie.trim())
+        .find(cookie => cookie.startsWith(prefix));
+      if (!entry) {
+        continue;
+      }
+
+      const token = clean(decodeURIComponent(entry.slice(prefix.length)));
+      if (token) {
+        return token;
+      }
+    }
+
+    for (const cookie of cookies) {
+      const [name, ...parts] = cookie.trim().split('=');
+      const lower = String(name || '').toLowerCase();
+      if (!lower.includes('token') && !lower.includes('auth') &&
+          !lower.includes('twilight')) {
+        continue;
+      }
+
+      const token = clean(decodeURIComponent(parts.join('=')));
+      if (token) {
+        return token;
+      }
+    }
+
+    return '';
+  };
+
+  const safeStorageGet = (storage, key) => {
+    try {
+      return storage.getItem(key);
+    } catch (_) {
+      return '';
+    }
+  };
+
+  const storages = [];
+  try {
+    storages.push(localStorage);
+  } catch (_) {
+  }
+  try {
+    storages.push(sessionStorage);
+  } catch (_) {
+  }
+
+  let token = cookieToken();
+  if (!token) {
+    const preferredKeys = [
+      'twilight.authToken',
+      'twilight-user',
+      'auth-token',
+      'token',
+      'access_token',
+    ];
+    for (const storage of storages) {
+      for (const key of preferredKeys) {
+        token = clean(safeStorageGet(storage, key));
+        if (token) {
+          break;
+        }
+      }
+      if (token) {
+        break;
+      }
+    }
+  }
+
+  if (!token) {
+    for (const storage of storages) {
+      let length = 0;
+      try {
+        length = storage.length;
+      } catch (_) {
+        length = 0;
+      }
+      for (let i = 0; i < length; ++i) {
+        let key = '';
+        try {
+          key = storage.key(i) || '';
+        } catch (_) {
+        }
+        const lower = key.toLowerCase();
+        if (lower.includes('token') &&
+            (lower.includes('auth') || lower.includes('oauth') ||
+             lower.includes('access') || lower.includes('twilight'))) {
+          token = clean(safeStorageGet(storage, key));
+          if (token) {
+            break;
+          }
+        }
+      }
+      if (token) {
+        break;
+      }
+    }
+  }
+
+  if (!token) {
+    alert('Mergerino could not find a Twitch auth token in cookies or browser storage. Make sure you are logged in on twitch.tv, refresh, and try again.');
+    return;
+  }
+
+  const integrityToken = await fetchIntegrity(token);
+  const payload = JSON.stringify({
+    mergerino: 'twitch-browser-helper',
+    version: 2,
+    token,
+    clientId,
+    deviceId,
+    clientIntegrity: integrityToken,
+  });
+  const done = () => alert(integrityToken ?
+    'Mergerino token copied. Return to Mergerino and click Paste Token.' :
+    'Mergerino token copied, but Twitch did not return an integrity token. Return to Mergerino and click Paste Token.');
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(payload).then(done).catch(() => {
+      prompt('Copy this token into Mergerino', payload);
+    });
+    return;
+  }
+
+  prompt('Copy this token into Mergerino', payload);
+})())MERGERINO_JS");
+}
+
+void saveModerationAccount(const TwitchModerationAuth::Account &account)
+{
+    QSaveFile file(moderationAuthSidecarPath());
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+    {
+        return;
+    }
+
+    QJsonObject object;
+    object.insert(QStringLiteral("token"), account.oauthToken);
+    object.insert(QStringLiteral("clientId"), account.clientId);
+    object.insert(QStringLiteral("clientIntegrity"), account.clientIntegrity);
+    object.insert(QStringLiteral("deviceId"), account.deviceId);
+    object.insert(QStringLiteral("userId"), account.userId);
+    object.insert(QStringLiteral("login"), account.login);
+    object.insert(QStringLiteral("displayName"), account.displayName);
+    file.write(QJsonDocument(object).toJson(QJsonDocument::Compact));
+    file.commit();
+}
+
+TwitchModerationAuth::Account accountFromModerationAuthObject(
+    const QJsonObject &moderationAuth)
+{
+    auto clientId = readModerationAuthString(moderationAuth,
+                                             QStringLiteral("clientId"));
+    if (clientId.isEmpty())
+    {
+        clientId = QString::fromLatin1(TWITCH_WEB_GQL_CLIENT_ID);
+    }
+
+    auto token = TwitchModerationAuth::normalizeToken(
+        readModerationAuthString(moderationAuth, QStringLiteral("token")));
+
+    auto clientIntegrity =
+        readModerationAuthString(moderationAuth,
+                                 QStringLiteral("clientIntegrity"));
+
+    auto deviceId =
+        readModerationAuthString(moderationAuth, QStringLiteral("deviceId"));
+
+    auto userId =
+        readModerationAuthString(moderationAuth, QStringLiteral("userId"));
+
+    auto login =
+        readModerationAuthString(moderationAuth, QStringLiteral("login"))
+            .toLower();
+
+    auto displayName =
+        readModerationAuthString(moderationAuth,
+                                 QStringLiteral("displayName"));
+
+    return {
+        clientId,
+        token,
+        clientIntegrity,
+        deviceId,
+        userId,
+        login,
+        displayName,
+    };
+}
+
+void clearModerationAccount()
+{
+    QSaveFile file(moderationAuthSidecarPath());
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
+    {
+        return;
+    }
+
+    file.write(QJsonDocument(QJsonObject{}).toJson(QJsonDocument::Compact));
+    file.commit();
+}
+
+QString compactUuid()
+{
+    auto id = generateUuid();
+    id.remove(QLatin1Char('{'));
+    id.remove(QLatin1Char('}'));
+    id.remove(QLatin1Char('-'));
+    return id;
+}
+
+QString webGqlDeviceId()
+{
+    static const auto deviceId = compactUuid();
+    return deviceId;
+}
+
+QString webGqlSessionId()
+{
+    static const auto sessionId = compactUuid();
+    return sessionId;
+}
+
+QString predictionOutcomeColor(int index, int outcomeCount)
+{
+    if (outcomeCount == 2)
+    {
+        return index == 0 ? QStringLiteral("BLUE") : QStringLiteral("PINK");
+    }
+
+    return QStringLiteral("BLUE");
+}
+
+QJsonObject firstWebGqlEnvelope(const QJsonValue &root)
+{
+    if (root.isObject())
+    {
+        return root.toObject();
+    }
+
+    const auto batch = root.toArray();
+    if (!batch.isEmpty() && batch.first().isObject())
+    {
+        return batch.first().toObject();
+    }
+
+    return {};
+}
+
+QString firstWebGqlError(const QJsonObject &envelope)
+{
+    const auto errors = envelope.value(QStringLiteral("errors")).toArray();
+    for (const auto &errorValue : errors)
+    {
+        const auto error = errorValue.toObject();
+        const auto message = error.value(QStringLiteral("message")).toString();
+        if (!message.isEmpty())
+        {
+            return message;
+        }
+    }
+
+    return {};
+}
+
+QString firstWebGqlError(const QJsonValue &root)
+{
+    if (!root.isArray())
+    {
+        return firstWebGqlError(firstWebGqlEnvelope(root));
+    }
+
+    for (const auto &envelopeValue : root.toArray())
+    {
+        const auto message = firstWebGqlError(envelopeValue.toObject());
+        if (!message.isEmpty())
+        {
+            return message;
+        }
+    }
+    return {};
+}
+
+QJsonObject webGqlData(const QJsonValue &root)
+{
+    return firstWebGqlEnvelope(root).value(QStringLiteral("data")).toObject();
+}
+
+QString webGqlMutationErrorText(const QJsonObject &payload,
+                                const QString &fallback)
+{
+    const auto value = payload.value(QStringLiteral("error"));
+    if (value.isUndefined() || value.isNull())
+    {
+        return {};
+    }
+    if (value.isString())
+    {
+        return value.toString().trimmed();
+    }
+    if (!value.isObject())
+    {
+        return fallback;
+    }
+
+    const auto obj = value.toObject();
+    for (const auto &key : {
+             QStringLiteral("message"),
+             QStringLiteral("code"),
+             QStringLiteral("reason"),
+         })
+    {
+        const auto text = obj.value(key).toString().trimmed();
+        if (!text.isEmpty())
+        {
+            return text;
+        }
+    }
+
+    return fallback;
+}
+
+NetworkRequest makeTwitchWebGqlRequest(const QString &operationName,
+                                       const char *operationHash,
+                                       const QJsonObject &variables,
+                                       const QString &oauthClient,
+                                       const QString &oauthToken)
+{
+    (void)oauthClient;
+
+    const QJsonObject persistedQuery{
+        {QStringLiteral("version"), 1},
+        {QStringLiteral("sha256Hash"), QString::fromLatin1(operationHash)},
+    };
+    const QJsonObject payload{
+        {QStringLiteral("operationName"), operationName},
+        {QStringLiteral("variables"), variables},
+        {QStringLiteral("extensions"),
+         QJsonObject{{QStringLiteral("persistedQuery"), persistedQuery}}},
+    };
+
+    auto request =
+        NetworkRequest("https://gql.twitch.tv/gql", NetworkRequestType::Post)
+            .timeout(TWITCH_WEB_GQL_TIMEOUT_MS)
+            .header("Client-Id", TWITCH_WEB_GQL_CLIENT_ID)
+            .header("Client-Session-Id", webGqlSessionId())
+            .header("Client-Version", TWITCH_WEB_GQL_CLIENT_VERSION)
+            .header("User-Agent", TWITCH_WEB_GQL_USER_AGENT)
+            .header("X-Device-Id", webGqlDeviceId())
+            .json(QJsonArray{payload});
+
+    const auto token = stripTwitchOAuthPrefix(oauthToken);
+    if (!token.isEmpty())
+    {
+        request = std::move(request).header("Authorization", "OAuth " + token);
+    }
+
+    return request;
+}
+
+NetworkRequest makeTwitchWebGqlDocumentRequest(const QString &operationName,
+                                               const QString &query,
+                                               const QJsonObject &variables,
+                                               const QString &oauthClient,
+                                               const QString &oauthToken,
+                                               const QString &clientIntegrity =
+                                                   QString(),
+                                               const QString &deviceId =
+                                                   QString())
+{
+    (void)oauthClient;
+
+    const QJsonObject payload{
+        {QStringLiteral("operationName"), operationName},
+        {QStringLiteral("variables"), variables},
+        {QStringLiteral("query"), query},
+    };
+
+    const auto requestDeviceId =
+        deviceId.trimmed().isEmpty() ? webGqlDeviceId() : deviceId.trimmed();
+    auto request =
+        NetworkRequest("https://gql.twitch.tv/gql", NetworkRequestType::Post)
+            .timeout(TWITCH_WEB_GQL_TIMEOUT_MS)
+            .header("Client-Id", TWITCH_WEB_GQL_CLIENT_ID)
+            .header("Client-Session-Id", webGqlSessionId())
+            .header("Client-Version", TWITCH_WEB_GQL_CLIENT_VERSION)
+            .header("User-Agent", TWITCH_WEB_GQL_USER_AGENT)
+            .header("X-Device-Id", requestDeviceId)
+            .json(QJsonArray{payload});
+
+    const auto integrity = clientIntegrity.trimmed();
+    if (!integrity.isEmpty())
+    {
+        request = std::move(request).header("Client-Integrity", integrity);
+    }
+
+    const auto token = stripTwitchOAuthPrefix(oauthToken);
+    if (!token.isEmpty())
+    {
+        request = std::move(request).header("Authorization", "OAuth " + token);
+    }
+
+    return request;
+}
+
+bool isTwitchIntegrityError(const QString &message)
+{
+    const auto lower = message.toLower();
+    return lower.contains(QStringLiteral("integrity")) ||
+           lower == QStringLiteral("failed");
+}
+
+QString twitchBrowserHelperTokenMessage()
+{
+    return QStringLiteral(
+        "Twitch rejected the browser helper token. Re-copy the Twitch mod "
+        "actions helper token in Settings -> Accounts.");
+}
+
+void fetchTwitchWebIntegrity(
+    const QString &oauthToken, const QString &deviceId,
+    std::function<void(const QString &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    const auto token = stripTwitchOAuthPrefix(oauthToken);
+    const auto requestDeviceId =
+        deviceId.trimmed().isEmpty() ? webGqlDeviceId() : deviceId.trimmed();
+
+    auto request =
+        NetworkRequest("https://gql.twitch.tv/integrity", NetworkRequestType::Post)
+            .timeout(TWITCH_WEB_GQL_TIMEOUT_MS)
+            .header("Accept", "*/*")
+            .header("Client-ID", TWITCH_WEB_GQL_CLIENT_ID)
+            .header("Origin", "https://www.twitch.tv")
+            .header("Referer", "https://www.twitch.tv/")
+            .header("User-Agent", TWITCH_WEB_GQL_USER_AGENT)
+            .header("X-Device-Id", requestDeviceId);
+
+    if (!token.isEmpty())
+    {
+        request = std::move(request).header("Authorization", "OAuth " + token);
+    }
+
+    std::move(request)
+        .onSuccess([successCallback = std::move(successCallback),
+                    failureCallback](const NetworkResult &result) {
+            const auto token =
+                result.parseJson().value(QStringLiteral("token")).toString();
+            if (token.trimmed().isEmpty())
+            {
+                failureCallback(QStringLiteral(
+                    "Twitch did not return a browser integrity token."));
+                return;
+            }
+
+            successCallback(token.trimmed());
+        })
+        .onError([failureCallback = std::move(failureCallback)](
+                     const NetworkResult &result) {
+            auto message =
+                QStringLiteral("Network Error: ") + result.formatError();
+            const auto body = QString::fromUtf8(result.getData()).trimmed();
+            if (!body.isEmpty())
+            {
+                message += QStringLiteral(" - ") + body.left(200);
+            }
+            failureCallback(message);
+        })
+        .execute();
+}
+
+void rememberTwitchWebIntegrity(const QString &oauthToken,
+                                const QString &deviceId,
+                                const QString &clientIntegrity)
+{
+    const auto token = stripTwitchOAuthPrefix(oauthToken);
+    const auto integrity = clientIntegrity.trimmed();
+    if (token.isEmpty())
+    {
+        return;
+    }
+
+    auto account = TwitchModerationAuth::savedAccount();
+    if (stripTwitchOAuthPrefix(account.oauthToken) != token)
+    {
+        return;
+    }
+
+    const auto originalIntegrity = account.clientIntegrity;
+    const auto originalDeviceId = account.deviceId;
+    account.clientIntegrity = integrity;
+    if (!deviceId.trimmed().isEmpty())
+    {
+        account.deviceId = deviceId.trimmed();
+    }
+    else if (account.deviceId.trimmed().isEmpty())
+    {
+        account.deviceId = webGqlDeviceId();
+    }
+
+    if (account.clientIntegrity == originalIntegrity &&
+        account.deviceId == originalDeviceId)
+    {
+        return;
+    }
+
+    TwitchModerationAuth::saveAccount(account);
+}
+
+QString twitchWebHelixClientID(const QString &oauthClient)
+{
+    const auto clientID = oauthClient.trimmed();
+    if (!clientID.isEmpty())
+    {
+        return clientID;
+    }
+
+    return QString::fromLatin1(TWITCH_WEB_GQL_CLIENT_ID);
+}
+
+NetworkRequest makeTwitchWebHelixRequest(const QString &path,
+                                         const QUrlQuery &query,
+                                         NetworkRequestType type,
+                                         const QString &oauthClient,
+                                         const QString &oauthToken)
+{
+    QUrl url(QStringLiteral("https://api.twitch.tv/helix/%1").arg(path));
+    url.setQuery(query);
+
+    return NetworkRequest(url, type)
+        .timeout(TWITCH_WEB_GQL_TIMEOUT_MS)
+        .header("Accept", "application/json")
+        .header("Client-ID", twitchWebHelixClientID(oauthClient))
+        .header("Authorization",
+                "Bearer " + stripTwitchOAuthPrefix(oauthToken))
+        .header("User-Agent", TWITCH_WEB_GQL_USER_AGENT);
+}
+
+QString webGqlNetworkError(const NetworkResult &result)
+{
+    const auto body = QString::fromUtf8(result.getData()).trimmed();
+    const auto lowerBody = body.toLower();
+    if (lowerBody.contains(QStringLiteral("authorization")) &&
+        lowerBody.contains(QStringLiteral("invalid")))
+    {
+        return QStringLiteral(
+            "Twitch rejected the saved browser token. Reconnect Twitch mod "
+            "actions in Settings -> Accounts.");
+    }
+
+    auto message = QStringLiteral("Network Error: ") + result.formatError();
+    if (!body.isEmpty())
+    {
+        message += QStringLiteral(" - ") + body.left(200);
+    }
+
+    return message;
+}
+
+QString webHelixNetworkError(const NetworkResult &result)
+{
+    if (!result.status())
+    {
+        return result.formatError();
+    }
+
+    const auto obj = result.parseJson();
+    const auto message = obj.value(QStringLiteral("message")).toString();
+    if (!message.isEmpty())
+    {
+        return message;
+    }
+
+    const auto body = QString::fromUtf8(result.getData()).trimmed();
+    if (!body.isEmpty())
+    {
+        return body.left(200);
+    }
+
+    return result.formatError();
+}
+
+void fetchTwitchWebHelixUserLogins(
+    const QString &path, QUrlQuery urlQuery, const QString &oauthClient,
+    const QString &oauthToken, int maxUsers,
+    std::shared_ptr<QStringList> userLogins,
+    std::function<void(const QStringList &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    makeTwitchWebHelixRequest(path, urlQuery, NetworkRequestType::Get,
+                              oauthClient, oauthToken)
+        .onSuccess([=](const NetworkResult &result) mutable {
+            if (result.status() != 200)
+            {
+                qCWarning(chatterinoTwitch)
+                    << "Success result for getting Twitch web role users was"
+                    << result.formatError() << "but we expected it to be 200";
+            }
+
+            const auto response = result.parseJson();
+            for (const auto &userValue :
+                 response.value(QStringLiteral("data")).toArray())
+            {
+                const auto login =
+                    userValue.toObject()
+                        .value(QStringLiteral("user_login"))
+                        .toString()
+                        .trimmed()
+                        .toLower();
+                if (!login.isEmpty())
+                {
+                    userLogins->append(login);
+                }
+            }
+
+            const auto cursor = response.value(QStringLiteral("pagination"))
+                                    .toObject()
+                                    .value(QStringLiteral("cursor"))
+                                    .toString();
+            if (cursor.isEmpty() || userLogins->size() >= maxUsers)
+            {
+                successCallback(*userLogins);
+                return;
+            }
+
+            urlQuery.removeAllQueryItems(QStringLiteral("after"));
+            urlQuery.addQueryItem(QStringLiteral("after"), cursor);
+            fetchTwitchWebHelixUserLogins(
+                path, urlQuery, oauthClient, oauthToken, maxUsers, userLogins,
+                std::move(successCallback), std::move(failureCallback));
+        })
+        .onError([failureCallback = std::move(failureCallback)](
+                     const NetworkResult &result) {
+            failureCallback(webHelixNetworkError(result));
+        })
+        .execute();
+}
+
+int gqlInt(const QJsonObject &object, const QString &key)
+{
+    const auto value = object.value(key);
+    if (value.isDouble())
+    {
+        return value.toInt();
+    }
+
+    bool ok = false;
+    const auto number = value.toString().toInt(&ok);
+    return ok ? number : 0;
+}
+
+QString gqlStatus(const QJsonObject &object)
+{
+    return object.value(QStringLiteral("status")).toString().toUpper();
+}
+
+QJsonObject gqlPollToHelixPoll(const QJsonObject &poll)
+{
+    QJsonObject normalized;
+    normalized.insert(QStringLiteral("id"),
+                      poll.value(QStringLiteral("id")).toString());
+    normalized.insert(QStringLiteral("title"),
+                      poll.value(QStringLiteral("title")).toString());
+    normalized.insert(QStringLiteral("status"), gqlStatus(poll));
+
+    QJsonArray choices;
+    for (const auto &choiceValue :
+         poll.value(QStringLiteral("choices")).toArray())
+    {
+        const auto choice = choiceValue.toObject();
+        const auto votes = choice.value(QStringLiteral("votes")).toObject();
+
+        QJsonObject normalizedChoice;
+        normalizedChoice.insert(QStringLiteral("id"),
+                                choice.value(QStringLiteral("id")).toString());
+        normalizedChoice.insert(
+            QStringLiteral("title"),
+            choice.value(QStringLiteral("title")).toString());
+        normalizedChoice.insert(QStringLiteral("votes"),
+                                gqlInt(votes, QStringLiteral("total")));
+        choices.append(normalizedChoice);
+    }
+    normalized.insert(QStringLiteral("choices"), choices);
+
+    return normalized;
+}
+
+QJsonObject gqlPredictionToHelixPrediction(const QJsonObject &prediction)
+{
+    QJsonObject normalized;
+    normalized.insert(QStringLiteral("id"),
+                      prediction.value(QStringLiteral("id")).toString());
+    normalized.insert(QStringLiteral("title"),
+                      prediction.value(QStringLiteral("title")).toString());
+    normalized.insert(QStringLiteral("status"), gqlStatus(prediction));
+    normalized.insert(
+        QStringLiteral("prediction_window"),
+        gqlInt(prediction, QStringLiteral("predictionWindowSeconds")));
+    normalized.insert(QStringLiteral("created_at"),
+                      prediction.value(QStringLiteral("createdAt")).toString());
+    normalized.insert(QStringLiteral("locked_at"),
+                      prediction.value(QStringLiteral("lockedAt")).toString());
+    normalized.insert(QStringLiteral("ended_at"),
+                      prediction.value(QStringLiteral("endedAt")).toString());
+
+    const auto winningOutcome =
+        prediction.value(QStringLiteral("winningOutcome")).toObject();
+    normalized.insert(QStringLiteral("winning_outcome_id"),
+                      winningOutcome.value(QStringLiteral("id")).toString());
+
+    QJsonArray outcomes;
+    for (const auto &outcomeValue :
+         prediction.value(QStringLiteral("outcomes")).toArray())
+    {
+        const auto outcome = outcomeValue.toObject();
+
+        QJsonObject normalizedOutcome;
+        normalizedOutcome.insert(
+            QStringLiteral("id"),
+            outcome.value(QStringLiteral("id")).toString());
+        normalizedOutcome.insert(
+            QStringLiteral("title"),
+            outcome.value(QStringLiteral("title")).toString());
+        normalizedOutcome.insert(QStringLiteral("users"),
+                                 gqlInt(outcome, QStringLiteral("totalUsers")));
+        normalizedOutcome.insert(
+            QStringLiteral("channel_points"),
+            gqlInt(outcome, QStringLiteral("totalPoints")));
+        outcomes.append(normalizedOutcome);
+    }
+    normalized.insert(QStringLiteral("outcomes"), outcomes);
+
+    return normalized;
+}
+
+}  // namespace
+
+bool TwitchModerationAuth::Account::isValid() const
+{
+    return !this->oauthToken.trimmed().isEmpty();
+}
+
+bool TwitchModerationAuth::Account::supportsWebGql() const
+{
+    const auto client = this->clientId.trimmed();
+    return this->isValid() && !client.isEmpty() &&
+           client != QString::fromLatin1(TWITCH_TV_CLIENT_ID);
+}
+
+bool TwitchModerationAuth::Account::supportsWebIntegrity() const
+{
+    return this->supportsWebGql() && !this->clientIntegrity.trimmed().isEmpty() &&
+           !this->deviceId.trimmed().isEmpty();
+}
+
+QString TwitchModerationAuth::Account::displayLabel() const
+{
+    const auto display = this->displayName.trimmed();
+    const auto loginText = this->login.trimmed();
+
+    if (!display.isEmpty() && !loginText.isEmpty() &&
+        display.compare(loginText, Qt::CaseInsensitive) != 0)
+    {
+        return QStringLiteral("%1 (@%2)").arg(display, loginText);
+    }
+    if (!display.isEmpty())
+    {
+        return display;
+    }
+    if (!loginText.isEmpty())
+    {
+        return QStringLiteral("@%1").arg(loginText);
+    }
+
+    return QStringLiteral("Saved Twitch account");
+}
+
+bool TwitchModerationAuth::DeviceCode::isValid() const
+{
+    return !this->deviceCode.trimmed().isEmpty() &&
+           !this->userCode.trimmed().isEmpty() &&
+           !this->verificationUri.trimmed().isEmpty();
+}
+
+QString TwitchModerationAuth::normalizeToken(QString token)
+{
+    token = token.trimmed();
+    if (token.size() > TWITCH_AUTH_TOKEN_MAX_LENGTH)
+    {
+        return {};
+    }
+
+    for (int pass = 0; pass < 8 && !token.isEmpty(); ++pass)
+    {
+        const auto previous = token;
+
+        if (token.size() >= 2 &&
+            ((token.startsWith(QLatin1Char('"')) &&
+              token.endsWith(QLatin1Char('"'))) ||
+             (token.startsWith(QLatin1Char('\'')) &&
+              token.endsWith(QLatin1Char('\'')))))
+        {
+            token = token.mid(1, token.size() - 2).trimmed();
+        }
+
+        for (const auto &prefix : {
+                 QStringLiteral("Authorization:"),
+                 QStringLiteral("OAuth "),
+                 QStringLiteral("Bearer "),
+                 QStringLiteral("oauth:"),
+             })
+        {
+            if (token.startsWith(prefix, Qt::CaseInsensitive))
+            {
+                token = token.mid(prefix.size()).trimmed();
+                if (token.size() > TWITCH_AUTH_TOKEN_MAX_LENGTH)
+                {
+                    return {};
+                }
+            }
+        }
+
+        if (token == previous)
+        {
+            break;
+        }
+    }
+
+    return token;
+}
+
+TwitchModerationAuth::ClipboardPayload
+    TwitchModerationAuth::parseClipboardPayload(const QString &text)
+{
+    ClipboardPayload payload;
+    const auto trimmed = text.trimmed();
+    const auto document = QJsonDocument::fromJson(trimmed.toUtf8());
+    if (document.isObject())
+    {
+        const auto object = document.object();
+        payload.oauthToken = TwitchModerationAuth::normalizeToken(
+            object.value(QStringLiteral("token")).toString());
+        payload.clientIntegrity =
+            object.value(QStringLiteral("clientIntegrity")).toString().trimmed();
+        payload.deviceId =
+            object.value(QStringLiteral("deviceId")).toString().trimmed();
+        return payload;
+    }
+
+    payload.oauthToken = TwitchModerationAuth::normalizeToken(trimmed);
+    return payload;
+}
+
+QString TwitchModerationAuth::helperClipboardScript()
+{
+    return moderationAuthClipboardScript();
+}
+
+QString TwitchModerationAuth::clipboardText()
+{
+    return moderationAuthClipboardText();
+}
+
+void TwitchModerationAuth::copyHelperToClipboard()
+{
+    crossPlatformCopy(TwitchModerationAuth::helperClipboardScript());
+}
+
+int TwitchModerationAuth::maxTokenLength()
+{
+    return TWITCH_AUTH_TOKEN_MAX_LENGTH;
+}
+
+TwitchModerationAuth::Account TwitchModerationAuth::savedAccount()
+{
+    bool sidecarFound = false;
+    const auto sidecar = readModerationAuthSidecarObject(&sidecarFound);
+    if (sidecarFound)
+    {
+        return accountFromModerationAuthObject(sidecar);
+    }
+
+    return accountFromModerationAuthObject(readModerationAuthSettingsObject());
+}
+
+void TwitchModerationAuth::saveAccount(const Account &account)
+{
+    saveModerationAccount(account);
+    TwitchModerationAuth::accountChanged().invoke();
+}
+
+void TwitchModerationAuth::clearSavedAccount()
+{
+    clearModerationAccount();
+    TwitchModerationAuth::accountChanged().invoke();
+}
+
+pajlada::Signals::NoArgSignal &TwitchModerationAuth::accountChanged()
+{
+    return moderationAuthAccountChangedSignal();
+}
+
+TwitchModerationAuth::Account TwitchModerationAuth::resolveForCurrentUser(
+    const QString &currentUserId, QString *errorMessage)
+{
+    auto account = savedAccount();
+    if (!account.isValid())
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QStringLiteral(
+                "Log in under Settings -> Accounts -> Twitch mod actions first.");
+        }
+        return {};
+    }
+
+    const auto normalizedCurrentUserId = currentUserId.trimmed();
+    if (!normalizedCurrentUserId.isEmpty() && !account.userId.isEmpty() &&
+        account.userId != normalizedCurrentUserId)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QStringLiteral(
+                "Twitch mod actions are logged in as a different Twitch "
+                "account. Reconnect Twitch mod actions in Settings -> "
+                "Accounts.");
+        }
+        return {};
+    }
+    if (!account.supportsWebGql())
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QStringLiteral(
+                "Update Settings -> Accounts -> Twitch mod actions with the "
+                "browser helper token first.");
+        }
+        return {};
+    }
+
+    return account;
+}
+
+void TwitchModerationAuth::requestDeviceCode(
+    std::function<void(DeviceCode)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    QUrlQuery body;
+    body.addQueryItem(QStringLiteral("client_id"), TWITCH_TV_CLIENT_ID);
+    body.addQueryItem(QStringLiteral("scopes"), TWITCH_TV_SCOPES);
+
+    NetworkRequest(QUrl(QStringLiteral("https://id.twitch.tv/oauth2/device")),
+                   NetworkRequestType::Post)
+        .timeout(TWITCH_TV_AUTH_TIMEOUT_MS)
+        .hideRequestBody()
+        .followRedirects(true)
+        .header("Client-Id", TWITCH_TV_CLIENT_ID)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Origin", TWITCH_TV_ORIGIN)
+        .header("Referer", TWITCH_TV_REFERER)
+        .header("User-Agent", TWITCH_TV_USER_AGENT)
+        .header("X-Device-Id", webGqlDeviceId())
+        .payload(body.toString(QUrl::FullyEncoded).toUtf8())
+        .onSuccess([successCallback = std::move(successCallback),
+                    failureCallback](const NetworkResult &result) {
+            const auto json = result.parseJson();
+
+            DeviceCode code;
+            code.deviceCode =
+                json.value(QStringLiteral("device_code")).toString().trimmed();
+            code.userCode =
+                json.value(QStringLiteral("user_code")).toString().trimmed();
+            code.verificationUri =
+                json.value(QStringLiteral("verification_uri_complete"))
+                    .toString()
+                    .trimmed();
+            if (code.verificationUri.isEmpty())
+            {
+                code.verificationUri =
+                    json.value(QStringLiteral("verification_uri"))
+                        .toString()
+                        .trimmed();
+            }
+            const auto intervalSeconds =
+                json.value(QStringLiteral("interval")).toInt(5);
+            code.intervalMs = std::max(1, intervalSeconds) * 1000;
+
+            if (!code.isValid())
+            {
+                failureCallback(QStringLiteral(
+                    "Twitch did not return a complete activation code."));
+                return;
+            }
+
+            successCallback(std::move(code));
+        })
+        .onError([failureCallback](const NetworkResult &result) {
+            failureCallback(QStringLiteral("Device login setup failed: ") +
+                            authResponseText(result));
+        })
+        .execute();
+}
+
+void TwitchModerationAuth::pollDeviceToken(
+    const QString &deviceCode, std::function<void(DeviceTokenResult)> callback)
+{
+    QUrlQuery body;
+    body.addQueryItem(QStringLiteral("client_id"), TWITCH_TV_CLIENT_ID);
+    body.addQueryItem(QStringLiteral("device_code"), deviceCode);
+    body.addQueryItem(QStringLiteral("grant_type"),
+                      QStringLiteral(
+                          "urn:ietf:params:oauth:grant-type:device_code"));
+
+    auto handleResult = [callback = std::move(callback)](
+                            const NetworkResult &result) mutable {
+        const auto json = result.parseJson();
+        const auto accessToken =
+            json.value(QStringLiteral("access_token")).toString().trimmed();
+        if (!accessToken.isEmpty())
+        {
+            callback({DeviceTokenStatus::Authorized, accessToken, {}});
+            return;
+        }
+
+        const auto error =
+            json.value(QStringLiteral("error")).toString().trimmed();
+        const auto message =
+            json.value(QStringLiteral("message")).toString().trimmed();
+
+        if (error == QStringLiteral("authorization_pending"))
+        {
+            callback({DeviceTokenStatus::Pending, {}, {}});
+            return;
+        }
+        if (error == QStringLiteral("slow_down"))
+        {
+            callback({DeviceTokenStatus::SlowDown, {}, {}});
+            return;
+        }
+
+        auto errorText = message;
+        if (errorText.isEmpty())
+        {
+            errorText = error;
+        }
+        if (errorText.isEmpty())
+        {
+            errorText = authResponseText(result);
+        }
+        callback({DeviceTokenStatus::Failed, {}, errorText});
+    };
+
+    NetworkRequest(QUrl(QStringLiteral("https://id.twitch.tv/oauth2/token")),
+                   NetworkRequestType::Post)
+        .timeout(TWITCH_TV_AUTH_TIMEOUT_MS)
+        .hideRequestBody()
+        .followRedirects(true)
+        .header("Client-Id", TWITCH_TV_CLIENT_ID)
+        .header("Accept", "application/json")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .header("Origin", TWITCH_TV_ORIGIN)
+        .header("Referer", TWITCH_TV_REFERER)
+        .header("User-Agent", TWITCH_TV_USER_AGENT)
+        .header("X-Device-Id", webGqlDeviceId())
+        .payload(body.toString(QUrl::FullyEncoded).toUtf8())
+        .onSuccess(handleResult)
+        .onError(handleResult)
+        .execute();
+}
+
+void TwitchModerationAuth::validateToken(
+    const QString &oauthToken, std::function<void(Account)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    const auto token = normalizeToken(oauthToken);
+    if (token.isEmpty())
+    {
+        failureCallback(QStringLiteral("No token was provided."));
+        return;
+    }
+
+    NetworkRequest(QUrl(QStringLiteral("https://id.twitch.tv/oauth2/validate")),
+                   NetworkRequestType::Get)
+        .timeout(TWITCH_TV_AUTH_TIMEOUT_MS)
+        .hideRequestBody()
+        .followRedirects(true)
+        .header("Accept", "application/json")
+        .header("Authorization", "OAuth " + token)
+        .onSuccess([token, successCallback = std::move(successCallback),
+                    failureCallback](const NetworkResult &result) {
+            const auto json = result.parseJson();
+
+            Account account;
+            account.clientId =
+                json.value(QStringLiteral("client_id")).toString().trimmed();
+            if (account.clientId.isEmpty())
+            {
+                account.clientId = QString(TWITCH_TV_CLIENT_ID);
+            }
+            account.oauthToken = token;
+            account.clientIntegrity = {};
+            account.deviceId = {};
+            account.userId =
+                json.value(QStringLiteral("user_id")).toString().trimmed();
+            account.login =
+                json.value(QStringLiteral("login")).toString().trimmed().toLower();
+            account.displayName = account.login;
+
+            if (account.userId.isEmpty() || account.login.isEmpty())
+            {
+                failureCallback(QStringLiteral(
+                    "Twitch validated the token without account details."));
+                return;
+            }
+
+            successCallback(std::move(account));
+        })
+        .onError([failureCallback](const NetworkResult &result) {
+            failureCallback(QStringLiteral("Token validation failed: ") +
+                            authResponseText(result));
+        })
+        .execute();
+}
+
+void TwitchWebApi::getChatterGroups(
+    const QString &broadcasterName, const QString &oauthClient,
+    const QString &oauthToken, const QString &clientIntegrity,
+    const QString &deviceId,
+    std::function<void(const HelixChatterGroups &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    const auto channelName = broadcasterName.trimmed().toLower();
+    if (channelName.isEmpty())
+    {
+        failureCallback(QStringLiteral("Missing channel name."));
+        return;
+    }
+
+    QJsonObject variables;
+    variables.insert(QStringLiteral("login"), channelName);
+
+    const auto query = QStringLiteral(
+        "query MergerinoChatterGroups($login: String!) {"
+        "  channel(name: $login) {"
+        "    chatters {"
+        "      count"
+        "      broadcasters { login }"
+        "      moderators { login }"
+        "      vips { login }"
+        "      staff { login }"
+        "      viewers { login }"
+        "    }"
+        "  }"
+        "}");
+
+    auto success = std::make_shared<std::function<void(const HelixChatterGroups &)>>(
+        std::move(successCallback));
+    auto failure = std::make_shared<std::function<void(const QString &)>>(
+        std::move(failureCallback));
+    auto runRequest =
+        std::make_shared<std::function<void(const QString &, bool, bool)>>();
+
+    auto refreshAndRetry = [=](const QString &originalError) {
+        fetchTwitchWebIntegrity(
+            oauthToken, deviceId,
+            [=](const QString &freshIntegrity) {
+                rememberTwitchWebIntegrity(oauthToken, deviceId,
+                                           freshIntegrity);
+                (*runRequest)(freshIntegrity, false, true);
+            },
+            [=](const QString &refreshError) {
+                if (isTwitchIntegrityError(originalError))
+                {
+                    QString message = twitchBrowserHelperTokenMessage();
+                    if (!refreshError.isEmpty())
+                    {
+                        message += QStringLiteral(" Integrity refresh failed: ") +
+                                   refreshError;
+                    }
+                    (*failure)(message);
+                    return;
+                }
+
+                (*failure)(QStringLiteral("Twitch API Error: ") + originalError);
+            });
+    };
+
+    *runRequest = [=](const QString &integrity, bool allowIntegrityRefresh,
+                      bool allowNoIntegrityRetry) {
+        makeTwitchWebGqlDocumentRequest(
+            QStringLiteral("MergerinoChatterGroups"), query, variables,
+            oauthClient, oauthToken, integrity, deviceId)
+            .onSuccess([=](const NetworkResult &result) {
+                const auto root = result.parseJsonValue();
+                if (root.isUndefined() || root.isNull())
+                {
+                    (*failure)(QStringLiteral("Failed to parse GQL response"));
+                    return;
+                }
+
+                const auto gqlError = firstWebGqlError(root);
+                if (!gqlError.isEmpty())
+                {
+                    if (allowNoIntegrityRetry && !integrity.trimmed().isEmpty() &&
+                        isTwitchIntegrityError(gqlError))
+                    {
+                        (*runRequest)(QString(), allowIntegrityRefresh, false);
+                        return;
+                    }
+                    if (allowIntegrityRefresh &&
+                        isTwitchIntegrityError(gqlError))
+                    {
+                        refreshAndRetry(gqlError);
+                        return;
+                    }
+                    if (isTwitchIntegrityError(gqlError))
+                    {
+                        (*failure)(twitchBrowserHelperTokenMessage());
+                        return;
+                    }
+
+                    (*failure)(QStringLiteral("Twitch API Error: ") + gqlError);
+                    return;
+                }
+
+                const auto chatters = webGqlData(root)
+                                          .value(QStringLiteral("channel"))
+                                          .toObject()
+                                          .value(QStringLiteral("chatters"))
+                                          .toObject();
+                if (chatters.isEmpty())
+                {
+                    (*failure)(QStringLiteral(
+                        "Twitch returned an empty chatter role response."));
+                    return;
+                }
+
+                rememberTwitchWebIntegrity(oauthToken, deviceId, integrity);
+
+                QJsonObject response;
+                response.insert(QStringLiteral("chatters"), chatters);
+                response.insert(QStringLiteral("chatter_count"),
+                                chatters.value(QStringLiteral("count")).toInt());
+                (*success)(HelixChatterGroups(response));
+            })
+            .onError([=](const NetworkResult &result) {
+                const auto error = webGqlNetworkError(result);
+                if (allowNoIntegrityRetry && !integrity.trimmed().isEmpty() &&
+                    isTwitchIntegrityError(error))
+                {
+                    (*runRequest)(QString(), allowIntegrityRefresh, false);
+                    return;
+                }
+                if (allowIntegrityRefresh && isTwitchIntegrityError(error))
+                {
+                    refreshAndRetry(error);
+                    return;
+                }
+                if (isTwitchIntegrityError(error))
+                {
+                    (*failure)(twitchBrowserHelperTokenMessage());
+                    return;
+                }
+
+                (*failure)(error);
+            })
+            .execute();
+    };
+
+    const auto initialIntegrity = clientIntegrity.trimmed();
+    if (!initialIntegrity.isEmpty())
+    {
+        (*runRequest)(initialIntegrity, true, true);
+        return;
+    }
+
+    (*runRequest)(QString(), true, false);
+}
+
+void TwitchWebApi::getModeratorLogins(
+    const QString &broadcasterId, const QString &oauthClient,
+    const QString &oauthToken,
+    std::function<void(const QStringList &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (stripTwitchOAuthPrefix(oauthToken).isEmpty())
+    {
+        failureCallback(QStringLiteral("No Twitch mod auth token saved."));
+        return;
+    }
+
+    QUrlQuery urlQuery;
+    urlQuery.addQueryItem(QStringLiteral("broadcaster_id"), broadcasterId);
+    urlQuery.addQueryItem(QStringLiteral("first"), QStringLiteral("100"));
+
+    fetchTwitchWebHelixUserLogins(
+        QStringLiteral("moderation/moderators"), urlQuery, oauthClient,
+        oauthToken, 500, std::make_shared<QStringList>(),
+        std::move(successCallback), std::move(failureCallback));
+}
+
+void TwitchWebApi::getVipLogins(
+    const QString &broadcasterId, const QString &oauthClient,
+    const QString &oauthToken,
+    std::function<void(const QStringList &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (stripTwitchOAuthPrefix(oauthToken).isEmpty())
+    {
+        failureCallback(QStringLiteral("No Twitch mod auth token saved."));
+        return;
+    }
+
+    QUrlQuery urlQuery;
+    urlQuery.addQueryItem(QStringLiteral("broadcaster_id"), broadcasterId);
+    urlQuery.addQueryItem(QStringLiteral("first"), QStringLiteral("100"));
+
+    fetchTwitchWebHelixUserLogins(
+        QStringLiteral("channels/vips"), urlQuery, oauthClient, oauthToken,
+        500, std::make_shared<QStringList>(), std::move(successCallback),
+        std::move(failureCallback));
+}
+
+void TwitchWebApi::startPoll(
+    const QString &channelId, const QString &title, const QStringList &choices,
+    int durationSeconds, std::optional<int> pointsPerVote,
+    const QString &oauthClient, const QString &oauthToken,
+    std::function<void()> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    QJsonObject variables;
+    QJsonObject input;
+    input.insert(QStringLiteral("title"), title);
+    input.insert(QStringLiteral("durationSeconds"), durationSeconds);
+    input.insert(QStringLiteral("ownedBy"), channelId);
+    input.insert(QStringLiteral("multichoiceEnabled"), true);
+    input.insert(QStringLiteral("isCommunityPointsVotingEnabled"),
+                 pointsPerVote.has_value());
+    input.insert(QStringLiteral("communityPointsCost"),
+                 pointsPerVote.value_or(0));
+
+    QJsonArray choicesArray;
+    for (const auto &choiceTitle : choices)
+    {
+        QJsonObject choice;
+        choice.insert(QStringLiteral("title"), choiceTitle);
+        choicesArray.append(choice);
+    }
+    input.insert(QStringLiteral("choices"), choicesArray);
+    variables.insert(QStringLiteral("input"), input);
+
+    makeTwitchWebGqlRequest(QStringLiteral("CreatePoll"), CREATE_POLL_HASH,
+                            variables, oauthClient, oauthToken)
+        .onSuccess([successCallback, failureCallback](
+                       const NetworkResult &result) {
+            const auto root = result.parseJsonValue();
+            if (root.isUndefined() || root.isNull())
+            {
+                failureCallback(QStringLiteral("Failed to parse GQL response"));
+                return;
+            }
+
+            const auto gqlError = firstWebGqlError(root);
+            if (!gqlError.isEmpty())
+            {
+                failureCallback(QStringLiteral("Twitch API Error: ") + gqlError);
+                return;
+            }
+
+            const auto payload =
+                webGqlData(root)
+                    .value(QStringLiteral("createPoll"))
+                    .toObject();
+            const auto payloadError = webGqlMutationErrorText(
+                payload,
+                QStringLiteral("Failed to create poll"));
+            if (!payloadError.isEmpty())
+            {
+                failureCallback(QStringLiteral("Twitch API Error: ") +
+                                payloadError);
+                return;
+            }
+
+            const auto pollId = payload.value(QStringLiteral("poll"))
+                                    .toObject()
+                                    .value(QStringLiteral("id"))
+                                    .toString();
+            if (pollId.isEmpty())
+            {
+                failureCallback(QStringLiteral(
+                    "Twitch API Error: Failed to create poll"));
+                return;
+            }
+
+            successCallback();
+        })
+        .onError([failureCallback](const NetworkResult &result) {
+            failureCallback(webGqlNetworkError(result));
+        })
+        .execute();
+}
+
+void TwitchWebApi::getPolls(
+    const QString &channelId, QStringList ids, int first, const QString &after,
+    const QString &oauthClient, const QString &oauthToken,
+    std::function<void(const HelixPolls &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (stripTwitchOAuthPrefix(oauthToken).isEmpty())
+    {
+        failureCallback(QStringLiteral("No Twitch mod auth token saved."));
+        return;
+    }
+
+    QUrlQuery urlQuery;
+    urlQuery.addQueryItem(QStringLiteral("broadcaster_id"), channelId);
+    urlQuery.addQueryItem(QStringLiteral("first"),
+                          QString::number(std::max(first, 1)));
+
+    if (!after.isEmpty())
+    {
+        urlQuery.addQueryItem(QStringLiteral("after"), after);
+    }
+
+    for (const auto &id : ids)
+    {
+        urlQuery.addQueryItem(QStringLiteral("id"), id);
+    }
+
+    makeTwitchWebHelixRequest(QStringLiteral("polls"), urlQuery,
+                              NetworkRequestType::Get, oauthClient,
+                              oauthToken)
+        .onSuccess([successCallback](const NetworkResult &result) {
+            if (result.status() != 200)
+            {
+                qCWarning(chatterinoTwitch)
+                    << "Success result for getting polls with web auth was"
+                    << result.formatError() << "but we expected it to be 200";
+            }
+
+            successCallback(HelixPolls(result.parseJson()));
+        })
+        .onError([failureCallback](const NetworkResult &result) {
+            failureCallback(webHelixNetworkError(result));
+        })
+        .execute();
+}
+
+void TwitchWebApi::startPrediction(
+    const QString &channelId, const QString &title,
+    const QStringList &outcomes, int predictionWindowSeconds,
+    const QString &oauthClient, const QString &oauthToken,
+    std::function<void(const QString &, const QJsonObject &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    QJsonObject variables;
+    QJsonObject input;
+    input.insert(QStringLiteral("channelID"), channelId);
+    input.insert(QStringLiteral("title"), title);
+    input.insert(QStringLiteral("predictionWindowSeconds"),
+                 predictionWindowSeconds);
+
+    QJsonArray outcomesArray;
+    const int outcomeCount = outcomes.size();
+    for (int i = 0; i < outcomeCount; ++i)
+    {
+        QJsonObject outcome;
+        outcome.insert(QStringLiteral("title"), outcomes.at(i));
+        outcome.insert(QStringLiteral("color"),
+                       predictionOutcomeColor(i, outcomeCount));
+        outcomesArray.append(outcome);
+    }
+    input.insert(QStringLiteral("outcomes"), outcomesArray);
+    variables.insert(QStringLiteral("input"), input);
+
+    makeTwitchWebGqlRequest(QStringLiteral("createPredictionEvent"),
+                            CREATE_PREDICTION_HASH, variables, oauthClient,
+                            oauthToken)
+        .onSuccess([successCallback, failureCallback](
+                       const NetworkResult &result) {
+            const auto root = result.parseJsonValue();
+            if (root.isUndefined() || root.isNull())
+            {
+                failureCallback(QStringLiteral("Failed to parse GQL response"));
+                return;
+            }
+
+            const auto gqlError = firstWebGqlError(root);
+            if (!gqlError.isEmpty())
+            {
+                failureCallback(QStringLiteral("Twitch API Error: ") + gqlError);
+                return;
+            }
+
+            const auto payload =
+                webGqlData(root)
+                    .value(QStringLiteral("createPredictionEvent"))
+                    .toObject();
+            const auto payloadError = webGqlMutationErrorText(
+                payload,
+                QStringLiteral("Failed to create prediction"));
+            if (!payloadError.isEmpty())
+            {
+                failureCallback(QStringLiteral("Twitch API Error: ") +
+                                payloadError);
+                return;
+            }
+
+            const auto predictionObject =
+                payload.value(QStringLiteral("predictionEvent")).toObject();
+            const auto predictionId =
+                predictionObject.value(QStringLiteral("id")).toString();
+            if (predictionId.isEmpty())
+            {
+                failureCallback(QStringLiteral(
+                    "Twitch API Error: Failed to create prediction"));
+                return;
+            }
+
+            successCallback(predictionId, predictionObject);
+        })
+        .onError([failureCallback](const NetworkResult &result) {
+            failureCallback(webGqlNetworkError(result));
+        })
+        .execute();
+}
+
+void TwitchWebApi::getPredictions(
+    const QString &channelId, QStringList ids, int first, const QString &after,
+    const QString &oauthClient, const QString &oauthToken,
+    std::function<void(const HelixPredictions &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (stripTwitchOAuthPrefix(oauthToken).isEmpty())
+    {
+        failureCallback(QStringLiteral("No Twitch mod auth token saved."));
+        return;
+    }
+
+    QUrlQuery urlQuery;
+    urlQuery.addQueryItem(QStringLiteral("broadcaster_id"), channelId);
+    urlQuery.addQueryItem(QStringLiteral("first"),
+                          QString::number(std::max(first, 1)));
+
+    if (!after.isEmpty())
+    {
+        urlQuery.addQueryItem(QStringLiteral("after"), after);
+    }
+
+    for (const auto &id : ids)
+    {
+        urlQuery.addQueryItem(QStringLiteral("id"), id);
+    }
+
+    makeTwitchWebHelixRequest(QStringLiteral("predictions"), urlQuery,
+                              NetworkRequestType::Get, oauthClient,
+                              oauthToken)
+        .onSuccess([successCallback](const NetworkResult &result) {
+            if (result.status() != 200)
+            {
+                qCWarning(chatterinoTwitch)
+                    << "Success result for getting predictions with web auth was"
+                    << result.formatError() << "but we expected it to be 200";
+            }
+
+            successCallback(HelixPredictions(result.parseJson()));
+        })
+        .onError([failureCallback](const NetworkResult &result) {
+            failureCallback(webHelixNetworkError(result));
+        })
+        .execute();
+}
+
+void TwitchWebApi::getActivePollAndPredictions(
+    const QString &channelId, const QString &oauthClient,
+    const QString &oauthToken,
+    std::function<void(const HelixPolls &, const HelixPredictions &)>
+        successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (stripTwitchOAuthPrefix(oauthToken).isEmpty())
+    {
+        failureCallback(QStringLiteral("No Twitch mod auth token saved."));
+        return;
+    }
+
+    QJsonObject variables;
+    variables.insert(QStringLiteral("channelId"), channelId);
+
+    const auto query = QStringLiteral(
+        "query MergerinoActivePollPrediction($channelId: ID!) {"
+        "  channel(id: $channelId) {"
+        "    activePredictionEvents {"
+        "      createdAt endedAt id lockedAt predictionWindowSeconds status title"
+        "      winningOutcome { id }"
+        "      outcomes { id title totalPoints totalUsers }"
+        "    }"
+        "    lockedPredictionEvents {"
+        "      createdAt endedAt id lockedAt predictionWindowSeconds status title"
+        "      winningOutcome { id }"
+        "      outcomes { id title totalPoints totalUsers }"
+        "    }"
+        "  }"
+        "  user(id: $channelId) {"
+        "    latestPoll {"
+        "      id status title durationSeconds endedAt startedAt"
+        "      choices { id title votes { total } }"
+        "    }"
+        "  }"
+        "}");
+
+    makeTwitchWebGqlDocumentRequest(
+        QStringLiteral("MergerinoActivePollPrediction"), query, variables,
+        oauthClient, oauthToken)
+        .onSuccess([successCallback = std::move(successCallback),
+                    failureCallback](const NetworkResult &result) {
+            const auto root = result.parseJsonValue();
+            if (root.isUndefined() || root.isNull())
+            {
+                failureCallback(QStringLiteral("Failed to parse GQL response"));
+                return;
+            }
+
+            const auto data = webGqlData(root);
+            const auto gqlError = firstWebGqlError(root);
+            if (!gqlError.isEmpty())
+            {
+                if (data.isEmpty())
+                {
+                    failureCallback(QStringLiteral("Twitch API Error: ") +
+                                    gqlError);
+                    return;
+                }
+
+                qCWarning(chatterinoTwitch)
+                    << "Partial Twitch web active poll/prediction response:"
+                    << gqlError;
+            }
+
+            QJsonArray pollData;
+            const auto poll = data.value(QStringLiteral("user"))
+                                  .toObject()
+                                  .value(QStringLiteral("latestPoll"));
+            if (poll.isObject())
+            {
+                auto normalizedPoll = gqlPollToHelixPoll(poll.toObject());
+                if (normalizedPoll.value(QStringLiteral("status")).toString() ==
+                    QStringLiteral("ACTIVE"))
+                {
+                    pollData.append(normalizedPoll);
+                }
+            }
+
+            QJsonArray predictionData;
+            const auto channel = data.value(QStringLiteral("channel")).toObject();
+            auto appendPredictions = [&predictionData](const QJsonArray &events) {
+                for (const auto &eventValue : events)
+                {
+                    if (eventValue.isObject())
+                    {
+                        predictionData.append(
+                            gqlPredictionToHelixPrediction(
+                                eventValue.toObject()));
+                    }
+                }
+            };
+            appendPredictions(
+                channel.value(QStringLiteral("activePredictionEvents"))
+                    .toArray());
+            appendPredictions(
+                channel.value(QStringLiteral("lockedPredictionEvents"))
+                    .toArray());
+
+            QJsonObject pollsRoot;
+            pollsRoot.insert(QStringLiteral("data"), pollData);
+            QJsonObject predictionsRoot;
+            predictionsRoot.insert(QStringLiteral("data"), predictionData);
+
+            successCallback(HelixPolls(pollsRoot),
+                            HelixPredictions(predictionsRoot));
+        })
+        .onError([failureCallback](const NetworkResult &result) {
+            failureCallback(webGqlNetworkError(result));
+        })
+        .execute();
+}
+
+void TwitchWebApi::endPrediction(
+    const QString &channelId, const QString &predictionId, bool refundPoints,
+    const QString &winningOutcomeId, const QString &oauthClient,
+    const QString &oauthToken,
+    std::function<void(const HelixPrediction &)> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (stripTwitchOAuthPrefix(oauthToken).isEmpty())
+    {
+        failureCallback(QStringLiteral("No Twitch mod auth token saved."));
+        return;
+    }
+
+    QJsonObject payload;
+    payload.insert(QStringLiteral("broadcaster_id"), channelId);
+    payload.insert(QStringLiteral("id"), predictionId);
+    if (refundPoints)
+    {
+        payload.insert(QStringLiteral("status"), QStringLiteral("CANCELED"));
+    }
+    else if (winningOutcomeId.isEmpty())
+    {
+        payload.insert(QStringLiteral("status"), QStringLiteral("LOCKED"));
+    }
+    else
+    {
+        payload.insert(QStringLiteral("status"), QStringLiteral("RESOLVED"));
+        payload.insert(QStringLiteral("winning_outcome_id"), winningOutcomeId);
+    }
+
+    makeTwitchWebHelixRequest(QStringLiteral("predictions"), {},
+                              NetworkRequestType::Patch, oauthClient,
+                              oauthToken)
+        .json(payload)
+        .onSuccess([successCallback, failureCallback](
+                       const NetworkResult &result) {
+            if (result.status() != 200)
+            {
+                qCWarning(chatterinoTwitch)
+                    << "Success result for ending a prediction with web auth was"
+                    << result.formatError() << "but we expected it to be 200";
+            }
+
+            const auto data = HelixPredictions(result.parseJson());
+            if (data.predictions.empty())
+            {
+                failureCallback(QStringLiteral(
+                    "Twitch API Error: Prediction update returned no data"));
+                return;
+            }
+
+            successCallback(data.predictions.front());
+        })
+        .onError([failureCallback](const NetworkResult &result) {
+            failureCallback(webHelixNetworkError(result));
+        })
+        .execute();
+}
+
+void TwitchWebApi::endPredictionEvent(
+    const QString &predictionId, bool refundPoints,
+    const QString &winningOutcomeId, const QString &oauthClient,
+    const QString &oauthToken, std::function<void()> successCallback,
+    std::function<void(const QString &)> failureCallback)
+{
+    if (stripTwitchOAuthPrefix(oauthToken).isEmpty())
+    {
+        failureCallback(QStringLiteral("No Twitch mod auth token saved."));
+        return;
+    }
+    if (predictionId.trimmed().isEmpty())
+    {
+        failureCallback(QStringLiteral("Missing Twitch prediction ID."));
+        return;
+    }
+
+    QString operationName;
+    QString mutationField;
+    QString inputType;
+    QString failureText;
+    QJsonObject input;
+
+    if (refundPoints)
+    {
+        operationName = QStringLiteral("CancelPredictionEvent");
+        mutationField = QStringLiteral("cancelPredictionEvent");
+        inputType = QStringLiteral("CancelPredictionEventInput!");
+        failureText = QStringLiteral("Failed to delete prediction");
+        input.insert(QStringLiteral("id"), predictionId);
+    }
+    else if (winningOutcomeId.trimmed().isEmpty())
+    {
+        operationName = QStringLiteral("LockPredictionEvent");
+        mutationField = QStringLiteral("lockPredictionEvent");
+        inputType = QStringLiteral("LockPredictionEventInput!");
+        failureText = QStringLiteral("Failed to end submissions");
+        input.insert(QStringLiteral("id"), predictionId);
+    }
+    else
+    {
+        operationName = QStringLiteral("ResolvePredictionEvent");
+        mutationField = QStringLiteral("resolvePredictionEvent");
+        inputType = QStringLiteral("ResolvePredictionEventInput!");
+        failureText = QStringLiteral("Failed to choose outcome");
+        input.insert(QStringLiteral("eventID"), predictionId);
+        input.insert(QStringLiteral("outcomeID"), winningOutcomeId.trimmed());
+    }
+
+    QJsonObject variables;
+    variables.insert(QStringLiteral("input"), input);
+
+    const auto query =
+        QStringLiteral(
+            "mutation %1($input: %2) { %3(input: $input) { error { "
+            "__typename } } }")
+            .arg(operationName, inputType, mutationField);
+
+    makeTwitchWebGqlDocumentRequest(operationName, query, variables,
+                                    oauthClient, oauthToken)
+        .onSuccess([successCallback = std::move(successCallback),
+                    failureCallback, mutationField,
+                    failureText](const NetworkResult &result) {
+            const auto root = result.parseJsonValue();
+            if (root.isUndefined() || root.isNull())
+            {
+                failureCallback(QStringLiteral("Failed to parse GQL response"));
+                return;
+            }
+
+            const auto gqlError = firstWebGqlError(root);
+            if (!gqlError.isEmpty())
+            {
+                failureCallback(QStringLiteral("Twitch API Error: ") +
+                                gqlError);
+                return;
+            }
+
+            const auto payload =
+                webGqlData(root).value(mutationField).toObject();
+            const auto payloadError =
+                webGqlMutationErrorText(payload, failureText);
+            if (!payloadError.isEmpty())
+            {
+                failureCallback(QStringLiteral("Twitch API Error: ") +
+                                payloadError);
+                return;
+            }
+
+            successCallback();
+        })
+        .onError([failureCallback](const NetworkResult &result) {
+            failureCallback(webGqlNetworkError(result));
+        })
         .execute();
 }
 

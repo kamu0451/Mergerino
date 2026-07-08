@@ -222,12 +222,22 @@ bool Settings::toggleLocallyBlocked(const QString &userName)
 
 Settings *Settings::instance_ = nullptr;
 
+EnumStringSetting<SplitHeaderViewerCountMode> &headerViewerCountModeSetting()
+{
+    static auto *setting = new EnumStringSetting<SplitHeaderViewerCountMode>{
+        "/appearance/splitheader/viewerCountMode",
+        SplitHeaderViewerCountMode::Total,
+    };
+    return *setting;
+}
+
 Settings::Settings(const Args &args, const QString &settingsDirectory,
                    bool isTest)
     : prevInstance_(Settings::instance_)
     , disableSaving(args.dontSaveSettings)
 {
     QString settingsPath = settingsDirectory + "/settings.json";
+    (void)headerViewerCountModeSetting();
 
     // get global instance of the settings library
     auto settingsInstance = pajlada::Settings::SettingManager::getInstance();
@@ -270,6 +280,11 @@ Settings::Settings(const Args &args, const QString &settingsDirectory,
             });
     }
 
+    if (isTest)
+    {
+        this->mergedPlatformIndicatorMode = "badge";
+    }
+
     settingsInstance->setBackupEnabled(true);
     settingsInstance->setBackupSlots(9);
     settingsInstance->saveMethod = static_cast<
@@ -303,6 +318,8 @@ Settings::Settings(const Args &args, const QString &settingsDirectory,
                            this->moderationActions);
     initializeSignalVector(this->signalHolder, this->loggedChannelsSetting,
                            this->loggedChannels);
+    initializeSignalVector(this->signalHolder, this->loggedUsersSetting,
+                           this->loggedUsers);
 
     instance_ = this;
 

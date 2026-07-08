@@ -119,6 +119,9 @@ public:
         const std::weak_ptr<KickChannel> &channel, uint64_t userID,
         std::function<void(EmoteMap &&, ChannelInfo)> callback,
         bool manualRefresh, bool cacheHit);
+    static void applyUserCosmetics(
+        const QJsonObject &json,
+        const QJsonObject &preferredConnection = QJsonObject{});
 
     /**
      * Adds an emote to the `map` if it's valid.

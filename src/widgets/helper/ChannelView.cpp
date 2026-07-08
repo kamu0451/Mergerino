@@ -32,6 +32,7 @@
 #include "providers/twitch/TwitchBadge.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Resources.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/StreamerMode.hpp"
@@ -62,6 +63,7 @@
 #include <QClipboard>
 #include <QColor>
 #include <QDate>
+#include <QDateTime>
 #include <QDebug>
 #include <QDesktopServices>
 #include <QEasingCurve>
@@ -104,6 +106,8 @@ double triangleReflect(double value, double range)
     return m <= range ? m : period - m;
 }
 
+constexpr int BOTTOM_MESSAGE_PADDING = 8;
+constexpr int MESSAGE_BUFFER_RETAIN_VIEWPORTS = 1;
 constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY = 0.4;
 constexpr qreal SLOW_CHAT_MESSAGE_INITIAL_OPACITY_HOLD = 0.0;
 constexpr qreal SLOW_CHAT_MESSAGE_OPACITY_PROGRESS_SCALE = 1.05;
@@ -279,39 +283,239 @@ void addEmoteContextMenuItems(QMenu *menu, const Emote &emote, QStringView kind)
     }
 }
 
+bool hasPlatformBadgeElement(const Message &message)
+{
+    return std::ranges::any_of(message.elements, [](const auto &element) {
+        return element &&
+               element->getFlags().has(MessageElementFlag::PlatformBadge);
+    });
+}
+
+QColor defaultActivityPlatformAccent(MessagePlatform platform)
+{
+    switch (platform)
+    {
+        case MessagePlatform::Kick:
+            return QColor(83, 252, 24, 36);
+        case MessagePlatform::YouTube:
+            return QColor(255, 48, 64, 60);
+        case MessagePlatform::TikTok:
+            return QColor(37, 244, 238, 48);
+        case MessagePlatform::AnyOrTwitch:
+        default:
+            return QColor(145, 70, 255, 36);
+    }
+}
+
+void insertActivityPlatformBadge(Message &message)
+{
+    if (!message.platformAccentColor)
+    {
+        message.platformAccentColor =
+            defaultActivityPlatformAccent(message.platform);
+    }
+
+    const auto badge = MergedChannel::platformBadge(message.platform);
+    if (!badge)
+    {
+        return;
+    }
+
+    auto position = message.elements.begin();
+    while (position != message.elements.end())
+    {
+        const auto &element = *position;
+        if (!element ||
+            !element->getFlags().has(MessageElementFlag::RepliedMessage))
+        {
+            break;
+        }
+
+        ++position;
+    }
+
+    message.elements.insert(
+        position,
+        std::make_unique<BadgeElement>(badge, MessageElementFlag::PlatformBadge));
+}
+
+QDateTime activityMessageTime(const Message &message)
+{
+    if (message.serverReceivedTime.isValid())
+    {
+        return message.serverReceivedTime.toLocalTime();
+    }
+
+    auto now = QDateTime::currentDateTime();
+    auto fallback = QDateTime(now.date(), message.parseTime);
+    if (fallback > now.addSecs(60))
+    {
+        fallback = fallback.addDays(-1);
+    }
+    return fallback;
+}
+
+void insertActivityTimeElement(Message &message,
+                               ActivityTimeDisplayMode timeDisplayMode)
+{
+    auto position = message.elements.begin();
+    while (position != message.elements.end())
+    {
+        const auto &element = *position;
+        if (!element ||
+            (!element->getFlags().has(MessageElementFlag::RepliedMessage) &&
+             !element->getFlags().has(MessageElementFlag::PlatformBadge)))
+        {
+            break;
+        }
+
+        ++position;
+    }
+
+    message.elements.insert(
+        position, std::make_unique<ActivityTimeElement>(
+                      activityMessageTime(message), timeDisplayMode));
+}
+
+void replaceActivityTimeElement(Message &message,
+                                ActivityTimeDisplayMode timeDisplayMode)
+{
+    for (auto &element : message.elements)
+    {
+        if (dynamic_cast<const TimestampElement *>(element.get()) == nullptr &&
+            dynamic_cast<const ActivityTimeElement *>(element.get()) == nullptr)
+        {
+            continue;
+        }
+
+        element = std::make_unique<ActivityTimeElement>(
+            activityMessageTime(message), timeDisplayMode);
+        return;
+    }
+
+    insertActivityTimeElement(message, timeDisplayMode);
+}
+
+MessagePtr prepareActivityMessage(const MessagePtr &message,
+                                  ActivityTimeDisplayMode timeDisplayMode)
+{
+    if (!message)
+    {
+        return message;
+    }
+
+    if (timeDisplayMode == ActivityTimeDisplayMode::Timestamp &&
+        hasPlatformBadgeElement(*message))
+    {
+        return message;
+    }
+
+    auto copy = message->clone();
+    if (!hasPlatformBadgeElement(*copy))
+    {
+        insertActivityPlatformBadge(*copy);
+    }
+    if (timeDisplayMode == ActivityTimeDisplayMode::Relative)
+    {
+        replaceActivityTimeElement(*copy, timeDisplayMode);
+    }
+    return copy;
+}
+
 MessagePtr makeActivityCompactMessage(const MessagePtr &message,
-                                      const QString &text)
+                                      const QString &text,
+                                      ActivityTimeDisplayMode timeDisplayMode)
 {
     auto compact = message->clone();
     compact->messageText = text;
     compact->searchText = text;
+    compact->flags.unset(MessageFlag::Collapsed);
     compact->elements.clear();
 
-    bool copiedTimestamp = false;
-    for (const auto &element : message->elements)
-    {
-        if (element->getFlags().has(MessageElementFlag::PlatformBadge))
-        {
-            compact->elements.emplace_back(element->clone());
-            continue;
-        }
-        if (!copiedTimestamp &&
-            dynamic_cast<const TimestampElement *>(element.get()) != nullptr)
-        {
-            compact->elements.emplace_back(element->clone());
-            copiedTimestamp = true;
-        }
-    }
-
-    if (!copiedTimestamp)
-    {
-        compact->elements.emplace_back(
-            std::make_unique<TimestampElement>(message->parseTime));
-    }
+    insertActivityPlatformBadge(*compact);
+    compact->elements.emplace_back(std::make_unique<ActivityTimeElement>(
+        activityMessageTime(*message), timeDisplayMode));
 
     compact->elements.emplace_back(std::make_unique<TextElement>(
         text, MessageElementFlag::Text, MessageColor::System));
     return compact;
+}
+
+struct ActivityCompactGiftSummary {
+    QString name;
+    int count = 0;
+    bool isMembership = false;
+};
+
+std::optional<ActivityCompactGiftSummary> activityCompactGiftSummary(
+    const Message &message)
+{
+    static const QRegularExpression REGEX(
+        QStringLiteral(
+            R"(^(.+?)\s+gifted\s+(\d+)\s+(subscriptions?|subs?|memberships?)$)"),
+        QRegularExpression::CaseInsensitiveOption);
+
+    const auto match = REGEX.match(message.messageText.trimmed());
+    if (!match.hasMatch())
+    {
+        return std::nullopt;
+    }
+
+    return ActivityCompactGiftSummary{
+        .name = match.captured(1).trimmed(),
+        .count = match.captured(2).toInt(),
+        .isMembership = match.captured(3).contains(
+            QStringLiteral("membership"), Qt::CaseInsensitive),
+    };
+}
+
+bool activityGiftSummariesCanMerge(const Message &previous,
+                                   const ActivityCompactGiftSummary &prev,
+                                   const Message &next,
+                                   const ActivityCompactGiftSummary &cur)
+{
+    if (previous.platform != next.platform ||
+        prev.isMembership != cur.isMembership ||
+        prev.name.compare(cur.name, Qt::CaseInsensitive) != 0)
+    {
+        return false;
+    }
+
+    if (previous.serverReceivedTime.isValid() &&
+        next.serverReceivedTime.isValid())
+    {
+        auto seconds = previous.serverReceivedTime.secsTo(
+            next.serverReceivedTime);
+        if (seconds < 0)
+        {
+            seconds = -seconds;
+        }
+        return seconds <= 45;
+    }
+
+    if (previous.parseTime.isValid() && next.parseTime.isValid())
+    {
+        auto seconds = previous.parseTime.secsTo(next.parseTime);
+        if (seconds < 0)
+        {
+            seconds = -seconds;
+        }
+        return seconds <= 45;
+    }
+
+    return true;
+}
+
+QString activityMergedGiftSummaryText(const ActivityCompactGiftSummary &summary,
+                                      int count)
+{
+    const auto unit = summary.isMembership
+                          ? (count == 1 ? QStringLiteral("membership")
+                                        : QStringLiteral("memberships"))
+                          : (count == 1 ? QStringLiteral("sub")
+                                        : QStringLiteral("subs"));
+    return QStringLiteral("%1 gifted %2 %3")
+        .arg(summary.name, QString::number(count), unit);
 }
 
 void addImageContextMenuItems(QMenu *menu,
@@ -500,9 +704,9 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
     this->initializeScrollbar();
     this->initializeSignals();
 
-    this->cursors_.neutral = QCursor(getResources().scrolling.neutralScroll);
-    this->cursors_.up = QCursor(getResources().scrolling.upScroll);
-    this->cursors_.down = QCursor(getResources().scrolling.downScroll);
+    this->cursors_.neutral = QCursor(Qt::SizeAllCursor);
+    this->cursors_.up = QCursor(Qt::UpArrowCursor);
+    this->cursors_.down = QCursor(Qt::SizeVerCursor);
 
     this->pauseTimer_.setSingleShot(true);
     QObject::connect(&this->pauseTimer_, &QTimer::timeout, this, [this] {
@@ -518,6 +722,18 @@ ChannelView::ChannelView(InternalCtor /*tag*/, QWidget *parent, Split *split,
     QObject::connect(&this->slowChatTimer_, &QTimer::timeout, this, [this] {
         this->drainSlowChatQueue();
     });
+
+    this->activityTimeRefreshTimer_.setInterval(1000);
+    QObject::connect(&this->activityTimeRefreshTimer_, &QTimer::timeout, this,
+                     [this] {
+                         if (!this->shouldRefreshActivityTime())
+                         {
+                             this->activityTimeRefreshTimer_.stop();
+                             return;
+                         }
+
+                         this->invalidateBuffers();
+                     });
 
     this->messageLayoutShiftAnimationTimer_.setInterval(16);
     QObject::connect(&this->messageLayoutShiftAnimationTimer_, &QTimer::timeout,
@@ -843,7 +1059,21 @@ void ChannelView::updateColorTheme()
 
 void ChannelView::refreshPlatformIndicatorMode()
 {
+    if (this->underlyingChannel_)
+    {
+        this->refreshMessages();
+    }
+    else
+    {
+        this->messagesUpdated();
+    }
+    this->queueUpdate();
+}
+
+void ChannelView::refreshActivityTimeDisplayMode()
+{
     this->messagesUpdated();
+    this->updateActivityTimeRefreshTimer();
     this->queueUpdate();
 }
 
@@ -908,6 +1138,7 @@ void ChannelView::showEvent(QShowEvent * /*event*/)
     {
         this->performLayout(false, true);
     }
+    this->updateActivityTimeRefreshTimer();
 }
 
 void ChannelView::performLayout(bool causedByScrollbar, bool causedByShow)
@@ -1040,7 +1271,7 @@ void ChannelView::updateScrollbar(const std::vector<MessageLayoutPtr> &messages,
     }
 
     /// Layout the messages at the bottom
-    qreal h = this->height() - 8;
+    qreal h = this->height() - BOTTOM_MESSAGE_PADDING;
     auto flags = this->getFlags();
     auto layoutWidth = this->getLayoutWidth();
     auto showScrollbar = false;
@@ -1257,6 +1488,27 @@ bool ChannelView::isActivityPaneView() const
     return this->split_ != nullptr && this->split_->isActivityPane();
 }
 
+bool ChannelView::shouldRefreshActivityTime() const
+{
+    return this->isVisible() && this->isActivityPaneView() &&
+           this->resolvedActivityTimeDisplayMode() ==
+               ActivityTimeDisplayMode::Relative;
+}
+
+void ChannelView::updateActivityTimeRefreshTimer()
+{
+    if (this->shouldRefreshActivityTime())
+    {
+        if (!this->activityTimeRefreshTimer_.isActive())
+        {
+            this->activityTimeRefreshTimer_.start();
+        }
+        return;
+    }
+
+    this->activityTimeRefreshTimer_.stop();
+}
+
 const MessageColors &ChannelView::effectiveMessageColors() const
 {
     return this->isActivityPaneView() ? this->activityMessageColors_
@@ -1286,6 +1538,16 @@ PlatformIndicatorMode ChannelView::resolvedPlatformIndicatorMode() const
     }
 
     return getSettings()->mergedPlatformIndicatorMode.getEnum();
+}
+
+ActivityTimeDisplayMode ChannelView::resolvedActivityTimeDisplayMode() const
+{
+    if (this->split_ != nullptr)
+    {
+        return this->split_->activityTimeDisplayMode();
+    }
+
+    return ActivityTimeDisplayMode::Relative;
 }
 
 ScrollbarHighlight ChannelView::scrollbarHighlightForMessage(
@@ -1324,6 +1586,37 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         return std::nullopt;
     }
 
+    if (const auto recipientCount = getActivityGiftBombRecipientCount(*message))
+    {
+        TikTokActivityFilterOptions giftTiktokOpts;
+        if (this->split_)
+        {
+            giftTiktokOpts.minimumDiamonds =
+                this->split_->tiktokActivityMinimumDiamonds();
+            giftTiktokOpts.showJoins = this->split_->tiktokActivityShowJoins();
+            giftTiktokOpts.showLikes = this->split_->tiktokActivityShowLikes();
+            giftTiktokOpts.showFollows =
+                this->split_->tiktokActivityShowFollows();
+            giftTiktokOpts.showShares =
+                this->split_->tiktokActivityShowShares();
+        }
+        if (!shouldShowMessageInActivityPane(
+                *message,
+                this->split_ ? this->split_->twitchActivityMinimumBits() : 100,
+                this->split_ ? this->split_->kickActivityMinimumKicks() : 100,
+                giftTiktokOpts))
+        {
+            return std::nullopt;
+        }
+
+        // Add a small grace buffer so off-by-one count tags from the
+        // upstream provider don't leak a final recipient row.
+        pendingGiftRecipients = std::max(0, *recipientCount) + 2;
+        return makeActivityCompactMessage(message,
+                                          compactActivityGiftBombText(*message),
+                                          this->resolvedActivityTimeDisplayMode());
+    }
+
     if (isActivityGiftRecipientMessage(*message))
     {
         if (pendingGiftRecipients > 0)
@@ -1352,16 +1645,101 @@ std::optional<MessagePtr> ChannelView::transformActivityMessage(
         return std::nullopt;
     }
 
-    if (const auto recipientCount = getActivityGiftBombRecipientCount(*message))
+    return prepareActivityMessage(message,
+                                  this->resolvedActivityTimeDisplayMode());
+}
+
+bool ChannelView::shouldDecorateStreamDatabaseMessage() const
+{
+    if (this->isActivityPaneView())
     {
-        // Add a small grace buffer so off-by-one count tags from the
-        // upstream provider don't leak a final recipient row.
-        pendingGiftRecipients = std::max(0, *recipientCount) + 2;
-        return makeActivityCompactMessage(message,
-                                          compactActivityGiftBombText(*message));
+        return false;
     }
 
-    return message;
+    const auto channel =
+        this->underlyingChannel_ != nullptr ? this->underlyingChannel_
+                                            : this->channel_;
+    return channel != nullptr && channel->getType() == Channel::Type::Twitch &&
+           channel->getName().compare(QStringLiteral("streamdatabase"),
+                                      Qt::CaseInsensitive) == 0;
+}
+
+MessagePtr ChannelView::decorateStreamDatabaseMessage(
+    const MessagePtr &message) const
+{
+    if (!this->shouldDecorateStreamDatabaseMessage() || !message)
+    {
+        return message;
+    }
+
+    const bool needsAccent = !message->platformAccentColor &&
+                             !message->flags.has(MessageFlag::DoNotLog);
+    const bool needsBadge = !message->flags.has(MessageFlag::System) &&
+                            !hasPlatformBadgeElement(*message);
+    if (!needsAccent && !needsBadge)
+    {
+        return message;
+    }
+
+    auto copy = message->clone();
+    if (needsAccent)
+    {
+        copy->platformAccentColor = defaultActivityPlatformAccent(copy->platform);
+    }
+    if (needsBadge)
+    {
+        insertActivityPlatformBadge(*copy);
+    }
+    return copy;
+}
+
+bool ChannelView::tryMergeActivityGiftMessage(const MessagePtr &message)
+{
+    const auto currentSummary = activityCompactGiftSummary(*message);
+    if (!currentSummary)
+    {
+        return false;
+    }
+
+    const auto lastLayout = this->messages_.last();
+    if (!lastLayout)
+    {
+        return false;
+    }
+
+    const auto previousMessage = (*lastLayout)->getMessagePtr();
+    const auto previousSummary = activityCompactGiftSummary(*previousMessage);
+    if (!previousSummary ||
+        !activityGiftSummariesCanMerge(*previousMessage, *previousSummary,
+                                       *message, *currentSummary))
+    {
+        return false;
+    }
+
+    const auto mergedCount = previousSummary->count + currentSummary->count;
+    auto mergedMessage = makeActivityCompactMessage(
+        previousMessage,
+        activityMergedGiftSummaryText(*previousSummary, mergedCount),
+        this->resolvedActivityTimeDisplayMode());
+    auto mergedLayout = std::make_shared<MessageLayout>(mergedMessage);
+
+    if ((*lastLayout)->flags.has(MessageLayoutFlag::AlternateBackground))
+    {
+        mergedLayout->flags.set(MessageLayoutFlag::AlternateBackground);
+    }
+    if ((*lastLayout)->flags.has(MessageLayoutFlag::IgnoreHighlights))
+    {
+        mergedLayout->flags.set(MessageLayoutFlag::IgnoreHighlights);
+    }
+
+    const auto index = this->messages_.size() - 1;
+    if (this->showScrollbarHighlights())
+    {
+        this->scrollBar_->replaceHighlight(
+            index, this->scrollbarHighlightForMessage(mergedMessage));
+    }
+    this->messages_.replaceItem(index, mergedLayout);
+    return true;
 }
 
 void ChannelView::rebuildActivityMessages()
@@ -1386,6 +1764,11 @@ void ChannelView::rebuildActivityMessages()
         const auto transformed = this->transformActivityMessage(
             msg, pendingGiftRecipients, suppressNextAnnouncementMessage);
         if (!transformed)
+        {
+            continue;
+        }
+
+        if (this->tryMergeActivityGiftMessage(*transformed))
         {
             continue;
         }
@@ -1419,249 +1802,6 @@ void ChannelView::rebuildActivityMessages()
     this->scrollBar_->setMaximum(
         static_cast<qreal>(std::min(nMessagesAdded, this->messages_.limit())));
     this->queueLayout();
-}
-
-void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
-{
-    /// Clear connections from the last channel
-    this->channelConnections_.clear();
-    this->activityGiftRecipientsToSuppress_ = 0;
-    this->activitySuppressNextAnnouncementMessage_ = false;
-
-    this->clearMessages();
-    this->scrollBar_->clearHighlights();
-
-    /// make copy of channel and expose
-    this->channel_ = std::make_unique<Channel>(underlyingChannel->getName(),
-                                               underlyingChannel->getType());
-
-    //
-    // Proxy channel connections
-    // Use a proxy channel to keep filtered messages past the time they are removed from their origin channel
-    //
-
-    this->channelConnections_.managedConnect(
-        underlyingChannel->messageAppended,
-        [this](MessagePtr &message,
-               std::optional<MessageFlags> overridingFlags) {
-            if (this->shouldIncludeMessage(message))
-            {
-                if (this->channel_->lastDate_ != QDate::currentDate())
-                {
-                    // Day change message
-                    this->channel_->lastDate_ = QDate::currentDate();
-                    auto msg = makeSystemMessage(
-                        QLocale().toString(QDate::currentDate(),
-                                           QLocale::LongFormat),
-                        QTime(0, 0));
-                    msg->flags.set(MessageFlag::DoNotLog);
-                    this->enqueueOrAddProxyMessage(msg);
-                }
-                this->enqueueOrAddProxyMessage(message, overridingFlags, true);
-            }
-        });
-
-    this->channelConnections_.managedConnect(
-        underlyingChannel->messagesAddedAtStart,
-        [this](std::vector<MessagePtr> &messages) {
-            std::vector<MessagePtr> filtered;
-            std::copy_if(messages.begin(), messages.end(),
-                         std::back_inserter(filtered), [this](const auto &msg) {
-                             return this->shouldIncludeMessage(msg);
-                         });
-
-            if (!filtered.empty())
-            {
-                this->channel_->addMessagesAtStart(filtered);
-            }
-        });
-
-    this->channelConnections_.managedConnect(
-        underlyingChannel->messageReplaced,
-        [this](auto index, const auto &prev, const auto &replacement) {
-            const bool shouldIncludeReplacement =
-                this->shouldIncludeMessage(replacement);
-
-            if (this->updatePendingSlowChatMessage(
-                    prev, shouldIncludeReplacement ? replacement : MessagePtr{}))
-            {
-                return;
-            }
-
-            if (shouldIncludeReplacement)
-            {
-                this->channel_->replaceMessage(index, prev, replacement);
-            }
-        });
-
-    this->channelConnections_.managedConnect(
-        underlyingChannel->filledInMessages, [this](const auto &messages) {
-            std::vector<MessagePtr> filtered;
-            filtered.reserve(messages.size());
-            std::copy_if(messages.begin(), messages.end(),
-                         std::back_inserter(filtered), [this](const auto &msg) {
-                             return this->shouldIncludeMessage(msg);
-                         });
-            this->channel_->fillInMissingMessages(filtered);
-        });
-
-    this->channelConnections_.managedConnect(underlyingChannel->messagesCleared,
-                                             [this]() {
-                                                 this->clearMessages();
-                                             });
-
-    // Copy over messages from the backing channel to the filtered one
-    // and the ui.
-    auto snapshot = underlyingChannel->getMessageSnapshot();
-
-    size_t nMessagesAdded = 0;
-    for (const auto &msg : snapshot)
-    {
-        if (!this->shouldIncludeMessage(msg))
-        {
-            continue;
-        }
-
-        auto messageLayout = std::make_shared<MessageLayout>(msg);
-
-        if (this->lastMessageHasAlternateBackground_)
-        {
-            messageLayout->flags.set(MessageLayoutFlag::AlternateBackground);
-        }
-        this->lastMessageHasAlternateBackground_ =
-            !this->lastMessageHasAlternateBackground_;
-
-        if (underlyingChannel->shouldIgnoreHighlights())
-        {
-            messageLayout->flags.set(MessageLayoutFlag::IgnoreHighlights);
-        }
-
-        this->messages_.pushBack(messageLayout);
-
-        this->channel_->addMessage(msg, MessageContext::Repost);
-
-        nMessagesAdded++;
-        if (this->showScrollbarHighlights())
-        {
-            this->scrollBar_->addHighlight(
-                this->scrollbarHighlightForMessage(msg));
-        }
-    }
-
-    this->scrollBar_->setMaximum(
-        static_cast<qreal>(std::min(nMessagesAdded, this->messages_.limit())));
-
-    if (this->isActivityPaneView())
-    {
-        this->rebuildActivityMessages();
-    }
-
-    //
-    // Standard channel connections
-    //
-
-    // on new message
-    this->channelConnections_.managedConnect(
-        this->channel_->messageAppended,
-        [this](MessagePtr &message,
-               std::optional<MessageFlags> overridingFlags) {
-            this->messageAppended(message, overridingFlags);
-        });
-
-    this->channelConnections_.managedConnect(
-        this->channel_->messagesAddedAtStart,
-        [this](std::vector<MessagePtr> &messages) {
-            this->messageAddedAtStart(messages);
-        });
-
-    // on message replaced
-    this->channelConnections_.managedConnect(
-        this->channel_->messageReplaced,
-        [this](size_t index, const MessagePtr &prev,
-               const MessagePtr &replacement) {
-            this->messageReplaced(index, prev, replacement);
-        });
-
-    // on messages filled in
-    this->channelConnections_.managedConnect(this->channel_->filledInMessages,
-                                             [this](const auto &) {
-                                                 this->messagesUpdated();
-                                             });
-
-    this->underlyingChannel_ = underlyingChannel;
-
-    this->updateID();
-
-    this->queueLayout();
-    if (!this->isVisible() && !this->scrollBar_->isVisible())
-    {
-        // If we're not visible and the scrollbar is not (yet) visible,
-        // we need to make sure that it's at the bottom when this view is laid
-        // out later.
-        this->scrollBar_->scrollToBottom();
-    }
-    this->queueUpdate();
-
-    // Notifications
-    auto *twitchChannel =
-        dynamic_cast<TwitchChannel *>(underlyingChannel.get());
-    if (twitchChannel != nullptr)
-    {
-        this->channelConnections_.managedConnect(
-            twitchChannel->streamStatusChanged, [this]() {
-                this->liveStatusChanged.invoke();
-            });
-    }
-    else if (auto *kickChannel =
-                 dynamic_cast<KickChannel *>(underlyingChannel.get()))
-    {
-        this->channelConnections_.managedConnect(
-            kickChannel->liveStatusChanged, [this] {
-                this->liveStatusChanged.invoke();
-            });
-    }
-    else if (auto *mergedChannel =
-                 dynamic_cast<MergedChannel *>(underlyingChannel.get()))
-    {
-        this->channelConnections_.managedConnect(
-            mergedChannel->streamStatusChanged, [this] {
-                this->liveStatusChanged.invoke();
-            });
-    }
-}
-
-void ChannelView::refreshMessages()
-{
-    if (!this->underlyingChannel_)
-    {
-        return;
-    }
-
-    this->setChannel(this->underlyingChannel_);
-}
-
-void ChannelView::refreshSlowerChatSettings()
-{
-    if (!this->split_ || !this->split_->slowerChatMessageAnimations())
-    {
-        this->clearMessageLayoutShiftAnimations();
-    }
-
-    if (!this->shouldAnimateMessageAnimations())
-    {
-        this->clearMessageArrivalAnimations();
-    }
-
-    if (!this->shouldQueueSlowChatMessages())
-    {
-        this->flushSlowChatQueue();
-        return;
-    }
-
-    if (!this->pendingSlowChatMessages_.empty())
-    {
-        this->scheduleSlowChatDrain();
-    }
 }
 
 void ChannelView::enqueueOrAddProxyMessage(
@@ -1711,10 +1851,12 @@ void ChannelView::appendProxyMessage(const MessagePtr &message,
                                      std::optional<MessageFlags> overridingFlags,
                                      bool emitAddedToChannel)
 {
-    this->channel_->addMessage(message, MessageContext::Repost, overridingFlags);
+    auto proxyMessage = this->decorateStreamDatabaseMessage(message);
+    this->channel_->addMessage(proxyMessage, MessageContext::Repost,
+                               overridingFlags);
     if (emitAddedToChannel)
     {
-        auto emittedMessage = message;
+        auto emittedMessage = proxyMessage;
         this->messageAddedToChannel(emittedMessage);
     }
 }
@@ -1727,7 +1869,9 @@ bool ChannelView::shouldQueueSlowChatMessages() const
 
 bool ChannelView::shouldAnimateMessageAnimations() const
 {
-    return this->shouldQueueSlowChatMessages() &&
+    return this->split_ != nullptr && this->context_ != Context::Search &&
+           !this->isActivityPaneView() &&
+           getSettings()->messageAnimations &&
            this->split_->slowerChatMessageAnimations();
 }
 
@@ -1823,8 +1967,7 @@ void ChannelView::flushSlowChatQueue()
     {
         auto nextMessage = this->pendingSlowChatMessages_.front();
         this->pendingSlowChatMessages_.pop_front();
-        this->appendProxyMessage(nextMessage.message,
-                                 nextMessage.overridingFlags,
+        this->appendProxyMessage(nextMessage.message, nextMessage.overridingFlags,
                                  nextMessage.emitAddedToChannel);
     }
     this->nextSlowChatMessageAt_.reset();
@@ -1891,8 +2034,8 @@ void ChannelView::startOrUpdateMessageLayoutShiftAnimation(
                                       MESSAGE_LAYOUT_SHIFT_ANIMATION_DURATION
                                           .count());
             const auto eased = messageLayoutShiftProgress(progress);
-            fromY = animation.toY +
-                    ((animation.fromY - animation.toY) * (1.0 - eased));
+            fromY = animation.toY + ((animation.fromY - animation.toY) *
+                                     (1.0 - eased));
         }
 
         animation.fromY = fromY;
@@ -1990,6 +2133,273 @@ std::optional<qreal> ChannelView::messageArrivalAnimationProgress(
     }
 
     return std::nullopt;
+}
+
+void ChannelView::setChannel(const ChannelPtr &underlyingChannel)
+{
+    /// Clear connections from the last channel
+    this->channelConnections_.clear();
+    this->activityGiftRecipientsToSuppress_ = 0;
+    this->activitySuppressNextAnnouncementMessage_ = false;
+
+    this->clearMessages();
+    this->scrollBar_->clearHighlights();
+
+    /// make copy of channel and expose
+    this->channel_ = std::make_unique<Channel>(underlyingChannel->getName(),
+                                               underlyingChannel->getType());
+
+    //
+    // Proxy channel connections
+    // Use a proxy channel to keep filtered messages past the time they are removed from their origin channel
+    //
+
+    this->channelConnections_.managedConnect(
+        underlyingChannel->messageAppended,
+        [this](MessagePtr &message,
+               std::optional<MessageFlags> overridingFlags) {
+            if (this->shouldIncludeMessage(message))
+            {
+                if (this->channel_->lastDate_ != QDate::currentDate())
+                {
+                    // Day change message
+                    this->channel_->lastDate_ = QDate::currentDate();
+                    auto msg = makeSystemMessage(
+                        QLocale().toString(QDate::currentDate(),
+                                           QLocale::LongFormat),
+                        QTime(0, 0));
+                    msg->flags.set(MessageFlag::DoNotLog);
+                    this->enqueueOrAddProxyMessage(msg);
+                }
+                this->enqueueOrAddProxyMessage(message, overridingFlags, true);
+            }
+        });
+
+    this->channelConnections_.managedConnect(
+        underlyingChannel->messagesAddedAtStart,
+        [this](std::vector<MessagePtr> &messages) {
+            std::vector<MessagePtr> filtered;
+            filtered.reserve(messages.size());
+            for (const auto &msg : messages)
+            {
+                if (this->shouldIncludeMessage(msg))
+                {
+                    filtered.push_back(this->decorateStreamDatabaseMessage(msg));
+                }
+            }
+
+            if (!filtered.empty())
+            {
+                this->channel_->addMessagesAtStart(filtered);
+            }
+        });
+
+    this->channelConnections_.managedConnect(
+        underlyingChannel->messageReplaced,
+        [this](auto index, const auto &prev, const auto &replacement) {
+            const bool shouldIncludeReplacement =
+                this->shouldIncludeMessage(replacement);
+            auto proxyReplacement =
+                shouldIncludeReplacement
+                    ? this->decorateStreamDatabaseMessage(replacement)
+                    : MessagePtr{};
+
+            if (this->updatePendingSlowChatMessage(
+                    prev, proxyReplacement))
+            {
+                return;
+            }
+
+            if (shouldIncludeReplacement)
+            {
+                auto proxyPrev = prev;
+                if (this->shouldDecorateStreamDatabaseMessage() &&
+                    prev != nullptr && !prev->id.isEmpty())
+                {
+                    if (auto existing =
+                            this->channel_->findMessageByID(prev->id))
+                    {
+                        proxyPrev = existing;
+                    }
+                }
+                this->channel_->replaceMessage(index, proxyPrev,
+                                               proxyReplacement);
+            }
+        });
+
+    this->channelConnections_.managedConnect(
+        underlyingChannel->filledInMessages, [this](const auto &messages) {
+            std::vector<MessagePtr> filtered;
+            filtered.reserve(messages.size());
+            for (const auto &msg : messages)
+            {
+                if (this->shouldIncludeMessage(msg))
+                {
+                    filtered.push_back(this->decorateStreamDatabaseMessage(msg));
+                }
+            }
+            this->channel_->fillInMissingMessages(filtered);
+        });
+
+    this->channelConnections_.managedConnect(underlyingChannel->messagesCleared,
+                                             [this]() {
+                                                 this->clearMessages();
+                                             });
+
+    // Copy over messages from the backing channel to the filtered one
+    // and the ui.
+    auto snapshot = underlyingChannel->getMessageSnapshot();
+
+    size_t nMessagesAdded = 0;
+    for (const auto &msg : snapshot)
+    {
+        if (!this->shouldIncludeMessage(msg))
+        {
+            continue;
+        }
+
+        auto proxyMessage = this->decorateStreamDatabaseMessage(msg);
+        auto messageLayout = std::make_shared<MessageLayout>(proxyMessage);
+
+        if (this->lastMessageHasAlternateBackground_)
+        {
+            messageLayout->flags.set(MessageLayoutFlag::AlternateBackground);
+        }
+        this->lastMessageHasAlternateBackground_ =
+            !this->lastMessageHasAlternateBackground_;
+
+        if (underlyingChannel->shouldIgnoreHighlights())
+        {
+            messageLayout->flags.set(MessageLayoutFlag::IgnoreHighlights);
+        }
+
+        this->messages_.pushBack(messageLayout);
+
+        this->channel_->addMessage(proxyMessage, MessageContext::Repost);
+
+        nMessagesAdded++;
+        if (this->showScrollbarHighlights())
+        {
+            this->scrollBar_->addHighlight(
+                this->scrollbarHighlightForMessage(proxyMessage));
+        }
+    }
+
+    this->scrollBar_->setMaximum(
+        static_cast<qreal>(std::min(nMessagesAdded, this->messages_.limit())));
+
+    if (this->isActivityPaneView())
+    {
+        this->rebuildActivityMessages();
+    }
+
+    //
+    // Standard channel connections
+    //
+
+    // on new message
+    this->channelConnections_.managedConnect(
+        this->channel_->messageAppended,
+        [this](MessagePtr &message,
+               std::optional<MessageFlags> overridingFlags) {
+            this->messageAppended(message, overridingFlags);
+        });
+
+    this->channelConnections_.managedConnect(
+        this->channel_->messagesAddedAtStart,
+        [this](std::vector<MessagePtr> &messages) {
+            this->messageAddedAtStart(messages);
+        });
+
+    // on message replaced
+    this->channelConnections_.managedConnect(
+        this->channel_->messageReplaced,
+        [this](size_t index, const MessagePtr &prev,
+               const MessagePtr &replacement) {
+            this->messageReplaced(index, prev, replacement);
+        });
+
+    // on messages filled in
+    this->channelConnections_.managedConnect(this->channel_->filledInMessages,
+                                             [this](const auto &) {
+                                                 this->messagesUpdated();
+                                             });
+
+    this->underlyingChannel_ = underlyingChannel;
+
+    this->updateID();
+
+    this->queueLayout();
+    if (!this->isVisible() && !this->scrollBar_->isVisible())
+    {
+        // If we're not visible and the scrollbar is not (yet) visible,
+        // we need to make sure that it's at the bottom when this view is laid
+        // out later.
+        this->scrollBar_->scrollToBottom();
+    }
+    this->queueUpdate();
+    this->updateActivityTimeRefreshTimer();
+
+    // Notifications
+    auto *twitchChannel =
+        dynamic_cast<TwitchChannel *>(underlyingChannel.get());
+    if (twitchChannel != nullptr)
+    {
+        this->channelConnections_.managedConnect(
+            twitchChannel->streamStatusChanged, [this]() {
+                this->liveStatusChanged.invoke();
+            });
+    }
+    else if (auto *kickChannel =
+                 dynamic_cast<KickChannel *>(underlyingChannel.get()))
+    {
+        this->channelConnections_.managedConnect(
+            kickChannel->liveStatusChanged, [this] {
+                this->liveStatusChanged.invoke();
+            });
+    }
+    else if (auto *mergedChannel =
+                 dynamic_cast<MergedChannel *>(underlyingChannel.get()))
+    {
+        this->channelConnections_.managedConnect(
+            mergedChannel->streamStatusChanged, [this] {
+                this->liveStatusChanged.invoke();
+            });
+    }
+}
+
+void ChannelView::refreshMessages()
+{
+    if (!this->underlyingChannel_)
+    {
+        return;
+    }
+
+    this->setChannel(this->underlyingChannel_);
+}
+
+void ChannelView::refreshSlowerChatSettings()
+{
+    if (!this->split_ || !this->split_->slowerChatMessageAnimations())
+    {
+        this->clearMessageLayoutShiftAnimations();
+    }
+
+    if (!this->shouldAnimateMessageAnimations())
+    {
+        this->clearMessageArrivalAnimations();
+    }
+
+    if (!this->shouldQueueSlowChatMessages())
+    {
+        this->flushSlowChatQueue();
+        return;
+    }
+
+    if (!this->pendingSlowChatMessages_.empty())
+    {
+        this->scheduleSlowChatDrain();
+    }
 }
 
 void ChannelView::setFilters(const QList<QUuid> &ids)
@@ -2095,6 +2505,12 @@ void ChannelView::messageAppended(MessagePtr &message,
             return;
         }
         visibleMessage = *transformed;
+
+        if (this->tryMergeActivityGiftMessage(visibleMessage))
+        {
+            this->queueLayout();
+            return;
+        }
     }
 
     if (this->floatingEmotesEnabled_ &&
@@ -2785,9 +3201,9 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
     const auto now = SteadyClock::now();
     for (const auto &animation : this->messageArrivalAnimations_)
     {
-        const auto it = std::find(messagesSnapshot.begin(),
-                                  messagesSnapshot.end(), animation.layout);
-        if (it == messagesSnapshot.end())
+        const auto it = std::find(messagesSnapshot.rbegin(),
+                                  messagesSnapshot.rend(), animation.layout);
+        if (it == messagesSnapshot.rend())
         {
             continue;
         }
@@ -2807,11 +3223,13 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         const auto clampedProgress = std::clamp(progress, 0.0, 1.0);
         const auto offset = slowChatArrivalOffset(
             clampedProgress, static_cast<qreal>((*it)->getHeight()));
-        activeArrivalAnimations.push_back({
-            .messageIndex = static_cast<size_t>(
-                std::distance(messagesSnapshot.begin(), it)),
-            .offset = offset,
-        });
+        const auto messageIndex =
+            static_cast<size_t>(std::distance(it, messagesSnapshot.rend()) - 1);
+        activeArrivalAnimations.push_back(
+            {
+                .messageIndex = messageIndex,
+                .offset = offset,
+            });
         totalStackAnimationOffset += offset;
     }
     std::sort(activeArrivalAnimations.begin(), activeArrivalAnimations.end(),
@@ -2869,6 +3287,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         return y >= area.y() && y < area.y() + area.height();
     };
 
+    size_t renderEnd = renderStart;
     for (; ctx.messageIndex < messagesSnapshot.size(); ++ctx.messageIndex)
     {
         MessageLayout *layout = messagesSnapshot[ctx.messageIndex].get();
@@ -2977,6 +3396,7 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         ctx.y += layout->getHeight();
 
         end = layout;
+        renderEnd = ctx.messageIndex;
         if (ctx.y > this->height())
         {
             break;
@@ -3005,36 +3425,50 @@ void ChannelView::drawMessages(QPainter &painter, const QRect &area)
         return;
     }
 
-    // remove messages that are on screen
-    // the messages that are left at the end get their buffers reset
-    for (size_t i = renderStart; i < messagesSnapshot.size(); ++i)
+    // Keep nearby row pixmaps alive so smooth scrolling does not recreate
+    // buffers for the same messages on adjacent frames.
+    auto retainedBufferStart = renderStart;
+    auto retainedHeight = 0;
+    const auto retainedHeightLimit =
+        this->height() * MESSAGE_BUFFER_RETAIN_VIEWPORTS;
+    while (retainedBufferStart > 0 && retainedHeight < retainedHeightLimit)
     {
-        auto it = this->messagesOnScreen_.find(messagesSnapshot[i]);
-        if (it != this->messagesOnScreen_.end())
+        --retainedBufferStart;
+        retainedHeight +=
+            std::max(1, messagesSnapshot[retainedBufferStart]->getHeight());
+    }
+
+    auto retainedBufferEnd = renderEnd;
+    retainedHeight = 0;
+    while (retainedBufferEnd + 1 < messagesSnapshot.size() &&
+           retainedHeight < retainedHeightLimit)
+    {
+        ++retainedBufferEnd;
+        retainedHeight +=
+            std::max(1, messagesSnapshot[retainedBufferEnd]->getHeight());
+    }
+
+    for (size_t i = retainedBufferStart; i <= retainedBufferEnd; ++i)
+    {
+        auto it = this->messagesWithBuffers_.find(messagesSnapshot[i]);
+        if (it != this->messagesWithBuffers_.end())
         {
-            this->messagesOnScreen_.erase(it);
+            this->messagesWithBuffers_.erase(it);
         }
     }
 
-    // delete the message buffers that aren't on screen
-    for (const std::shared_ptr<MessageLayout> &item : this->messagesOnScreen_)
+    for (const std::shared_ptr<MessageLayout> &item : this->messagesWithBuffers_)
     {
         item->deleteBuffer();
     }
 
-    this->messagesOnScreen_.clear();
+    this->messagesWithBuffers_.clear();
 
-    // add all messages on screen to the map
-    for (size_t i = renderStart; i < messagesSnapshot.size(); ++i)
+    for (size_t i = retainedBufferStart; i <= retainedBufferEnd; ++i)
     {
         const std::shared_ptr<MessageLayout> &layout = messagesSnapshot[i];
 
-        this->messagesOnScreen_.insert(layout);
-
-        if (layout.get() == end)
-        {
-            break;
-        }
+        this->messagesWithBuffers_.insert(layout);
     }
 }
 
@@ -3058,13 +3492,20 @@ void ChannelView::wheelEvent(QWheelEvent *event)
         float mouseMultiplier = getSettings()->mouseScrollMultiplier;
 
         // This ensures snapshot won't be indexed out of bounds when scrolling really fast
+        auto &snapshot = this->getMessagesSnapshot();
+        if (snapshot.empty())
+        {
+            event->accept();
+            return;
+        }
+
         qreal desired = std::max<qreal>(0, this->scrollBar_->getDesiredValue());
         qreal delta = event->angleDelta().y() * qreal(1.5) * mouseMultiplier;
 
-        auto &snapshot = this->getMessagesSnapshot();
         int snapshotLength = int(snapshot.size());
-        int i = std::min<int>(int(desired - this->scrollBar_->getMinimum()),
-                              snapshotLength - 1);
+        int i = std::clamp<int>(
+            int(desired - this->scrollBar_->getMinimum()), 0,
+            snapshotLength - 1);
 
         if (delta > 0)
         {
@@ -4023,26 +4464,77 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
         }
     }
 
-    if (!layout->getMessage()->id.isEmpty() &&
-        this->underlyingChannel_->hasModRights())
+    const auto message = layout->getMessage();
+    const auto moderationChannel = this->hasSourceChannel()
+                                       ? this->sourceChannel_
+                                       : this->underlyingChannel_;
+    auto *mergedModerationChannel =
+        moderationChannel
+            ? dynamic_cast<MergedChannel *>(moderationChannel.get())
+            : nullptr;
+    const bool canModerateYouTube =
+        message->platform == MessagePlatform::YouTube &&
+        mergedModerationChannel != nullptr &&
+        mergedModerationChannel->youtubeLiveChat() != nullptr &&
+        mergedModerationChannel->youtubeLiveChat()->hasModeratorPrivileges();
+    const bool canModerateMessage =
+        message->platform == MessagePlatform::YouTube
+            ? canModerateYouTube
+            : moderationChannel && moderationChannel->hasModRights();
+
+    if (!message->id.isEmpty() && canModerateMessage)
     {
         menu->addSeparator();
         auto *moderateAction = menu->addAction("Mo&derate");
         auto *moderateMenu = new QMenu(menu);
         moderateAction->setMenu(moderateMenu);
         moderateMenu->addAction(
-            "&Delete message", [this, id = layout->getMessage()->id] {
+            "&Delete message",
+            [id = message->id, platform = message->platform,
+             moderationChannel] {
                 auto *twitchChannel = dynamic_cast<TwitchChannel *>(
-                    this->underlyingChannel_.get());
+                    moderationChannel.get());
                 if (twitchChannel)
                 {
                     twitchChannel->deleteMessagesAs(
                         id, getApp()->getAccounts()->twitch.getCurrent().get());
                 }
                 else if (auto *kc = dynamic_cast<KickChannel *>(
-                             this->underlyingChannel_.get()))
+                             moderationChannel.get()))
                 {
                     kc->deleteMessage(id);
+                }
+                else if (auto *mergedChannel = dynamic_cast<MergedChannel *>(
+                             moderationChannel.get()))
+                {
+                    if (platform == MessagePlatform::YouTube &&
+                        mergedChannel->youtubeLiveChat() != nullptr)
+                    {
+                        mergedChannel->youtubeLiveChat()->deleteMessage(id);
+                    }
+                    else if (platform == MessagePlatform::Kick)
+                    {
+                        auto *kickChannel = dynamic_cast<KickChannel *>(
+                            mergedChannel->kickChannel().get());
+                        if (kickChannel != nullptr)
+                        {
+                            kickChannel->deleteMessage(id);
+                        }
+                    }
+                    else
+                    {
+                        auto *mergedTwitchChannel =
+                            dynamic_cast<TwitchChannel *>(
+                                mergedChannel->twitchChannel().get());
+                        if (mergedTwitchChannel != nullptr)
+                        {
+                            mergedTwitchChannel->deleteMessagesAs(
+                                id, getApp()
+                                        ->getAccounts()
+                                        ->twitch.getCurrent()
+                                        .get());
+                        }
+                    }
                 }
             });
     }
@@ -4309,12 +4801,14 @@ void ChannelView::mouseDoubleClickEvent(QMouseEvent *event)
 
 void ChannelView::hideEvent(QHideEvent * /*event*/)
 {
-    for (const auto &layout : this->messagesOnScreen_)
+    this->activityTimeRefreshTimer_.stop();
+
+    for (const auto &layout : this->messagesWithBuffers_)
     {
         layout->deleteBuffer();
     }
 
-    this->messagesOnScreen_.clear();
+    this->messagesWithBuffers_.clear();
 }
 
 void ChannelView::showUserInfoPopup(const QString &userName,
@@ -4330,8 +4824,7 @@ void ChannelView::showUserInfoPopup(const QString &userName,
         return;
     }
 
-    auto *userPopup =
-        new UserInfoPopup(getSettings()->autoCloseUserPopup, this->split_);
+    auto *userPopup = new UserInfoPopup(false, this->split_);
 
     auto openingChannel = this->hasSourceChannel() ? this->sourceChannel_
                                                    : this->underlyingChannel_;
@@ -4656,7 +5149,8 @@ void ChannelView::scrollUpdateRequested()
     const qreal dpi = this->devicePixelRatioF();
     const qreal delta = dpi * (this->currentMousePosition_.y() -
                                this->lastMiddlePressPosition_.y());
-    const int cursorHeight = this->cursors_.neutral.pixmap().height();
+    const int cursorHeight =
+        std::max(16, this->cursors_.neutral.pixmap().height());
 
     if (fabs(delta) <= cursorHeight * dpi)
     {

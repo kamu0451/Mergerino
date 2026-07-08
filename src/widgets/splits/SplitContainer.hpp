@@ -276,6 +276,7 @@ private:
 
     NotebookTab *tab_;
     std::vector<Split *> splits_;
+    std::vector<Split *> splitsNeedingActivityPaneMigration_;
     std::vector<Split *> splitsNeedingActivityFilterNormalization_;
 
     std::unordered_map<Split *, pajlada::Signals::SignalHolder>

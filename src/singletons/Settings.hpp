@@ -130,7 +130,36 @@ enum class PlatformIndicatorMode : std::uint8_t {
     Badge,
     LineColor,
     Both,
+    None,
 };
+
+enum class ActivityTimeDisplayMode : std::uint8_t {
+    Relative,
+    Timestamp,
+};
+
+enum class SplitHeaderViewerCountMode : std::uint8_t {
+    Total,
+    Twitch,
+    Kick,
+    YouTube,
+};
+
+constexpr std::optional<std::string_view> qmagicenumDisplayName(
+    SplitHeaderViewerCountMode value) noexcept
+{
+    switch (value)
+    {
+        case SplitHeaderViewerCountMode::Total:
+            return "Total (default)";
+        case SplitHeaderViewerCountMode::Twitch:
+            return "Twitch only";
+        case SplitHeaderViewerCountMode::Kick:
+            return "Kick only";
+        case SplitHeaderViewerCountMode::YouTube:
+            return "YouTube only";
+    }
+}
 
 constexpr std::optional<std::string_view> qmagicenumDisplayName(
     PlatformIndicatorMode value) noexcept
@@ -138,11 +167,13 @@ constexpr std::optional<std::string_view> qmagicenumDisplayName(
     switch (value)
     {
         case PlatformIndicatorMode::Badge:
-            return "Platform badge";
+            return "Platform logos";
         case PlatformIndicatorMode::LineColor:
-            return "Platform line color (default)";
+            return "Platform highlights (default)";
         case PlatformIndicatorMode::Both:
-            return "Platform line color + badge";
+            return "Platform highlights + logos";
+        case PlatformIndicatorMode::None:
+            return "None";
     }
 }
 
@@ -387,6 +418,7 @@ public:
         "/appearance/badges/useCustomFfzVipBadges", true};
     BoolSetting showBadgesBttv = {"/appearance/badges/bttv", true};
     BoolSetting showBadgesSevenTV = {"/appearance/badges/seventv", true};
+    BoolSetting showKickLevelBadges = {"/appearance/badges/kickLevel", true};
     BoolSetting animateSevenTVBadges = {"/appearance/badges/animateSeventv",
                                         true};
     QSizeSetting lastPopupSize = {
@@ -529,7 +561,7 @@ public:
         EmoteTooltipScale::Medium,
     };
     BoolSetting showUnlistedSevenTVEmotes = {
-        "/emotes/showUnlistedSevenTVEmotes", false};
+        "/emotes/showUnlistedSevenTVEmotes", true};
     /**
      * This setting is kept for backwards compatibility.
      */
@@ -762,6 +794,8 @@ public:
         false,
     };
     QStringSetting logPath = {"/logging/path", ""};
+    ChatterinoSetting<std::vector<ChannelLog>> loggedUsersSetting = {
+        "/logging/userLogs"};
 
     QStringSetting pathHighlightSound = {"/highlighting/highlightSoundPath",
                                          ""};
@@ -831,6 +865,22 @@ public:
 
     IntSetting startUpNotification = {"/misc/startUpNotification", 0};
     QStringSetting currentVersion = {"/misc/currentVersion", ""};
+    QStringSetting pendingPostUpdateVersion = {
+        "/misc/pendingPostUpdateVersion",
+        "",
+    };
+    BoolSetting streamDatabaseIntroShown = {
+        "/misc/streamDatabaseIntroShown",
+        false,
+    };
+    QStringSetting streamDatabaseIntroShownVersion = {
+        "/misc/streamDatabaseIntroShownVersion",
+        "",
+    };
+    BoolSetting activityPanePlatformStyleHighlightsMigrationDone = {
+        "/misc/activityPanePlatformStyleHighlightsMigrationDone",
+        false,
+    };
     IntSetting overlayKnowledgeLevel = {"/misc/overlayKnowledgeLevel", 0};
 
     BoolSetting loadTwitchMessageHistoryOnConnect = {
@@ -838,6 +888,26 @@ public:
     IntSetting twitchMessageHistoryLimit = {
         "/misc/twitch/messageHistoryLimit",
         800,
+    };
+    QStringSetting twitchModerationAuthToken = {
+        "/misc/twitch/moderationAuth/token",
+        "",
+    };
+    QStringSetting twitchModerationAuthClientId = {
+        "/misc/twitch/moderationAuth/clientId",
+        "",
+    };
+    QStringSetting twitchModerationAuthUserId = {
+        "/misc/twitch/moderationAuth/userId",
+        "",
+    };
+    QStringSetting twitchModerationAuthLogin = {
+        "/misc/twitch/moderationAuth/login",
+        "",
+    };
+    QStringSetting twitchModerationAuthDisplayName = {
+        "/misc/twitch/moderationAuth/displayName",
+        "",
     };
     IntSetting scrollbackSplitLimit = {
         "/misc/scrollback/splitLimit",
@@ -866,7 +936,6 @@ public:
     BoolSetting informOnTabVisibilityToggle = {"/misc/askOnTabVisibilityToggle",
                                                true};
     BoolSetting lockNotebookLayout = {"/misc/lockNotebookLayout", false};
-    BoolSetting showPronouns = {"/misc/showPronouns", false};
     BoolSetting showTitleInLiveMessage = {
         "/extraChannels/live/showTitle",
         false,
@@ -938,6 +1007,8 @@ public:
     QStringSetting additionalExtensionIDs{"/misc/additionalExtensionIDs", ""};
 
     BoolSetting xChatterino7NoHttp2{"/x-chatterino7/no-http2", false};
+    BoolSetting messageAnimations = {"/appearance/messages/messageAnimations",
+                                     true};
 
 private:
     ChatterinoSetting<std::vector<HighlightPhrase>> highlightedMessagesSetting =
@@ -977,6 +1048,7 @@ public:
     SignalVector<Nickname> nicknames;
     SignalVector<ModerationAction> moderationActions;
     SignalVector<ChannelLog> loggedChannels;
+    SignalVector<ChannelLog> loggedUsers;
 
     bool isHighlightedUser(const QString &username);
     bool isBlacklistedUser(const QString &username);
@@ -994,6 +1066,15 @@ public:
     /// Returns true if the user is now blocked, false if now unblocked.
     bool toggleLocallyBlocked(const QString &userName);
 
+    BoolSetting activityPaneRelativeTimeMigrationDone = {
+        "/misc/activityPaneRelativeTimeMigrationDone",
+        false,
+    };
+    BoolSetting headerChatModeIndicator = {
+        "/appearance/splitheader/showChatModeIndicator",
+        true,
+    };
+
 private:
     void updateModerationActions();
 
@@ -1003,6 +1084,7 @@ private:
 };
 
 Settings *getSettings();
+EnumStringSetting<SplitHeaderViewerCountMode> &headerViewerCountModeSetting();
 
 }  // namespace chatterino
 

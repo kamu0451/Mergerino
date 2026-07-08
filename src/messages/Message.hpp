@@ -141,6 +141,7 @@ struct Message {
     std::shared_ptr<ChannelPointReward> reward = nullptr;
 
     uint32_t bits{0};
+    uint32_t giftedSubscriptionRecipientCount{0};
     uint64_t kickGiftKicks{0};
 
     /// Diamond value of a TikTok gift attached to this message. Zero for

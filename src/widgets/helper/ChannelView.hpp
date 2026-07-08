@@ -31,6 +31,7 @@
 #include <unordered_set>
 
 namespace chatterino {
+enum class ActivityTimeDisplayMode : std::uint8_t;
 enum class HighlightState;
 enum class PlatformIndicatorMode : std::uint8_t;
 
@@ -224,6 +225,7 @@ public:
 
     void updateColorTheme();
     void refreshPlatformIndicatorMode();
+    void refreshActivityTimeDisplayMode();
 
     /// @brief Adjusts the colors this view uses
     ///
@@ -354,15 +356,21 @@ private:
     void updateID();
     void refreshMessageColors();
     bool isActivityPaneView() const;
+    bool shouldRefreshActivityTime() const;
+    void updateActivityTimeRefreshTimer();
     const MessageColors &effectiveMessageColors() const;
     float activityMessageScale() const;
     float activityMessageImageScale() const;
     PlatformIndicatorMode resolvedPlatformIndicatorMode() const;
+    ActivityTimeDisplayMode resolvedActivityTimeDisplayMode() const;
     ScrollbarHighlight scrollbarHighlightForMessage(
         const MessagePtr &message) const;
     std::optional<MessagePtr> transformActivityMessage(
         const MessagePtr &message, int &pendingGiftRecipients,
         bool &suppressNextAnnouncementMessage) const;
+    bool shouldDecorateStreamDatabaseMessage() const;
+    MessagePtr decorateStreamDatabaseMessage(const MessagePtr &message) const;
+    bool tryMergeActivityGiftMessage(const MessagePtr &message);
     void rebuildActivityMessages();
     void enqueueOrAddProxyMessage(
         const MessagePtr &message,
@@ -439,6 +447,7 @@ private:
     bool pausable_ = false;
     QTimer pauseTimer_;
     QTimer slowChatTimer_;
+    QTimer activityTimeRefreshTimer_;
     QTimer messageLayoutShiftAnimationTimer_;
     QTimer messageArrivalAnimationTimer_;
     std::unordered_map<PauseReason, std::optional<SteadyClock::time_point>>
@@ -547,7 +556,7 @@ private:
     // channelConnections_ will be cleared when the underlying channel of the channelview changes
     pajlada::Signals::SignalHolder channelConnections_;
 
-    std::unordered_set<std::shared_ptr<MessageLayout>> messagesOnScreen_;
+    std::unordered_set<std::shared_ptr<MessageLayout>> messagesWithBuffers_;
 
     MessageColors messageColors_;
     MessageColors activityMessageColors_;

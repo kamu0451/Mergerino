@@ -8,6 +8,8 @@
 #include <boost/json/parse.hpp>
 #include <QUrlQuery>
 
+#include <algorithm>
+
 namespace {
 
 using namespace chatterino;
@@ -197,6 +199,32 @@ KickPrivateChatroomInfo::KickPrivateChatroomInfo(BoostJsonObject obj)
     }
 }
 
+KickPrivateSubscriberBadgeInfo::KickPrivateSubscriberBadgeInfo(
+    BoostJsonObject obj)
+    : months(obj["months"].toUint64())
+{
+    auto badgeImage = obj["badge_image"].toObject();
+    this->imageUrl = badgeImage["src"].toQString();
+}
+
+KickPrivateUserBadgeInfo::KickPrivateUserBadgeInfo(BoostJsonObject obj)
+{
+    this->type = obj["type"].toQString(obj["name"].toQString());
+    if (this->type.isEmpty())
+    {
+        this->type = obj["badge_type"].toQString();
+    }
+    this->text = obj["text"].toQString(obj["label"].toQString());
+    this->imageUrl = obj["image_url"].toQString(obj["src"].toQString());
+    this->count = obj["count"].toUint64();
+    this->sortOrder = obj["sort_order"].toUint64(1000);
+    this->active = obj["active"].toBool(true);
+    this->selected = obj["selected"].toBool(true);
+
+    auto metadata = obj["metadata"].toObject();
+    this->level = metadata["level"].toUint64(obj["level"].toUint64());
+}
+
 KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
     : channelID(obj["id"].toUint64())
     , followersCount(obj["followers_count"].toUint64())
@@ -204,6 +232,16 @@ KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
     , user(obj["user"].toObject())
     , chatroom(obj["chatroom"].toObject())
 {
+    auto badgeArray = obj["subscriber_badges"].toArray();
+    this->subscriberBadges.reserve(badgeArray.size());
+    for (auto badgeValue : badgeArray)
+    {
+        if (badgeValue.isObject())
+        {
+            this->subscriberBadges.emplace_back(badgeValue.toObject());
+        }
+    }
+
     auto livestream = obj["livestream"];
     if (!livestream.isObject())
     {
@@ -233,8 +271,33 @@ KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
 
 KickPrivateUserInChannelInfo::KickPrivateUserInChannelInfo(BoostJsonObject obj)
     : userID(obj["id"].toUint64())
+    , username(obj["username"].toQString())
 
 {
+    auto badgesV2 = obj["badges_v2"].toArray();
+    this->badges.reserve(badgesV2.size() + obj["badges"].toArray().size());
+    for (auto badgeValue : badgesV2)
+    {
+        if (badgeValue.isObject())
+        {
+            this->badges.emplace_back(badgeValue.toObject());
+        }
+    }
+
+    auto badges = obj["badges"].toArray();
+    for (auto badgeValue : badges)
+    {
+        if (badgeValue.isObject())
+        {
+            this->badges.emplace_back(badgeValue.toObject());
+        }
+    }
+
+    std::stable_sort(this->badges.begin(), this->badges.end(),
+                     [](const auto &lhs, const auto &rhs) {
+                         return lhs.sortOrder < rhs.sortOrder;
+                     });
+
     auto followingSinceStr = obj["following_since"].toQString();
     if (!followingSinceStr.isEmpty())
     {
@@ -288,6 +351,15 @@ KickPrivateEmoteSetInfo::KickPrivateEmoteSetInfo(BoostJsonObject obj)
     auto userIDVal = obj["user_id"];
     if (userIDVal.isString())
     {
+        bool ok = false;
+        auto userID = userIDVal.toQString().toULongLong(&ok);
+        if (ok)
+        {
+            this->userID = userID;
+        }
+    }
+    else if (userIDVal.isInt64())
+    {
         this->userID = userIDVal.toUint64();
     }
     auto emotesArr = obj["emotes"].toArray();
@@ -338,6 +410,85 @@ void KickApi::privateEmotesInChannel(
 {
     getJsonNoAuth(u"https://kick.com/emotes/" % slugify(username),
                   std::move(cb));
+}
+
+void KickApi::privateRecentMessages(
+    uint64_t chatroomID, int limit,
+    Callback<std::vector<boost::json::object>> cb)
+{
+    if (chatroomID == 0)
+    {
+        cb(makeUnexpected(u"Missing chatroom ID"_s));
+        return;
+    }
+
+    const auto boundedLimit = std::max(1, limit);
+    const QString url = u"https://kick.com/api/v2/channels/" %
+                        QString::number(chatroomID) %
+                        u"/messages?limit=" % QString::number(boundedLimit);
+
+    NetworkRequest(url)
+        .headerList(kickNoAuthHeaders())
+        .onError([cb](const NetworkResult &res) {
+            cb(makeUnexpected(res.formatError()));
+        })
+        .onSuccess([cb = std::move(cb)](const NetworkResult &res) {
+            const auto &ba = res.getData();
+            boost::system::error_code ec;
+            auto jv =
+                boost::json::parse(std::string_view(ba.data(), ba.size()), ec);
+            if (ec)
+            {
+                qCWarning(chatterinoKick)
+                    << "Failed to parse recent messages response:"
+                    << ec.message();
+                cb(makeUnexpected(u"Failed to parse API response: "_s %
+                                  QString::fromStdString(ec.message())));
+                return;
+            }
+
+            if (!jv.is_object())
+            {
+                qCWarning(chatterinoKick)
+                    << "Recent messages root value was not an object";
+                cb(makeUnexpected(u"Root value was not an object"_s));
+                return;
+            }
+
+            const auto &root = jv.as_object();
+            const auto dataIt = root.find("data");
+            if (dataIt == root.end() || !dataIt->value().is_object())
+            {
+                cb(makeUnexpected(u"'data' is not an object"_s));
+                return;
+            }
+
+            const auto &data = dataIt->value().as_object();
+            const auto messagesIt = data.find("messages");
+            if (messagesIt == data.end() || !messagesIt->value().is_array())
+            {
+                cb(makeUnexpected(u"'data.messages' is not an array"_s));
+                return;
+            }
+
+            const auto &messageValues = messagesIt->value().as_array();
+            std::vector<boost::json::object> messages;
+            messages.reserve(messageValues.size());
+            for (const auto &messageValue : messageValues)
+            {
+                if (!messageValue.is_object())
+                {
+                    cb(makeUnexpected(
+                        u"'data.messages' contained a non-object value"_s));
+                    return;
+                }
+
+                messages.emplace_back(messageValue.as_object());
+            }
+
+            cb(std::move(messages));
+        })
+        .execute();
 }
 
 void KickApi::sendMessage(uint64_t broadcasterUserID, const QString &message,

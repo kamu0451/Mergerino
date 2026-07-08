@@ -9,6 +9,7 @@
 #include "messages/Image.hpp"
 #include "singletons/Resources.hpp"
 
+#include <QPixmap>
 #include <QRegularExpression>
 #include <QUrl>
 
@@ -143,8 +144,7 @@ const std::optional<ImagePtr> &ModerationAction::getImage() const
     }
     else if (this->type_ == Type::Delete)
     {
-        this->image_ =
-            Image::fromResourcePixmap(getResources().buttons.trashCan);
+        this->image_ = Image::fromResourcePixmap(getResources().buttons.trashCan);
     }
 
     return this->image_;

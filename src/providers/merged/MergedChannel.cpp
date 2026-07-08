@@ -6,6 +6,8 @@
 
 #include "Application.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/highlights/HighlightController.hpp"
+#include "controllers/highlights/HighlightResult.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
 #include "messages/MessageBuilder.hpp"
@@ -14,6 +16,7 @@
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/tiktok/TikTokLiveChat.hpp"
+#include "providers/twitch/TwitchBadge.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Settings.hpp"
@@ -25,6 +28,7 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QSvgRenderer>
+#include <QUrlQuery>
 #include <QStringList>
 
 #include <algorithm>
@@ -70,6 +74,127 @@ QString normalizeChannelName(QString value)
     return value.toLower();
 }
 
+QString trimTrailingSlash(QString value)
+{
+    while (value.size() > 1 && value.endsWith('/'))
+    {
+        value.chop(1);
+    }
+    return value;
+}
+
+bool isLikelyYouTubeChannelId(const QString &value)
+{
+    const auto trimmed = value.trimmed();
+    if (!trimmed.startsWith("UC") || trimmed.size() != 24)
+    {
+        return false;
+    }
+
+    for (const auto ch : trimmed)
+    {
+        if (!ch.isLetterOrNumber() && ch != '_' && ch != '-')
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+QUrl youtubeChannelBrowserUrl(QString source)
+{
+    source = source.trimmed();
+    if (source.isEmpty())
+    {
+        return {};
+    }
+
+    if (source.startsWith('@'))
+    {
+        return QUrl(QString("https://www.youtube.com/%1")
+                        .arg(source.section('/', 0, 0).trimmed()));
+    }
+
+    if (isLikelyYouTubeChannelId(source))
+    {
+        return QUrl(QString("https://www.youtube.com/channel/%1").arg(source));
+    }
+
+    if (!source.contains("://") && !source.contains('/') &&
+        !source.contains('\\'))
+    {
+        return QUrl(QString("https://www.youtube.com/@%1").arg(source));
+    }
+
+    if (source.startsWith("//"))
+    {
+        source.prepend("https:");
+    }
+    else if (source.startsWith('/'))
+    {
+        source.prepend("https://www.youtube.com");
+    }
+    else if (!source.contains("://") &&
+             (source.startsWith("www.", Qt::CaseInsensitive) ||
+              source.startsWith("youtube.com/", Qt::CaseInsensitive) ||
+              source.startsWith("m.youtube.com/", Qt::CaseInsensitive)))
+    {
+        source.prepend("https://");
+    }
+
+    const QUrl url(source);
+    if (!url.isValid() || url.host().isEmpty())
+    {
+        return {};
+    }
+
+    const auto host = url.host().toLower();
+    const auto path = trimTrailingSlash(url.path());
+    const QUrlQuery query(url);
+
+    if (host.endsWith("youtube.com") && path == "/embed/live_stream")
+    {
+        const auto channelId = query.queryItemValue("channel").trimmed();
+        if (isLikelyYouTubeChannelId(channelId))
+        {
+            return QUrl(QString("https://www.youtube.com/channel/%1")
+                            .arg(channelId));
+        }
+    }
+
+    if (host.endsWith("youtube.com") && path.startsWith("/@"))
+    {
+        return QUrl(QString("https://www.youtube.com/%1")
+                        .arg(path.section('/', 1, 1).trimmed()));
+    }
+
+    if (host.endsWith("youtube.com") && path.startsWith("/channel/"))
+    {
+        const auto channelId = path.section('/', 2, 2).trimmed();
+        if (isLikelyYouTubeChannelId(channelId))
+        {
+            return QUrl(QString("https://www.youtube.com/channel/%1")
+                            .arg(channelId));
+        }
+    }
+
+    if (host.endsWith("youtube.com"))
+    {
+        const auto firstSegment = path.section('/', 1, 1).trimmed();
+        if (firstSegment == "c" || firstSegment == "user")
+        {
+            const auto name = path.section('/', 2, 2).trimmed();
+            if (!name.isEmpty())
+            {
+                return QUrl(QString("https://www.youtube.com/%1/%2")
+                                .arg(firstSegment, name));
+            }
+        }
+    }
+
+    return {};
+}
+
 QString platformName(MessagePlatform platform)
 {
     switch (platform)
@@ -111,6 +236,57 @@ QPixmap renderPlatformBadge(MessagePlatform platform)
     QSvgRenderer renderer(platformIconPath(platform));
     renderer.render(&painter);
     return pixmap;
+}
+
+HighlightAlert processMergedPlatformHighlights(Message &message)
+{
+    if (getSettings()->isBlacklistedUser(message.loginName))
+    {
+        return {};
+    }
+
+    const MessageParseArgs args;
+    auto [highlighted, highlightResult] = getApp()->getHighlights()->check(
+        args, {}, message.loginName, message.messageText, message.flags,
+        message.platform);
+
+    if (!highlighted)
+    {
+        return {};
+    }
+
+    message.flags.set(MessageFlag::Highlighted);
+    message.highlightColor = highlightResult.color;
+
+    if (highlightResult.showInMentions)
+    {
+        message.flags.set(MessageFlag::ShowInMentions);
+    }
+
+    return {
+        .customSound = highlightResult.customSoundUrl.value_or(QUrl{}),
+        .playSound = highlightResult.playSound,
+        .windowAlert = highlightResult.alert,
+    };
+}
+
+void triggerHighlightsAndAddMention(Channel *channel,
+                                    const std::shared_ptr<Message> &message,
+                                    const HighlightAlert &alert)
+{
+    if (!channel || !message)
+    {
+        return;
+    }
+
+    MessageBuilder::triggerHighlights(channel, alert);
+
+    if (message->flags.has(MessageFlag::Highlighted) &&
+        message->flags.has(MessageFlag::ShowInMentions))
+    {
+        getApp()->getTwitch()->getMentionsChannel()->addMessage(
+            message, MessageContext::Original);
+    }
 }
 
 }  // namespace
@@ -212,7 +388,9 @@ bool MergedChannel::canSendMessage() const
 bool MergedChannel::isWritable() const
 {
     return (this->config_.twitchEnabled && this->twitchChannel_ != nullptr) ||
-           (this->config_.kickEnabled && this->kickChannel_ != nullptr);
+           (this->config_.kickEnabled && this->kickChannel_ != nullptr) ||
+           (this->config_.youtubeEnabled &&
+            this->youtubeLiveChat_ != nullptr);
 }
 
 void MergedChannel::sendMessage(const QString &message)
@@ -267,6 +445,19 @@ void MergedChannel::sendMessage(const QString &message)
         {
             this->kickChannel_->sendMessage(message);
             this->lastKickSendMs_ = now;
+            sent = true;
+        }
+    }
+
+    if (this->config_.youtubeEnabled && this->youtubeLiveChat_)
+    {
+        if (!getApp()->getAccounts()->youtube.isLoggedIn())
+        {
+            unavailablePlatforms.append("YouTube");
+        }
+        else
+        {
+            this->youtubeLiveChat_->sendMessage(message);
             sent = true;
         }
     }
@@ -326,7 +517,9 @@ bool MergedChannel::isRerun() const
 
 bool MergedChannel::canReconnect() const
 {
-    return this->youtubeLiveChat_ != nullptr || this->tiktokLiveChat_ != nullptr;
+    return (this->twitchChannel_ && this->twitchChannel_->canReconnect()) ||
+           (this->kickChannel_ && this->kickChannel_->canReconnect()) ||
+           this->youtubeLiveChat_ != nullptr || this->tiktokLiveChat_ != nullptr;
 }
 
 void MergedChannel::reconnect()
@@ -677,6 +870,134 @@ MergedChannel::viewerCountDeltaPercent() const
     return ViewerDelta{percent, spanMinutes};
 }
 
+std::vector<MergedChannel::BrowserUrl>
+    MergedChannel::liveStreamBrowserUrls() const
+{
+    std::vector<BrowserUrl> urls;
+
+    if (this->config_.twitchEnabled && this->twitchLive_ &&
+        this->twitchChannel_)
+    {
+        const auto channelName = this->config_.effectiveTwitchChannelName();
+        if (!channelName.isEmpty())
+        {
+            urls.push_back(
+                {"Twitch",
+                 QUrl(QString("https://www.twitch.tv/%1").arg(channelName))});
+        }
+    }
+
+    if (this->config_.kickEnabled && this->kickLive_ && this->kickChannel_)
+    {
+        auto slug = this->config_.effectiveKickChannelName();
+        if (auto *kick = dynamic_cast<KickChannel *>(this->kickChannel_.get()))
+        {
+            slug = kick->slug();
+        }
+        if (!slug.isEmpty())
+        {
+            urls.push_back(
+                {"Kick", QUrl(QString("https://kick.com/%1").arg(slug))});
+        }
+    }
+
+    if (this->config_.youtubeEnabled && this->youtubeLive_ &&
+        this->youtubeLiveChat_ && !this->youtubeLiveChat_->videoId().isEmpty())
+    {
+        urls.push_back({"YouTube",
+                        QUrl(QString("https://www.youtube.com/watch?v=%1")
+                                 .arg(this->youtubeLiveChat_->videoId()))});
+    }
+
+    if (this->config_.tiktokEnabled && this->tiktokLive_ &&
+        this->tiktokLiveChat_)
+    {
+        auto source = this->tiktokLiveChat_->username();
+        if (source.isEmpty())
+        {
+            source = TikTokLiveChat::normalizeSource(this->config_.tiktokUsername);
+        }
+        if (!source.isEmpty())
+        {
+            urls.push_back({"TikTok",
+                            QUrl(QString("https://www.tiktok.com/@%1/live")
+                                     .arg(source))});
+        }
+    }
+
+    return urls;
+}
+
+std::vector<MergedChannel::BrowserUrl> MergedChannel::channelBrowserUrls() const
+{
+    std::vector<BrowserUrl> urls;
+
+    if (this->config_.twitchEnabled && this->twitchChannel_)
+    {
+        const auto channelName = this->config_.effectiveTwitchChannelName();
+        if (!channelName.isEmpty())
+        {
+            urls.push_back(
+                {"Twitch",
+                 QUrl(QString("https://www.twitch.tv/%1").arg(channelName))});
+        }
+    }
+
+    if (this->config_.kickEnabled && this->kickChannel_)
+    {
+        auto slug = this->config_.effectiveKickChannelName();
+        if (auto *kick = dynamic_cast<KickChannel *>(this->kickChannel_.get()))
+        {
+            slug = kick->slug();
+        }
+        if (!slug.isEmpty())
+        {
+            urls.push_back(
+                {"Kick", QUrl(QString("https://kick.com/%1").arg(slug))});
+        }
+    }
+
+    if (this->config_.youtubeEnabled)
+    {
+        QString source;
+        if (this->youtubeLiveChat_)
+        {
+            source = this->youtubeLiveChat_->resolvedSource();
+        }
+        if (source.isEmpty())
+        {
+            source = this->config_.youtubeStreamUrl;
+        }
+
+        const auto url = youtubeChannelBrowserUrl(source);
+        if (!url.isEmpty() && url.isValid())
+        {
+            urls.push_back({"YouTube", url});
+        }
+    }
+
+    if (this->config_.tiktokEnabled)
+    {
+        QString source;
+        if (this->tiktokLiveChat_)
+        {
+            source = this->tiktokLiveChat_->username();
+        }
+        if (source.isEmpty())
+        {
+            source = TikTokLiveChat::normalizeSource(this->config_.tiktokUsername);
+        }
+        if (!source.isEmpty())
+        {
+            urls.push_back({"TikTok",
+                            QUrl(QString("https://www.tiktok.com/@%1")
+                                     .arg(source))});
+        }
+    }
+
+    return urls;
+}
+
 ChannelPtr MergedChannel::twitchChannel() const
 {
     return this->twitchChannel_;
@@ -799,6 +1120,10 @@ void MergedChannel::initializeSources()
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->viewerCountChanged, [this] {
                 this->refreshStatusText();
+                this->streamStatusChanged.invoke();
+            });
+        this->youtubeConnections_.managedConnect(
+            this->youtubeLiveChat_->moderationStatusChanged, [this] {
                 this->streamStatusChanged.invoke();
             });
         this->youtubeLiveChat_->start();

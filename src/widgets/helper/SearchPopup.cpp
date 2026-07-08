@@ -23,9 +23,17 @@
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/splits/Split.hpp"
 
+#include <QAbstractButton>
 #include <QHBoxLayout>
+#include <QKeyEvent>
+#include <QLabel>
 #include <QLineEdit>
+#include <QPixmap>
 #include <QPushButton>
+#include <QSize>
+#include <QToolButton>
+#include <QVBoxLayout>
+#include <QWidget>
 
 namespace chatterino {
 
@@ -42,6 +50,10 @@ ChannelPtr SearchPopup::filter(const QString &text, const QString &channelName,
     for (size_t i = 0; i < snapshot.size(); ++i)
     {
         MessagePtr message = snapshot[i];
+        if (!message)
+        {
+            continue;
+        }
 
         bool accept = true;
         for (const auto &pred : predicates)
@@ -55,6 +67,72 @@ ChannelPtr SearchPopup::filter(const QString &text, const QString &channelName,
         }
 
         // If all predicates match, add the message to the channel
+        if (accept)
+        {
+            auto overrideFlags = std::optional<MessageFlags>(message->flags);
+            overrideFlags->set(MessageFlag::DoNotLog);
+
+            channel->addMessage(message, MessageContext::Repost, overrideFlags);
+        }
+    }
+
+    return channel;
+}
+
+ChannelPtr SearchPopup::filter(const QStringList &queries,
+                               const QString &channelName,
+                               const std::vector<MessagePtr> &snapshot)
+{
+    if (queries.isEmpty())
+    {
+        return filter(QString(), channelName, snapshot);
+    }
+
+    std::vector<std::vector<std::unique_ptr<MessagePredicate>>> queryPredicates;
+    queryPredicates.reserve(static_cast<size_t>(queries.size()));
+    for (const auto &query : queries)
+    {
+        const auto trimmed = query.trimmed();
+        if (!trimmed.isEmpty())
+        {
+            queryPredicates.push_back(parsePredicates(trimmed));
+        }
+    }
+
+    if (queryPredicates.empty())
+    {
+        return filter(QString(), channelName, snapshot);
+    }
+
+    ChannelPtr channel(new Channel(channelName, Channel::Type::None));
+
+    for (const auto &message : snapshot)
+    {
+        if (!message)
+        {
+            continue;
+        }
+
+        bool accept = false;
+        for (const auto &predicates : queryPredicates)
+        {
+            bool matchesQuery = true;
+            for (const auto &pred : predicates)
+            {
+                if (!pred->appliesTo(*message))
+                {
+                    matchesQuery = false;
+                    break;
+                }
+            }
+
+            if (matchesQuery)
+            {
+                accept = true;
+                break;
+            }
+        }
+
         if (accept)
         {
             auto overrideFlags = std::optional<MessageFlags>(message->flags);
@@ -116,10 +194,16 @@ void SearchPopup::addShortcuts()
 
 void SearchPopup::addChannel(ChannelView &channel)
 {
+    auto underlyingChannel = channel.underlyingChannel();
+    if (!underlyingChannel)
+    {
+        return;
+    }
+
     if (this->searchChannels_.empty())
     {
-        this->channelView_->setSourceChannel(channel.underlyingChannel());
-        this->channelName_ = channel.underlyingChannel()->getName();
+        this->channelView_->setSourceChannel(underlyingChannel);
+        this->channelName_ = underlyingChannel->getName();
     }
     else if (this->searchChannels_.size() == 1)
     {
@@ -141,7 +225,13 @@ void SearchPopup::goToMessage(const MessagePtr &message)
 {
     for (const auto &view : this->searchChannels_)
     {
-        const auto type = view.get().underlyingChannel()->getType();
+        const auto underlyingChannel = view.get().underlyingChannel();
+        if (!underlyingChannel)
+        {
+            continue;
+        }
+
+        const auto type = underlyingChannel->getType();
         if (type == Channel::Type::TwitchMentions ||
             type == Channel::Type::TwitchAutomod)
         {
@@ -209,7 +299,20 @@ bool SearchPopup::eventFilter(QObject *object, QEvent *event)
     if (object == this->searchInput_ && event->type() == QEvent::KeyPress)
     {
         QKeyEvent *keyEvent = static_cast<QKeyEvent *>(event);
-        if (keyEvent == QKeySequence::DeleteStartOfWord &&
+        if (keyEvent->key() == Qt::Key_Return ||
+            keyEvent->key() == Qt::Key_Enter)
+        {
+            this->addSearchTerm();
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Backspace &&
+            this->searchInput_->text().isEmpty() &&
+            !this->searchQueries_.isEmpty())
+        {
+            this->removeSearchTerm(this->searchQueries_.size() - 1);
+            return true;
+        }
+        if (keyEvent->matches(QKeySequence::DeleteStartOfWord) &&
             this->searchInput_->selectionLength() > 0)
         {
             this->searchInput_->backspace();
@@ -233,8 +336,108 @@ void SearchPopup::search()
         this->snapshot_ = this->buildSnapshot();
     }
 
-    this->channelView_->setChannel(filter(this->searchInput_->text(),
+    this->channelView_->setChannel(filter(this->activeSearchQueries(),
                                           this->channelName_, this->snapshot_));
+}
+
+void SearchPopup::addSearchTerm()
+{
+    const auto query = this->searchInput_->text().trimmed();
+    if (query.isEmpty())
+    {
+        return;
+    }
+
+    for (const auto &existing : this->searchQueries_)
+    {
+        if (existing.compare(query, Qt::CaseInsensitive) == 0)
+        {
+            this->searchInput_->clear();
+            this->search();
+            return;
+        }
+    }
+
+    this->searchQueries_.append(query);
+    this->searchInput_->clear();
+    this->rebuildSearchTerms();
+    this->search();
+}
+
+void SearchPopup::removeSearchTerm(int index)
+{
+    if (index < 0 || index >= this->searchQueries_.size())
+    {
+        return;
+    }
+
+    this->searchQueries_.removeAt(index);
+    this->rebuildSearchTerms();
+    this->search();
+}
+
+void SearchPopup::rebuildSearchTerms()
+{
+    while (auto *item = this->searchTermsLayout_->takeAt(0))
+    {
+        if (auto *widget = item->widget())
+        {
+            widget->deleteLater();
+        }
+        delete item;
+    }
+
+    for (int i = 0; i < this->searchQueries_.size(); ++i)
+    {
+        auto *row = new QWidget(this->searchTerms_);
+        row->setObjectName(QStringLiteral("searchTermRow"));
+        row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        row->setFixedHeight(22);
+
+        auto *layout = new QHBoxLayout(row);
+        layout->setContentsMargins(8, 0, 4, 0);
+        layout->setSpacing(6);
+
+        auto *label = new QLabel(this->searchQueries_.at(i), row);
+        label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(label);
+
+        auto *removeButton = new QToolButton(row);
+        removeButton->setAutoRaise(true);
+        removeButton->setCursor(Qt::PointingHandCursor);
+        removeButton->setIcon(
+            QPixmap(QStringLiteral(":/buttons/trash-lightMode.svg")));
+        removeButton->setIconSize(QSize(14, 14));
+        removeButton->setFixedSize(20, 20);
+        removeButton->setToolTip(QStringLiteral("Remove search term"));
+        layout->addWidget(removeButton);
+
+        QObject::connect(removeButton, &QToolButton::clicked, this,
+                         [this, row] {
+                             const int index =
+                                 this->searchTermsLayout_->indexOf(row);
+                             this->removeSearchTerm(index);
+                         });
+
+        this->searchTermsLayout_->addWidget(row);
+    }
+
+    this->searchTerms_->setVisible(!this->searchQueries_.isEmpty());
+    this->searchTerms_->adjustSize();
+}
+
+QStringList SearchPopup::activeSearchQueries() const
+{
+    QStringList queries = this->searchQueries_;
+
+    const auto current = this->searchInput_->text().trimmed();
+    if (!current.isEmpty())
+    {
+        queries.append(current);
+    }
+
+    return queries;
 }
 
 std::vector<MessagePtr> SearchPopup::buildSnapshot()
@@ -242,23 +445,37 @@ std::vector<MessagePtr> SearchPopup::buildSnapshot()
     // no point in filtering/sorting if it's a single channel search
     if (this->searchChannels_.length() == 1)
     {
-        const auto channelPtr = this->searchChannels_.at(0);
-        return channelPtr.get().channel()->getMessageSnapshot();
+        const auto channelPtr = this->searchChannels_.at(0).get().channel();
+        if (!channelPtr)
+        {
+            return {};
+        }
+
+        return channelPtr->getMessageSnapshot();
     }
 
     auto combinedSnapshot = std::vector<std::shared_ptr<const Message>>{};
     for (auto &channel : this->searchChannels_)
     {
         ChannelView &sharedView = channel.get();
+        const auto channelPtr = sharedView.channel();
+        const auto underlyingChannel = sharedView.underlyingChannel();
+        if (!channelPtr || !underlyingChannel)
+        {
+            continue;
+        }
 
         const FilterSetPtr filterSet = sharedView.getFilterSet();
-        std::vector<MessagePtr> snapshot =
-            sharedView.channel()->getMessageSnapshot();
+        std::vector<MessagePtr> snapshot = channelPtr->getMessageSnapshot();
 
         for (const auto &message : snapshot)
         {
-            if (filterSet &&
-                !filterSet->filter(message, sharedView.underlyingChannel()))
+            if (!message)
+            {
+                continue;
+            }
+
+            if (filterSet && !filterSet->filter(message, underlyingChannel))
             {
                 continue;
             }
@@ -270,12 +487,22 @@ std::vector<MessagePtr> SearchPopup::buildSnapshot()
     // remove any duplicate messages from splits containing the same channel
     std::sort(combinedSnapshot.begin(), combinedSnapshot.end(),
               [](MessagePtr &a, MessagePtr &b) {
+                  if (!a || !b)
+                  {
+                      return static_cast<bool>(b);
+                  }
+
                   return a->id > b->id;
               });
 
     auto uniqueIterator =
         std::unique(combinedSnapshot.begin(), combinedSnapshot.end(),
                     [](MessagePtr &a, MessagePtr &b) {
+                        if (!a || !b)
+                        {
+                            return false;
+                        }
+
                         // nullptr check prevents system messages from being dropped
                         return (a->id != nullptr) && a->id == b->id;
                     });
@@ -285,6 +512,11 @@ std::vector<MessagePtr> SearchPopup::buildSnapshot()
     // resort by time for presentation
     std::sort(combinedSnapshot.begin(), combinedSnapshot.end(),
               [](MessagePtr &a, MessagePtr &b) {
+                  if (!a || !b)
+                  {
+                      return static_cast<bool>(b);
+                  }
+
                   return a->serverReceivedTime < b->serverReceivedTime;
               });
 
@@ -312,14 +544,30 @@ void SearchPopup::initLayout()
 
                 this->searchInput_->setPlaceholderText("Type to search");
                 this->searchInput_->setClearButtonEnabled(true);
-                this->searchInput_->findChild<QAbstractButton *>()->setIcon(
-                    QPixmap(":/buttons/clearSearch.png"));
+                if (auto *clearButton =
+                        this->searchInput_->findChild<QAbstractButton *>())
+                {
+                    clearButton->setIcon(
+                        QPixmap(":/buttons/clearSearch.png"));
+                }
                 QObject::connect(this->searchInput_, &QLineEdit::textChanged,
                                  this, &SearchPopup::search);
                 this->searchInput_->installEventFilter(this);
             }
 
             layout1->addLayout(layout2);
+        }
+
+        // SEARCH TERMS
+        {
+            this->searchTerms_ = new QWidget(this);
+            this->searchTerms_->setSizePolicy(QSizePolicy::Expanding,
+                                              QSizePolicy::Maximum);
+            this->searchTermsLayout_ = new QVBoxLayout(this->searchTerms_);
+            this->searchTermsLayout_->setContentsMargins(0, 0, 0, 0);
+            this->searchTermsLayout_->setSpacing(0);
+            this->searchTerms_->setVisible(false);
+            layout1->addWidget(this->searchTerms_);
         }
 
         // CHANNELVIEW

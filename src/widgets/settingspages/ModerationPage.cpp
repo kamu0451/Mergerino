@@ -6,6 +6,7 @@
 
 #include "Application.hpp"
 #include "controllers/logging/ChannelLoggingModel.hpp"
+#include "controllers/logging/LoggedUsers.hpp"
 #include "controllers/moderationactions/ModerationAction.hpp"
 #include "controllers/moderationactions/ModerationActionModel.hpp"
 #include "singletons/Logging.hpp"
@@ -20,6 +21,7 @@
 #include "widgets/settingspages/SettingWidget.hpp"
 
 #include <QFileDialog>
+#include <QFutureWatcher>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -28,9 +30,51 @@
 #include <QTableView>
 #include <QtConcurrent/QtConcurrent>
 
-namespace chatterino {
+#include <array>
 
-qint64 dirSize(QString &dirPath)
+namespace chatterino {
+namespace {
+
+bool matchesModerationPageText(const QString &query)
+{
+    if (query.isEmpty())
+    {
+        return true;
+    }
+
+    const QStringList labels = {
+        QStringLiteral("Logs"),
+        QStringLiteral("Enable logging"),
+        QStringLiteral("Log file timestamp format"),
+        QStringLiteral("Use Twitch's timestamps"),
+        QStringLiteral("Only log channels listed below"),
+        QStringLiteral("Store live stream logs as separate files"),
+        QStringLiteral("Channels"),
+        QStringLiteral("Users"),
+        QStringLiteral("Moderation buttons"),
+        QStringLiteral("Moderation mode"),
+        QStringLiteral("Action"),
+        QStringLiteral("Icon"),
+        QStringLiteral("User Timeout Buttons"),
+        QStringLiteral("Customize the timeout buttons"),
+        QStringLiteral("Button"),
+        QStringLiteral("timeout"),
+    };
+
+    for (const auto &label : labels)
+    {
+        if (label.contains(query, Qt::CaseInsensitive))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+}  // namespace
+
+qint64 dirSize(const QString &dirPath)
 {
     QDirIterator it(dirPath, QDirIterator::Subdirectories);
     qint64 size = 0;
@@ -70,6 +114,19 @@ QString fetchLogDirectorySize()
 
     return QString("Your logs currently take up %1 of space")
         .arg(formatSize(logsSize));
+}
+
+void refreshLogDirectorySize(QLabel *label)
+{
+    label->setText("Calculating log directory size...");
+
+    auto *watcher = new QFutureWatcher<QString>(label);
+    QObject::connect(watcher, &QFutureWatcher<QString>::finished, label,
+                     [watcher, label] {
+                         label->setText(watcher->result());
+                         watcher->deleteLater();
+                     });
+    watcher->setFuture(QtConcurrent::run(fetchLogDirectorySize));
 }
 
 ModerationPage::ModerationPage()
@@ -129,10 +186,8 @@ ModerationPage::ModerationPage()
         buttons->addStretch();
 
         // Show how big (size-wise) the logs are
-        auto logsPathSizeLabel = logs.emplace<QLabel>();
-        logsPathSizeLabel->setText(QtConcurrent::run([] {
-                                       return fetchLogDirectorySize();
-                                   }).result());
+        auto *logsPathSizeLabel = logs.emplace<QLabel>().getElement();
+        refreshLogDirectorySize(logsPathSizeLabel);
 
         // Select event
         QObject::connect(
@@ -143,9 +198,7 @@ ModerationPage::ModerationPage()
                 getSettings()->logPath = dirName;
 
                 // Refresh: Show how big (size-wise) the logs are
-                logsPathSizeLabel->setText(QtConcurrent::run([] {
-                                               return fetchLogDirectorySize();
-                                           }).result());
+                refreshLogDirectorySize(logsPathSizeLabel);
             });
 
         buttons->addSpacing(16);
@@ -157,9 +210,7 @@ ModerationPage::ModerationPage()
                 getSettings()->logPath = "";
 
                 // Refresh: Show how big (size-wise) the logs are
-                logsPathSizeLabel->setText(QtConcurrent::run([] {
-                                               return fetchLogDirectorySize();
-                                           }).result());
+                refreshLogDirectorySize(logsPathSizeLabel);
             });
 
         auto logsTimestampFormatLayout =
@@ -211,23 +262,51 @@ ModerationPage::ModerationPage()
                 onlyLogListedChannels->setEnabled(enableLogging->isChecked());
                 separatelyStoreStreamLogs->setEnabled(
                     getSettings()->enableLogging);
-            });
+        });
+
+        auto logLists = logs.emplace<QTabWidget>();
+        auto channels = logLists.appendTab(new QVBoxLayout, "Channels");
 
         EditableModelView *view =
-            logs.emplace<EditableModelView>(
+            channels
+                .emplace<EditableModelView>(
                     (new ChannelLoggingModel(nullptr))
-                        ->initialized(&getSettings()->loggedChannels))
+                        ->initialized(&getSettings()->loggedChannels),
+                    false)
                 .getElement();
 
-        view->setTitles({"Twitch channels"});
+        view->setTitles({"Channels"});
         view->getTableView()->horizontalHeader()->setSectionResizeMode(
             QHeaderView::Fixed);
         view->getTableView()->horizontalHeader()->setSectionResizeMode(
             0, QHeaderView::Stretch);
+        this->loggedChannelsView_ = view;
 
         // We can safely ignore this signal connection since we own the view
         std::ignore = view->addButtonPressed.connect([] {
             getSettings()->loggedChannels.append(ChannelLog("channel"));
+        });
+
+        auto users = logLists.appendTab(new QVBoxLayout, "Users");
+        logging::initLoggedUsers();
+
+        EditableModelView *usersView =
+            users
+                .emplace<EditableModelView>(
+                    (new ChannelLoggingModel(nullptr))
+                        ->initialized(&getSettings()->loggedUsers),
+                    false)
+                .getElement();
+
+        usersView->setTitles({"Users"});
+        usersView->getTableView()->horizontalHeader()->setSectionResizeMode(
+            QHeaderView::Fixed);
+        usersView->getTableView()->horizontalHeader()->setSectionResizeMode(
+            0, QHeaderView::Stretch);
+        this->loggedUsersView_ = usersView;
+
+        std::ignore = usersView->addButtonPressed.connect([] {
+            getSettings()->loggedUsers.append(ChannelLog("user"));
         });
 
     }  // logs end
@@ -263,6 +342,7 @@ ModerationPage::ModerationPage()
             QHeaderView::Fixed);
         view->getTableView()->horizontalHeader()->setSectionResizeMode(
             0, QHeaderView::Stretch);
+        this->moderationActionsView_ = view;
         view->getTableView()->setItemDelegateForColumn(
             ModerationActionModel::Column::Icon, new IconDelegate(view));
         QObject::connect(
@@ -315,6 +395,31 @@ ModerationPage::ModerationPage()
 
     // ---- misc
     this->itemsChangedTimer_.setSingleShot(true);
+}
+
+bool ModerationPage::filterElements(const QString &query)
+{
+    bool any = matchesModerationPageText(query);
+
+    constexpr std::array<int, 1> singleColumn = {0};
+    constexpr std::array<int, 2> moderationColumns = {0, 1};
+
+    if (this->loggedChannelsView_ != nullptr)
+    {
+        any |=
+            this->loggedChannelsView_->filterSearchResults(query, singleColumn);
+    }
+    if (this->loggedUsersView_ != nullptr)
+    {
+        any |= this->loggedUsersView_->filterSearchResults(query, singleColumn);
+    }
+    if (this->moderationActionsView_ != nullptr)
+    {
+        any |= this->moderationActionsView_->filterSearchResults(
+            query, moderationColumns);
+    }
+
+    return any || query.isEmpty();
 }
 
 void ModerationPage::addModerationButtonSettings(QTabWidget *tabs)

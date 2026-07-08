@@ -17,13 +17,20 @@
 #include "controllers/plugins/LuaUtilities.hpp"
 #include "controllers/plugins/Plugin.hpp"
 #include "controllers/plugins/PluginController.hpp"
+#include "messages/Message.hpp"
+#include "providers/merged/MergedChannel.hpp"
 #include "singletons/Settings.hpp"
+
+#include <utility>
 
 namespace chatterino {
 
-TabCompletionModel::TabCompletionModel(Channel &channel, QObject *parent)
+TabCompletionModel::TabCompletionModel(
+    Channel &channel, QObject *parent,
+    PlatformFilterCallback platformFilterCallback)
     : QStringListModel(parent)
     , channel_(channel)
+    , platformFilterCallback_(std::move(platformFilterCallback))
 {
 }
 
@@ -175,31 +182,73 @@ std::unique_ptr<completion::Source> TabCompletionModel::buildSource(
 
 std::unique_ptr<completion::Source> TabCompletionModel::buildEmoteSource() const
 {
+    const auto platforms = this->platformFilter();
     if (getSettings()->useSmartEmoteCompletion)
     {
         return std::make_unique<completion::EmoteSource>(
             &this->channel_,
-            std::make_unique<completion::SmartTabEmoteStrategy>());
+            std::make_unique<completion::SmartTabEmoteStrategy>(), nullptr,
+            platforms);
     }
 
     return std::make_unique<completion::EmoteSource>(
-        &this->channel_,
-        std::make_unique<completion::ClassicTabEmoteStrategy>());
+        &this->channel_, std::make_unique<completion::ClassicTabEmoteStrategy>(),
+        nullptr, platforms);
 }
 
 std::unique_ptr<completion::Source> TabCompletionModel::buildUserSource(
     bool prependAt) const
 {
     return std::make_unique<completion::UserSource>(
-        &this->channel_, std::make_unique<completion::ClassicUserStrategy>(),
-        nullptr, prependAt);
+        this->sourceChannelForSelectedPlatform(),
+        std::make_unique<completion::ClassicUserStrategy>(), nullptr,
+        prependAt);
 }
 
 std::unique_ptr<completion::Source> TabCompletionModel::buildCommandSource()
     const
 {
     return std::make_unique<completion::CommandSource>(
-        std::make_unique<completion::CommandStrategy>(true));
+        std::make_unique<completion::CommandStrategy>(true), nullptr,
+        this->sourceChannelForSelectedPlatform());
+}
+
+std::vector<MessagePlatform> TabCompletionModel::platformFilter() const
+{
+    if (!this->platformFilterCallback_)
+    {
+        return {};
+    }
+
+    return this->platformFilterCallback_();
+}
+
+const Channel *TabCompletionModel::sourceChannelForSelectedPlatform() const
+{
+    const auto platforms = this->platformFilter();
+    if (platforms.size() != 1)
+    {
+        return &this->channel_;
+    }
+
+    const auto *merged = dynamic_cast<const MergedChannel *>(&this->channel_);
+    if (merged == nullptr)
+    {
+        return &this->channel_;
+    }
+
+    switch (platforms.front())
+    {
+        case MessagePlatform::AnyOrTwitch:
+            return merged->twitchChannel().get();
+        case MessagePlatform::Kick:
+            return merged->kickChannel().get();
+        case MessagePlatform::YouTube:
+        case MessagePlatform::TikTok:
+            return nullptr;
+    }
+
+    return &this->channel_;
 }
 
 }  // namespace chatterino

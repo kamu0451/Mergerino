@@ -19,6 +19,7 @@
 #include "providers/emoji/Emojis.hpp"
 #include "providers/ffz/FfzEmotes.hpp"
 #include "providers/kick/KickAccount.hpp"
+#include "providers/kick/KickChannel.hpp"
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/seventv/SeventvEmotes.hpp"
@@ -584,6 +585,12 @@ void EmotePopup::reloadEmotes()
                               "Kick");
 
         // channel
+        if (!this->kickChannel_->kickChannelEmotes()->empty())
+        {
+            addEmotesToTabAndAll(*channelChannel, *allChannel,
+                                  *this->kickChannel_->kickChannelEmotes(),
+                                  "Kick");
+        }
         if (Settings::instance().enableSevenTVChannelEmotes)
         {
             addEmotesToTabAndAll(*channelChannel, *allChannel,
@@ -672,6 +679,14 @@ void EmotePopup::filterTwitchEmotes(std::shared_ptr<Channel> searchChannel,
     }
     if (this->kickChannel_)
     {
+        auto channelEmotes =
+            filterEmoteMap(searchText, this->kickChannel_->kickChannelEmotes());
+        if (!channelEmotes.empty())
+        {
+            addEmotes(*searchChannel, std::move(channelEmotes),
+                      "Kick (Channel)");
+        }
+
         auto globalEmotes = filterEmoteMap(
             searchText, getApp()->getKickChatServer()->globalEmotes());
         if (!globalEmotes.empty())

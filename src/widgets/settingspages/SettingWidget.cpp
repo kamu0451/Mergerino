@@ -248,6 +248,9 @@ template SettingWidget *SettingWidget::dropdown<EmoteTooltipScale>(
     const QString &label, EnumStringSetting<EmoteTooltipScale> &setting);
 template SettingWidget *SettingWidget::dropdown<PlatformIndicatorMode>(
     const QString &label, EnumStringSetting<PlatformIndicatorMode> &setting);
+template SettingWidget *SettingWidget::dropdown<SplitHeaderViewerCountMode>(
+    const QString &label,
+    EnumStringSetting<SplitHeaderViewerCountMode> &setting);
 template SettingWidget *SettingWidget::dropdown<PlatformEventHighlightStyle>(
     const QString &label,
     EnumStringSetting<PlatformEventHighlightStyle> &setting);

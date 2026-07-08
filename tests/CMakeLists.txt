@@ -103,6 +103,55 @@ if(CHATTERINO_ENABLE_LTO)
         PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
+if(WIN32)
+    add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_RUNTIME_DLLS:${PROJECT_NAME}>
+            $<TARGET_FILE_DIR:${PROJECT_NAME}>
+        COMMAND_EXPAND_LISTS
+    )
+
+    # Conan's OpenSSL targets expose import libraries, so TARGET_RUNTIME_DLLS misses the runtime DLLs.
+    set(CHATTERINO_TEST_OPENSSL_BIN_DIRS
+        ${openssl_OpenSSL_SSL_BIN_DIRS_RELEASE}
+        ${openssl_OpenSSL_Crypto_BIN_DIRS_RELEASE}
+        ${openssl_BIN_DIRS_RELEASE})
+    foreach(CHATTERINO_TEST_OPENSSL_LIBRARY IN ITEMS
+            "${OPENSSL_SSL_LIBRARY}"
+            "${OPENSSL_CRYPTO_LIBRARY}")
+        if(CHATTERINO_TEST_OPENSSL_LIBRARY AND
+                IS_ABSOLUTE "${CHATTERINO_TEST_OPENSSL_LIBRARY}")
+            get_filename_component(CHATTERINO_TEST_OPENSSL_LIBRARY_DIR
+                "${CHATTERINO_TEST_OPENSSL_LIBRARY}" DIRECTORY)
+            get_filename_component(CHATTERINO_TEST_OPENSSL_PACKAGE_DIR
+                "${CHATTERINO_TEST_OPENSSL_LIBRARY_DIR}" DIRECTORY)
+            list(APPEND CHATTERINO_TEST_OPENSSL_BIN_DIRS
+                "${CHATTERINO_TEST_OPENSSL_PACKAGE_DIR}/bin")
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES CHATTERINO_TEST_OPENSSL_BIN_DIRS)
+
+    set(CHATTERINO_TEST_OPENSSL_RUNTIME_DLLS)
+    foreach(CHATTERINO_TEST_OPENSSL_BIN_DIR IN LISTS CHATTERINO_TEST_OPENSSL_BIN_DIRS)
+        if(IS_DIRECTORY "${CHATTERINO_TEST_OPENSSL_BIN_DIR}")
+            file(GLOB CHATTERINO_TEST_OPENSSL_DLLS
+                "${CHATTERINO_TEST_OPENSSL_BIN_DIR}/libssl*.dll"
+                "${CHATTERINO_TEST_OPENSSL_BIN_DIR}/libcrypto*.dll")
+            list(APPEND CHATTERINO_TEST_OPENSSL_RUNTIME_DLLS
+                ${CHATTERINO_TEST_OPENSSL_DLLS})
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES CHATTERINO_TEST_OPENSSL_RUNTIME_DLLS)
+
+    if(CHATTERINO_TEST_OPENSSL_RUNTIME_DLLS)
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${CHATTERINO_TEST_OPENSSL_RUNTIME_DLLS}
+                $<TARGET_FILE_DIR:${PROJECT_NAME}>
+        )
+    endif()
+endif()
+
 if(CHATTERINO_TEST_USE_PUBLIC_HTTPBIN)
     target_compile_definitions(${PROJECT_NAME} PRIVATE CHATTERINO_TEST_USE_PUBLIC_HTTPBIN)
 endif()

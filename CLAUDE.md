@@ -72,3 +72,10 @@ This is Chatterino2's architecture with Mergerino-specific additions. The big pi
 - `.git-blame-ignore-revs` lists bulk-reformat commits — use `git blame --ignore-revs-file=.git-blame-ignore-revs` when chasing history.
 - Licensing: REUSE-compliant. New C++ files should carry `SPDX-FileCopyrightText` + `SPDX-License-Identifier: MIT` headers (see existing files; Mergerino-new files use year 2026).
 - Keep new code inside the `chatterino` namespace — the fork has not renamed it.
+
+## Claude Code setup
+
+- `.claudeignore` at repo root excludes `build/`, `lib/` submodule trees, all binaries/debug artifacts, windeployqt plugin dirs, and CMake/Conan/FetchContent intermediate trees. Edit it if a new vendored submodule lands in `lib/`.
+- `/build` — slash command wrapping `.dev-cycle.bat` (kill + build + relaunch) and `.local-build.bat` (build only).
+- `/release-status` — slash command for `gh run` / `gh release view` against this repo's three workflows.
+- `settings.local.json` in `.claude/` grants `gh run *` and a temp deploy path; it is gitignored.

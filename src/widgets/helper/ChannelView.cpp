@@ -1195,6 +1195,15 @@ bool ChannelView::getEnableScrollingToBottom() const
     return this->enableScrollingToBottom_;
 }
 
+void ChannelView::setFloatingEmotesEnabled(bool value)
+{
+    this->floatingEmotesEnabled_ = value;
+    if (!value)
+    {
+        this->floatingEmotes_.clear();
+    }
+}
+
 void ChannelView::setOverrideFlags(std::optional<MessageElementFlags> value)
 {
     this->overrideFlags_ = value;
@@ -2016,19 +2025,18 @@ bool ChannelView::shouldIncludeMessage(const MessagePtr &m) const
         }
         else if (isActivityTwitchBitsMessage(*m))
         {
-            if (shouldShowTwitchBitsInActivityPane(
-                    *m, this->split_->twitchActivityMinimumBits()))
-            {
-                return false;
-            }
+            // Hide all bits cheers from the filtered chat: above-threshold
+            // ones go to the activity pane, below-threshold ones are
+            // filtered out of it too, so showing them here would mean a
+            // sub-threshold cheer only ever appears in chat.
+            return false;
         }
         else if (isActivityKickKicksGiftMessage(*m))
         {
-            if (shouldShowKickKicksGiftInActivityPane(
-                    *m, this->split_->kickActivityMinimumKicks()))
-            {
-                return false;
-            }
+            // Same as bits above: hide every Kicks gift from the filtered
+            // chat so sub-threshold gifts don't leak in here while being
+            // filtered out of the activity pane.
+            return false;
         }
         else if (isActivityTikTokJoinMessage(*m) ||
                  isActivityTikTokLikeMessage(*m) ||
@@ -2089,7 +2097,8 @@ void ChannelView::messageAppended(MessagePtr &message,
         visibleMessage = *transformed;
     }
 
-    if (getSettings()->floatEmotesOnBackground &&
+    if (this->floatingEmotesEnabled_ &&
+        getSettings()->floatEmotesOnBackground &&
         this->context_ == Context::None && this->isVisible() &&
         this->showingLatestMessages_ && visibleMessage->isEmoteOnly())
     {
@@ -2704,11 +2713,13 @@ void ChannelView::paintEvent(QPaintEvent *event)
 
     painter.fillRect(this->rect(), this->messageColors_.channelBackground);
 
-    // draw floating emotes behind the message list
-    this->drawFloatingEmotes(painter);
-
     // draw messages
     this->drawMessages(painter, event->rect());
+
+    // draw floating emotes over the message list. Message rows paint their own
+    // opaque background, so drawing the emotes first would hide them behind the
+    // chat; they are translucent (and fade in/out) so they read as an overlay.
+    this->drawFloatingEmotes(painter);
 
     // draw paused sign
     if (this->paused())

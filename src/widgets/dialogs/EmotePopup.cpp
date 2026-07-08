@@ -340,6 +340,7 @@ EmotePopup::EmotePopup(QWidget *parent)
             MessageElementFlag::Default, MessageElementFlag::AlwaysShow,
             MessageElementFlag::EmoteImage});
         view->setEnableScrollingToBottom(false);
+        view->setFloatingEmotesEnabled(false);
         // We can safely ignore this signal connection since the ChannelView is deleted
         // either when the notebook is deleted, or when our main layout is deleted.
         std::ignore = view->linkClicked.connect(clicked);

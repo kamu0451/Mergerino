@@ -1044,7 +1044,12 @@ void SplitInput::updateEmotePopupChannel()
         return;
     }
 
-    this->emotePopup_->loadChannel(channel, this->selectedSendPlatforms());
+    // Show every emote the channel's platforms provide, independent of the
+    // currently selected send platform and login state (an empty platform list
+    // means "all platforms" in loadChannel). Gating the browse popup on the
+    // send platform left it completely empty whenever no send platform was
+    // available (e.g. logged out, or a merged tab whose send target was unset).
+    this->emotePopup_->loadChannel(channel, {});
 }
 
 QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)

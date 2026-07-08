@@ -26,6 +26,36 @@ std::vector<std::pair<QByteArray, QByteArray>> kickNoAuthHeaders()
     };
 }
 
+// Kick returns stream timestamps in UTC. The livestream "start_time" field is a
+// space-separated MySQL datetime with no zone designator ("2024-05-20 18:30:00"),
+// which Qt would otherwise read as local time -- inflating stream uptime by the
+// local UTC offset. Parse the known formats and pin the result to UTC.
+QDateTime parseKickUtcTimestamp(const QString &str)
+{
+    if (str.isEmpty())
+    {
+        return {};
+    }
+
+    auto dt = QDateTime::fromString(str, Qt::ISODateWithMs);
+    if (!dt.isValid())
+    {
+        dt = QDateTime::fromString(str, u"yyyy-MM-dd HH:mm:ss"_s);
+    }
+    if (!dt.isValid())
+    {
+        return {};
+    }
+
+    // A zone-less string parses as local time; the components are actually UTC,
+    // so reinterpret (not convert) them as UTC.
+    if (dt.timeSpec() == Qt::LocalTime)
+    {
+        dt.setTimeSpec(Qt::UTC);
+    }
+    return dt;
+}
+
 template <typename T>
 struct IsCollectionS : std::false_type {
 };
@@ -184,8 +214,8 @@ KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
     this->isLive = livestreamObj["is_live"].toBool();
     this->streamTitle = livestreamObj["session_title"].toQString();
     this->viewerCount = livestreamObj["viewer_count"].toUint64();
-    this->startTime = QDateTime::fromString(
-        livestreamObj["start_time"].toQString(), Qt::ISODate);
+    this->startTime =
+        parseKickUtcTimestamp(livestreamObj["start_time"].toQString());
 
     auto thumbnail = livestreamObj["thumbnail"];
     if (thumbnail.isObject())
@@ -233,8 +263,7 @@ KickCategoryInfo::KickCategoryInfo(BoostJsonObject obj)
 KickStreamInfo::KickStreamInfo(BoostJsonObject obj)
     : isLive(obj["is_live"].toBool())
     , viewerCount(obj["viewer_count"].toUint64())
-    , startTime(
-          QDateTime::fromString(obj["start_time"].toQString(), Qt::ISODate))
+    , startTime(parseKickUtcTimestamp(obj["start_time"].toQString()))
     , thumbnailUrl(obj["thumbnail"].toQString())
 {
 }

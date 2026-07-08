@@ -126,6 +126,9 @@ public:
 
     void setEnableScrollingToBottom(bool);
     bool getEnableScrollingToBottom() const;
+    /// Enables/disables the decorative background floating emotes for this view.
+    /// On by default; turned off for non-chat views like the emote popup.
+    void setFloatingEmotesEnabled(bool);
     void setOverrideFlags(std::optional<MessageElementFlags> value);
     const std::optional<MessageElementFlags> &getOverrideFlags() const;
     void updateLastReadMessage();
@@ -431,6 +434,7 @@ private:
         double velY = 0.0;
     };
     std::vector<FloatingEmote> floatingEmotes_;
+    bool floatingEmotesEnabled_ = true;
 
     bool pausable_ = false;
     QTimer pauseTimer_;

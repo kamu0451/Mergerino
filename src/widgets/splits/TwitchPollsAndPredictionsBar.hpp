@@ -105,7 +105,6 @@ private:
 
     std::weak_ptr<TwitchChannel> twitchChannel_;
     pajlada::Signals::SignalHolder channelSignalHolder_;
-    pajlada::Signals::SignalHolder moderationAuthSignalHolder_;
     QTimer refreshTimer_;
     std::vector<Item> items_;
     std::optional<Item> pendingPoll_;

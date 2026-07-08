@@ -8,8 +8,6 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
-#include "providers/twitch/api/TwitchModerationAuth.hpp"
-#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Fonts.hpp"
@@ -421,10 +419,6 @@ TwitchPollsAndPredictionsBar::TwitchPollsAndPredictionsBar(QWidget *parent)
         getApp()->getAccounts()->twitch.currentUserChanged.connect([this] {
             this->scheduleRefresh(0);
         }));
-    this->moderationAuthSignalHolder_.managedConnect(
-        TwitchModerationAuth::accountChanged(), [this] {
-            this->refreshNow();
-        });
 }
 
 void TwitchPollsAndPredictionsBar::rememberLocalPoll(QString broadcasterID,
@@ -762,19 +756,18 @@ void TwitchPollsAndPredictionsBar::refresh()
         return;
     }
 
-    std::optional<TwitchModerationAuth::Account> moderationAccount;
-    if (twitch->isMod() && !twitch->isBroadcaster())
+    if (!twitch->isBroadcaster())
     {
-        auto account =
-            TwitchModerationAuth::resolveForCurrentUser(currentUser->getUserId());
-        if (account.isValid())
-        {
-            moderationAccount = std::move(account);
-        }
+        // Helix polls/predictions can only be read with the broadcaster's own
+        // token; there is no supported read for moderators or viewers, so we
+        // degrade to nothing rather than spamming 401s.
+        this->clearItems();
+        this->scheduleRefresh(REFRESH_WHEN_IDLE_MS);
+        return;
     }
 
     const int generation = ++this->requestGeneration_;
-    this->pendingRequests_ = moderationAccount ? 1 : 2;
+    this->pendingRequests_ = 2;
     this->pendingPoll_.reset();
     this->pendingPrediction_.reset();
     if (auto item = TwitchPollsAndPredictionsBar::makeLocalPollItem(roomId))
@@ -853,49 +846,6 @@ void TwitchPollsAndPredictionsBar::refresh()
 
         guard->finishRequest(generation);
     };
-
-    if (moderationAccount)
-    {
-        TwitchWebApi::getActivePollAndPredictions(
-            roomId, moderationAccount->clientId, moderationAccount->oauthToken,
-            [guard, generation](const HelixPolls &polls,
-                                const HelixPredictions &predictions) {
-                if (!guard || guard->requestGeneration_ != generation)
-                {
-                    return;
-                }
-
-                for (const auto &poll : polls.polls)
-                {
-                    if (auto item =
-                            TwitchPollsAndPredictionsBar::makePollItem(poll))
-                    {
-                        guard->pendingPoll_ = std::move(item);
-                        break;
-                    }
-                }
-                for (const auto &prediction : predictions.predictions)
-                {
-                    if (auto item =
-                            TwitchPollsAndPredictionsBar::makePredictionItem(
-                                prediction))
-                    {
-                        guard->pendingPrediction_ = std::move(item);
-                        break;
-                    }
-                }
-                guard->finishRequest(generation);
-            },
-            [guard, generation](const QString &) {
-                if (!guard || guard->requestGeneration_ != generation)
-                {
-                    return;
-                }
-
-                guard->finishRequest(generation);
-            });
-        return;
-    }
 
     getHelix()->getPolls(roomId, {}, 1, {}, std::move(pollSuccess),
                          std::move(pollFailure));

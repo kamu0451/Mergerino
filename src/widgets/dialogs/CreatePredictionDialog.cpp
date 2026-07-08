@@ -9,8 +9,6 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
-#include "providers/twitch/api/TwitchModerationAuth.hpp"
-#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Theme.hpp"
@@ -916,29 +914,8 @@ void CreatePredictionDialog::submit()
         return;
     }
 
-    QString authError;
-    const auto moderationAccount =
-        TwitchModerationAuth::resolveForCurrentUser(currentUser->getUserId(),
-                                                    &authError);
-    if (!moderationAccount.isValid())
-    {
-        scheduleFailure("Failed to create prediction - " + authError);
-        return;
-    }
-
-    TwitchWebApi::startPrediction(
-        this->broadcasterID_, title, outcomeTitles, durationSeconds,
-        moderationAccount.clientId, moderationAccount.oauthToken,
-        [successCallback = std::move(successCallback),
-         broadcasterID = this->broadcasterID_, title, outcomeTitles,
-         durationSeconds](const QString &predictionID,
-                          const QJsonObject &predictionObject) mutable {
-            TwitchPollsAndPredictionsBar::rememberLocalPrediction(
-                broadcasterID, title, outcomeTitles, durationSeconds,
-                predictionID, predictionObject);
-            successCallback();
-        },
-        std::move(failureCallback));
+    scheduleFailure(QStringLiteral(
+        "Only the broadcaster can create predictions in Mergerino."));
 }
 
 void CreatePredictionDialog::finishSubmitFailure(const QString &message)

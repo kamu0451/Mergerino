@@ -11,8 +11,6 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
-#include "providers/twitch/api/TwitchModerationAuth.hpp"
-#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Theme.hpp"
@@ -1351,27 +1349,9 @@ void CreatePollDialog::submit()
         return;
     }
 
-    QString authError;
-    const auto moderationAccount =
-        TwitchModerationAuth::resolveForCurrentUser(currentUser->getUserId(),
-                                                    &authError);
-    if (!moderationAccount.isValid())
-    {
-        scheduleFailure("Failed to create poll - " + authError);
-        return;
-    }
-
-    TwitchWebApi::startPoll(
-        this->broadcasterID_, title, choices, durationSeconds, points,
-        moderationAccount.clientId, moderationAccount.oauthToken,
-        [successCallback = std::move(successCallback),
-         broadcasterID = this->broadcasterID_, title, choices,
-         durationSeconds]() mutable {
-            TwitchPollsAndPredictionsBar::rememberLocalPoll(
-                broadcasterID, title, choices, durationSeconds);
-            successCallback();
-        },
-        std::move(failureCallback));
+    scheduleFailure(
+        QStringLiteral("Only the broadcaster can create polls in Mergerino. "
+                       "Use the Twitch poll popout."));
 }
 
 void CreatePollDialog::finishSubmitFailure(const QString &message)

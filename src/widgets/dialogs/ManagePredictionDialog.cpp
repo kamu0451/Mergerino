@@ -8,8 +8,6 @@
 #include "common/Channel.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
-#include "providers/twitch/api/TwitchModerationAuth.hpp"
-#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Theme.hpp"
@@ -1200,60 +1198,10 @@ void ManagePredictionDialog::endPrediction(
         return;
     }
 
-    if (!this->useModerationAuth_)
-    {
-        getHelix()->endPrediction(this->broadcasterID_, this->prediction_.id,
-                                  refundPoints, winningOutcomeID,
-                                  std::move(successCallback),
-                                  std::move(failureCallback));
-        return;
-    }
-
-    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
-    QString authError;
-    const auto moderationAccount =
-        TwitchModerationAuth::resolveForCurrentUser(
-            currentUser != nullptr ? currentUser->getUserId() : QString{},
-            &authError);
-    if (!moderationAccount.isValid())
-    {
-        failureCallback(authError);
-        return;
-    }
-
-    QPointer<ManagePredictionDialog> self(this);
-    TwitchWebApi::endPredictionEvent(
-        this->prediction_.id, refundPoints, winningOutcomeID,
-        moderationAccount.clientId, moderationAccount.oauthToken,
-        [self, refundPoints, winningOutcomeID,
-         successCallback = std::move(successCallback)]() mutable {
-            if (self == nullptr)
-            {
-                return;
-            }
-
-            auto data = self->prediction_;
-            const auto now = QDateTime::currentDateTimeUtc();
-            if (refundPoints)
-            {
-                data.status = QStringLiteral("CANCELED");
-                data.endedAt = now;
-            }
-            else if (winningOutcomeID.trimmed().isEmpty())
-            {
-                data.status = QStringLiteral("LOCKED");
-                data.lockedAt = now;
-            }
-            else
-            {
-                data.status = QStringLiteral("RESOLVED");
-                data.winningOutcomeID = winningOutcomeID.trimmed();
-                data.endedAt = now;
-            }
-
-            successCallback(data);
-        },
-        std::move(failureCallback));
+    getHelix()->endPrediction(this->broadcasterID_, this->prediction_.id,
+                              refundPoints, winningOutcomeID,
+                              std::move(successCallback),
+                              std::move(failureCallback));
 }
 
 void ManagePredictionDialog::cancelPrediction()

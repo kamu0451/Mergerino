@@ -8,8 +8,6 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "providers/twitch/api/Helix.hpp"
-#include "providers/twitch/api/TwitchModerationAuth.hpp"
-#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"  // IWYU pragma: keep
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Fonts.hpp"
@@ -173,23 +171,6 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
             chattersList->addItem(formatListItemText(user));
         }
         chattersList->addItem(new QListWidgetItem());
-    };
-
-    auto sortedRoleList = [](const auto &users, QSet<QString> &addedUsers) {
-        QStringList result;
-        for (const auto &user : users)
-        {
-            const auto login = user.trimmed().toLower();
-            if (login.isEmpty() || addedUsers.contains(login))
-            {
-                continue;
-            }
-
-            addedUsers.insert(login);
-            result.append(login);
-        }
-        result.sort();
-        return result;
     };
 
     auto activeSearchQueries = [=]() {
@@ -423,37 +404,6 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
                      false);
     };
 
-    auto loadGroupedChatters = [=](const HelixChatterGroups &groups) {
-        if (lifetimeGuard.isNull() || chattersListGuard.isNull() ||
-            resultListGuard.isNull() || searchBarGuard.isNull() ||
-            loadingLabelGuard.isNull())
-        {
-            return;
-        }
-
-        QSet<QString> addedUsers;
-        const auto broadcasterChatters =
-            sortedRoleList(groups.broadcaster, addedUsers);
-        const auto staffChatters = sortedRoleList(groups.staff, addedUsers);
-        const auto adminChatters = sortedRoleList(groups.admins, addedUsers);
-        const auto globalModChatters =
-            sortedRoleList(groups.globalMods, addedUsers);
-        const auto modChatters = sortedRoleList(groups.moderators, addedUsers);
-        const auto vipChatters = sortedRoleList(groups.vips, addedUsers);
-        const auto viewerChatters = sortedRoleList(groups.viewers, addedUsers);
-
-        addUserList(broadcasterChatters, QString("Broadcaster"));
-        addUserList(staffChatters, QString("Staff"));
-        addUserList(adminChatters, QString("Admins"));
-        addUserList(globalModChatters, QString("Global Mods"));
-        addUserList(modChatters, QString("Moderators"));
-        addUserList(vipChatters, QString("VIPs"));
-        addUserList(viewerChatters, QString("Viewers"));
-
-        loadingLabel->hide();
-        performListSearch();
-    };
-
     auto loadWithRoleSets = [=](QSet<QString> modList, QSet<QString> vipList) {
         if (lifetimeGuard.isNull() || chattersListGuard.isNull())
         {
@@ -496,87 +446,10 @@ ChatterListWidget::ChatterListWidget(const TwitchChannel *twitchChannel,
             });
     };
 
-    auto loadBrowserTokenRoleFallbackChatters =
-        [=](const TwitchModerationAuth::Account &account,
-            const QString &roleErrorMessage, bool canUseMainTokenFallback) {
-            auto fallbackToMainToken = [=]() {
-                if (lifetimeGuard.isNull() || chattersListGuard.isNull())
-                {
-                    return;
-                }
-
-                chattersList->addItem(formatListItemText(
-                    QStringLiteral("Role groups unavailable: ") +
-                    roleErrorMessage));
-                if (!canUseMainTokenFallback)
-                {
-                    loadingLabel->hide();
-                    return;
-                }
-                loadRoleFallbackChatters();
-            };
-
-            auto loadWithWebModerators = [=](QSet<QString> modList) {
-                TwitchWebApi::getVipLogins(
-                    roomId, account.clientId, account.oauthToken,
-                    [=](const QStringList &vips) {
-                        loadWithRoleSets(modList, userLoginsToSet(vips));
-                    },
-                    [=](const QString &) {
-                        if (modList.isEmpty())
-                        {
-                            fallbackToMainToken();
-                            return;
-                        }
-
-                        QSet<QString> vipList;
-                        loadWithRoleSets(modList, vipList);
-                    });
-            };
-
-            TwitchWebApi::getModeratorLogins(
-                roomId, account.clientId, account.oauthToken,
-                [=](const QStringList &moderators) {
-                    loadWithWebModerators(userLoginsToSet(moderators));
-                },
-                [=](const QString &) {
-                    QSet<QString> modList;
-                    loadWithWebModerators(modList);
-                });
-        };
-
     const auto canUseMainTokenViewerList = isBroadcaster || hasModRights;
-    QString moderationAuthError;
-    const auto moderationAccount =
-        TwitchModerationAuth::resolveForCurrentUser(currentUserId,
-                                                    &moderationAuthError);
 
-    if (moderationAccount.supportsWebGql())
+    if (canUseMainTokenViewerList)
     {
-        const auto roleOAuthClient = moderationAccount.clientId;
-        const auto roleOAuthToken = moderationAccount.oauthToken;
-        const auto roleClientIntegrity = moderationAccount.clientIntegrity;
-        const auto roleDeviceId = moderationAccount.deviceId;
-
-        TwitchWebApi::getChatterGroups(
-            broadcasterName, roleOAuthClient, roleOAuthToken,
-            roleClientIntegrity, roleDeviceId,
-            [=](const auto &groups) {
-                loadGroupedChatters(groups);
-            },
-            [=](const auto &errorMessage) {
-                if (lifetimeGuard.isNull() || chattersListGuard.isNull())
-                {
-                    return;
-                }
-
-                loadBrowserTokenRoleFallbackChatters(
-                    moderationAccount, errorMessage, canUseMainTokenViewerList);
-            });
-    }
-    else if (canUseMainTokenViewerList)
-    {
-        (void)moderationAuthError;
         loadRoleFallbackChatters();
     }
     else

@@ -11,8 +11,6 @@
 #include "controllers/commands/common/ChannelAction.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
-#include "providers/twitch/api/TwitchModerationAuth.hpp"
-#include "providers/twitch/api/TwitchWebApi.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "widgets/dialogs/CreatePollDialog.hpp"
@@ -182,40 +180,15 @@ QString createPoll(const CommandContext &ctx)
         return "";
     }
 
-    if (!ctx.twitchChannel->isMod())
+    if (ctx.twitchChannel->isMod())
+    {
+        QDesktopServices::openUrl(pollPopoutUrl(*ctx.twitchChannel));
+    }
+    else
     {
         ctx.channel->addSystemMessage(
             "Only the broadcaster or a moderator can create a poll.");
-        return "";
     }
-
-    QString authError;
-    const auto moderationAccount =
-        TwitchModerationAuth::resolveForCurrentUser(currentUser->getUserId(),
-                                                    &authError);
-    if (!moderationAccount.isValid())
-    {
-        ctx.channel->addSystemMessage("Failed to create poll - " + authError);
-        return "";
-    }
-
-    TwitchWebApi::startPoll(
-        poll.broadcasterID, poll.title, poll.choices,
-        static_cast<int>(poll.duration.count()),
-        poll.pointsPerVote > 0 ? std::optional<int>{poll.pointsPerVote}
-                               : std::nullopt,
-        moderationAccount.clientId, moderationAccount.oauthToken,
-        [channel = ctx.channel, poll] {
-            TwitchPollsAndPredictionsBar::rememberLocalPoll(
-                poll.broadcasterID, poll.title, poll.choices,
-                static_cast<int>(poll.duration.count()));
-            channel->addSystemMessage(
-                QString("Created poll: '%1'").arg(poll.title));
-            notifyPollsAndPredictionsChanged(channel);
-        },
-        [channel = ctx.channel](const auto &error) {
-            channel->addSystemMessage("Failed to create poll - " + error);
-        });
     return "";
 }
 

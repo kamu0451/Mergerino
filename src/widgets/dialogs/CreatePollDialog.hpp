@@ -61,7 +61,6 @@ private:
 
     void updateAdditionalVotesCursor(const QPoint &position);
     void applyTheme();
-    void loadChannelPointsMetadata();
     void loadChannelPointsIcon(const QString &url);
     void setChannelPointsName(const QString &name);
     void setChannelPointsIcon(const QPixmap &pixmap);

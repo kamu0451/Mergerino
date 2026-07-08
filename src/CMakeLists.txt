@@ -560,8 +560,6 @@ set(SOURCE_FILES
 
         providers/twitch/api/Helix.cpp
         providers/twitch/api/Helix.hpp
-        providers/twitch/api/TwitchModerationAuth.hpp
-        providers/twitch/api/TwitchWebApi.hpp
 
         singletons/CrashHandler.cpp
         singletons/CrashHandler.hpp

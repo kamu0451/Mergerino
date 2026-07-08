@@ -602,7 +602,6 @@ CreatePollDialog::CreatePollDialog(ChannelPtr channel, QString broadcasterID,
     this->updateResponseRows(false);
     this->updateStartButton();
     this->themeChangedEvent();
-    this->loadChannelPointsMetadata();
 }
 
 bool CreatePollDialog::eventFilter(QObject *object, QEvent *event)
@@ -877,66 +876,6 @@ QLabel#PollErrorLabel {
     {
         this->setChannelPointsIcon(fallbackChannelPointsIcon(Qt::white));
     }
-}
-
-void CreatePollDialog::loadChannelPointsMetadata()
-{
-    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
-    if (currentUser->isAnon() || this->channelLogin_.isEmpty())
-    {
-        return;
-    }
-
-    const QJsonObject payload{
-        {QStringLiteral("operationName"),
-         QStringLiteral("MergerinoChannelPointsMetadata")},
-        {QStringLiteral("variables"),
-         QJsonObject{{QStringLiteral("channelLogin"), this->channelLogin_}}},
-        {QStringLiteral("query"),
-         QStringLiteral(
-             "query MergerinoChannelPointsMetadata($channelLogin: String!) { "
-             "channel(name: $channelLogin) { communityPointsSettings { name "
-             "image { url } defaultImage { url } } } }")},
-    };
-
-    NetworkRequest(QUrl(QStringLiteral("https://gql.twitch.tv/gql")),
-                   NetworkRequestType::Post)
-        .header("Client-ID", currentUser->getOAuthClient())
-        .header("Authorization",
-                QStringLiteral("OAuth ") + currentUser->getOAuthToken())
-        .json(payload)
-        .timeout(10000)
-        .caller(this)
-        .onSuccess([this](const NetworkResult &result) {
-            const auto root = result.parseJson();
-            const auto settings =
-                root.value(QStringLiteral("data"))
-                    .toObject()
-                    .value(QStringLiteral("channel"))
-                    .toObject()
-                    .value(QStringLiteral("communityPointsSettings"))
-                    .toObject();
-
-            const auto name = settings.value(QStringLiteral("name")).toString();
-            if (!name.isEmpty())
-            {
-                this->setChannelPointsName(name);
-            }
-
-            auto imageUrl =
-                bestImageUrl(settings.value(QStringLiteral("image")).toObject());
-            if (imageUrl.isEmpty())
-            {
-                imageUrl = bestImageUrl(
-                    settings.value(QStringLiteral("defaultImage")).toObject());
-            }
-            if (!imageUrl.isEmpty())
-            {
-                this->loadChannelPointsIcon(imageUrl);
-            }
-        })
-        .onError([](const NetworkResult &) {})
-        .execute();
 }
 
 void CreatePollDialog::loadChannelPointsIcon(const QString &url)

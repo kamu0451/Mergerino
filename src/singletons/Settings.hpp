@@ -889,26 +889,6 @@ public:
         "/misc/twitch/messageHistoryLimit",
         800,
     };
-    QStringSetting twitchModerationAuthToken = {
-        "/misc/twitch/moderationAuth/token",
-        "",
-    };
-    QStringSetting twitchModerationAuthClientId = {
-        "/misc/twitch/moderationAuth/clientId",
-        "",
-    };
-    QStringSetting twitchModerationAuthUserId = {
-        "/misc/twitch/moderationAuth/userId",
-        "",
-    };
-    QStringSetting twitchModerationAuthLogin = {
-        "/misc/twitch/moderationAuth/login",
-        "",
-    };
-    QStringSetting twitchModerationAuthDisplayName = {
-        "/misc/twitch/moderationAuth/displayName",
-        "",
-    };
     IntSetting scrollbackSplitLimit = {
         "/misc/scrollback/splitLimit",
         100000,

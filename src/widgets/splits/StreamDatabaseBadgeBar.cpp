@@ -10,10 +10,8 @@
 #include "messages/MessageFlag.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "providers/merged/MergedChannel.hpp"
-#include "providers/twitch/api/TwitchModerationAuth.hpp"
 #include "providers/twitch/CurrentUserBadges.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
-#include "providers/twitch/TwitchBadgeIdentity.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/colors/ColorProvider.hpp"
@@ -1684,31 +1682,6 @@ void StreamDatabaseBadgeBar::setChannel(const ChannelPtr &channel)
     if (shouldShow)
     {
         this->streamDatabaseChannel_ = channel;
-
-        auto account = getApp()->getAccounts()->twitch.getCurrent();
-        if (account == nullptr || account->isAnon())
-        {
-            twitch::clearCurrentUserOwnedBadges();
-        }
-        else
-        {
-            const auto channelName = twitch->getName();
-            const auto badgeAuth =
-                TwitchModerationAuth::resolveForCurrentUser(account->getUserId());
-            if (badgeAuth.supportsWebGql())
-            {
-                twitch::requestCurrentUserBadgeIdentity(
-                    this->network_, channelName, badgeAuth, this,
-                    [this,
-                     channelName](QVector<twitch::CurrentUserBadgeIdentity> badges) {
-                        twitch::updateCurrentUserOwnedBadgesForChannel(
-                            channelName, badges);
-                        this->reconcileOwnedBadgeVisibility();
-                    },
-                    [](const QString &) {
-                    });
-            }
-        }
     }
     else
     {

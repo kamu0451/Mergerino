@@ -37,7 +37,6 @@ class EmotePopup;
 class InputCompletionPopup;
 class InputHighlighter;
 class MessageView;
-class StreamDatabaseBadgePickerPopup;
 class TwitchChannel;
 class LabelButton;
 class ResizingTextEdit;
@@ -150,9 +149,6 @@ protected:
     void installTextEditEvents();
     void onCursorPositionChanged();
     void onTextChanged();
-    void updateBadgeButton();
-    int badgeButtonTargetWidth() const;
-    void setBadgeButtonShown(bool shown, bool animate);
     void updateEmoteButton();
     void updateCompletionPopup();
     void updatePlatformButtonLayout(int platformCount = 1);
@@ -164,11 +160,6 @@ protected:
     void openPredictionDialog();
     void openEmotePopup();
     void updateEmotePopupChannel();
-    void openBadgePickerPopup();
-    void updateBadgePickerContext();
-    void resetBadgeIdentityButtonFetch(bool clearBadges);
-    void requestBadgeIdentityForCurrentTwitchChannel(
-        const std::shared_ptr<TwitchChannel> &twitch);
     void clearReplyTarget();
 
     void updateCancelReplyButton();
@@ -208,12 +199,7 @@ protected:
     Split *const split_;
     ChannelView *const channelView_;
     QPointer<EmotePopup> emotePopup_;
-    QPointer<StreamDatabaseBadgePickerPopup> badgePickerPopup_;
     QPointer<InputCompletionPopup> inputCompletionPopup_;
-    QNetworkAccessManager badgeIdentityNetwork_;
-    QHash<QString, QNetworkReply *> pendingBadgeIdentityRequests_;
-    QSet<QString> failedBadgeIdentityChannels_;
-    int badgeIdentityRequestGeneration_ = 0;
 
     struct {
         // vbox for all components
@@ -230,8 +216,6 @@ protected:
         // input widgets
         QWidget *inputWrapper;
         QHBoxLayout *inputHbox;
-        QWidget *badgeButtonWrapper = nullptr;
-        QToolButton *badgeButton = nullptr;
         ResizingTextEdit *textEdit;
         QLabel *textEditLength;
         LabelButton *sendButton;
@@ -277,9 +261,6 @@ protected:
     void setBackgroundColor(QColor newColor);
 
     QPropertyAnimation backgroundColorAnimation;
-    QVariantAnimation badgeButtonVisibilityAnimation_;
-    bool badgeButtonVisibilityInitialized_ = false;
-    bool badgeButtonShown_ = true;
 
     std::optional<bool> checkSpellingOverride_;
     bool shouldCheckSpelling() const;

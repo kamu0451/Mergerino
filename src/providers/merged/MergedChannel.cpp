@@ -1367,6 +1367,18 @@ void MergedChannel::appendMergedMessage(const MessagePtr &source,
         return;
     }
 
+    // Twitch/Kick source messages already ran highlight processing in their
+    // origin channel and clone() preserves the flags. The YouTube/TikTok
+    // builders do not, so run the merged-tab highlight check for them here --
+    // otherwise a matching message never gets Highlighted/color, plays no
+    // highlight sound or window alert, and is never added to /mentions.
+    if (platform == MessagePlatform::YouTube ||
+        platform == MessagePlatform::TikTok)
+    {
+        const auto alert = processMergedPlatformHighlights(*merged);
+        triggerHighlightsAndAddMention(this, merged, alert);
+    }
+
     this->addMessage(merged, MessageContext::Repost);
 }
 

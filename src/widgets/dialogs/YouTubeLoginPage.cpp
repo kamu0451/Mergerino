@@ -479,7 +479,13 @@ private:
             this->clearPendingTimeout();
             const auto error =
                 u"Google did not return usable YouTube login tokens."_s;
-            qCWarning(chatterinoYouTube) << error << tokenData;
+            // Do NOT log tokenData: on a 2xx that returns an access_token but
+            // no refresh_token this branch still fires with a live bearer token
+            // in the payload, which --log-file would persist to disk. Log only
+            // which fields were present.
+            qCWarning(chatterinoYouTube)
+                << error << "hasAccessToken:" << !accessToken.isEmpty()
+                << "hasRefreshToken:" << !refreshToken.isEmpty();
             this->setBrowserState(u"error"_s, error);
             return;
         }

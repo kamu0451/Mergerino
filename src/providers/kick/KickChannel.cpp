@@ -220,7 +220,8 @@ void KickChannel::initialize(const UserInit &init)
 {
     this->setUserInfo(init);
     this->resolveChannelInfo();
-    this->loadRecentMessages();
+    // Recent-message history is loaded from setUserInfo's roomID-resolution
+    // path (loadRecentMessages(onDone)); no separate call is needed here.
 }
 
 std::shared_ptr<KickChannel> KickChannel::sharedFromThis()

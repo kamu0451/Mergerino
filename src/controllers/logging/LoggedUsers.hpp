@@ -7,6 +7,8 @@
 #include "controllers/logging/ChannelLog.hpp"
 #include "singletons/Settings.hpp"
 
+#include <QRegularExpression>
+
 #include <algorithm>
 #include <vector>
 
@@ -19,7 +21,16 @@ inline QString normalizeLoggedUserName(const QString &userName)
     {
         normalized.remove(0, 1);
     }
-    return normalized;
+    // This name becomes both a subdirectory and the log filename base (see
+    // LoggingChannel "/users/" handling), and for YouTube/TikTok it is a
+    // free-form, attacker-controlled display name. Strip path separators (which
+    // are what a "../.." traversal needs) plus Windows-illegal filename chars
+    // and control chars, so a crafted name can neither escape the Users dir nor
+    // silently break mkpath.
+    static const QRegularExpression unsafePathChars(
+        QStringLiteral(R"([\\/:*?"<>|\x00-\x1f])"));
+    normalized.remove(unsafePathChars);
+    return normalized.trimmed();
 }
 
 inline std::vector<ChannelLog> normalizeLoggedUsers(

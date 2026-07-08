@@ -20,7 +20,6 @@ namespace chatterino {
 class PixmapButton;
 class LabelButton;
 class SvgButton;
-class AccountTitlebarButton;
 class Theme;
 class UpdateDialog;
 class SplitNotebook;
@@ -63,21 +62,17 @@ private:
     SvgButton *bulkClearTitlebarButton_ = nullptr;
     SvgButton *bulkDeleteTitlebarButton_ = nullptr;
     SvgButton *topMostTitlebarButton_ = nullptr;
-    AccountTitlebarButton *accountTitlebarButton_ = nullptr;
     SvgButton *userPlatformButton_ = nullptr;
     LabelButton *userLabel_ = nullptr;
     QMenu *platformMenu_ = nullptr;
     QElapsedTimer platformMenuHideTimer_;
     std::shared_ptr<UpdateDialog> updateDialogHandle_;
-    SvgButton *updateTitlebarButton_ = nullptr;
 
     pajlada::Signals::SignalHolder signalHolder_;
     std::vector<boost::signals2::scoped_connection> bSignals_;
 
     // this is only used on Windows and only on the main window, for the one used otherwise, see SplitNotebook in Notebook.hpp
     PixmapButton *streamerModeTitlebarIcon_ = nullptr;
-    void showUpdateDialog();
-    void updateTitlebarUpdateButton();
     void updateStreamerModeIcon();
 
     friend class Notebook;

@@ -43,7 +43,15 @@ using namespace chatterino;
 
 namespace {
 
+// Hard cap on the --log-file size. Once a write would push the file past
+// this, we roll over to a single "<path>.1" backup and start a fresh file,
+// bounding on-disk usage at roughly 2x this value. 32 MiB is large enough to
+// keep a full chatty session for post-mortem review but small enough that an
+// unbounded run cannot fill the disk.
+constexpr qint64 MAX_LOG_FILE_BYTES = 32 * 1024 * 1024;
+
 QFile *g_logFile = nullptr;
+QString g_logFilePath;
 QtMessageHandler g_prevMessageHandler = nullptr;
 QMutex g_logFileMutex;
 
@@ -88,8 +96,55 @@ void fileLogMessageHandler(QtMsgType type, const QMessageLogContext &ctx,
                                                              : "default"),
                  msg);
 
+    const QByteArray lineBytes = line.toUtf8();
+
     QMutexLocker lock(&g_logFileMutex);
-    g_logFile->write(line.toUtf8());
+
+    // Re-check under the lock: rotation below may have torn the file down and
+    // failed to reopen it, in which case file logging is permanently off.
+    if (g_logFile == nullptr)
+    {
+        return;
+    }
+
+    // Roll over before this write would exceed the cap. We keep a single ".1"
+    // backup: flush+close the current file, replace any existing "<path>.1"
+    // with it via rename, then open a fresh truncated "<path>" as the new
+    // sink. On reopen failure we stop file logging (g_logFile = nullptr)
+    // rather than crash; we must NOT emit a qC* log here or we would recurse
+    // straight back into this handler.
+    if (!g_logFilePath.isEmpty() &&
+        g_logFile->size() + static_cast<qint64>(lineBytes.size()) >
+            MAX_LOG_FILE_BYTES)
+    {
+        g_logFile->flush();
+        g_logFile->close();
+        delete g_logFile;
+        g_logFile = nullptr;
+
+        const QString backupPath = g_logFilePath + QStringLiteral(".1");
+        QFile::remove(backupPath);
+        QFile::rename(g_logFilePath, backupPath);
+
+        auto *rolled = new QFile(g_logFilePath);
+        if (rolled->open(QIODevice::WriteOnly | QIODevice::Truncate |
+                         QIODevice::Text))
+        {
+            g_logFile = rolled;
+        }
+        else
+        {
+            std::cerr << "Failed to reopen --log-file after rotation at "
+                      << g_logFilePath.toLocal8Bit().constData() << ": "
+                      << rolled->errorString().toLocal8Bit().constData()
+                      << '\n';
+            delete rolled;
+            g_logFile = nullptr;
+            return;
+        }
+    }
+
+    g_logFile->write(lineBytes);
     g_logFile->flush();
 }
 
@@ -146,6 +201,7 @@ int main(int argc, char **argv)
                        QIODevice::Text))
         {
             g_logFile = file;
+            g_logFilePath = *args.logFile;
             g_prevMessageHandler = qInstallMessageHandler(fileLogMessageHandler);
             qCInfo(chatterinoApp).noquote()
                 << "Logging to file:" << *args.logFile;

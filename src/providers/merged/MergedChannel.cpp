@@ -5,6 +5,7 @@
 #include "providers/merged/MergedChannel.hpp"
 
 #include "Application.hpp"
+#include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/highlights/HighlightController.hpp"
 #include "controllers/highlights/HighlightResult.hpp"
@@ -534,6 +535,8 @@ void MergedChannel::reconnect()
     // are not shared (Twitch global IRC reconnect on every layout-restore
     // bind would be wasteful). User-driven reconnects route through
     // userReconnect() instead.
+    qCDebug(chatterinoMerged)
+        << "reconnect (lightweight rebind) for" << this->getDisplayName();
     this->refreshStatusText();
     this->streamStatusChanged.invoke();
 }
@@ -550,6 +553,8 @@ void MergedChannel::userReconnect()
     // instance, and stopping a shared instance disrupts every consumer and
     // tears down expensive state (WebView2 host for TikTok). Each shared
     // provider has its own retry/recovery logic.
+    qCDebug(chatterinoMerged)
+        << "userReconnect (Twitch/Kick only) for" << this->getDisplayName();
     if (this->twitchChannel_)
     {
         this->twitchChannel_->reconnect();
@@ -1208,6 +1213,9 @@ void MergedChannel::connectSourceSignals(
 {
     if (!source)
     {
+        qCWarning(chatterinoMerged)
+            << "connectSourceSignals: null source channel for platform"
+            << platformName(platform);
         return;
     }
 
@@ -1288,6 +1296,9 @@ void MergedChannel::appendInitialMessages(const ChannelPtr &source,
 {
     if (!source)
     {
+        qCWarning(chatterinoMerged)
+            << "appendInitialMessages: null source channel for platform"
+            << platformName(platform);
         return;
     }
 
@@ -1377,12 +1388,18 @@ void MergedChannel::replaceMergedMessage(const MessagePtr &previous,
     const auto key = messageKey(previous, platform);
     if (key.isEmpty())
     {
+        qCDebug(chatterinoMerged)
+            << "replace skipped:" << platformName(platform)
+            << "previous message has no key";
         return;
     }
 
     auto it = this->mirroredMessages_.find(key);
     if (it == this->mirroredMessages_.end())
     {
+        qCDebug(chatterinoMerged)
+            << "replace failed:" << platformName(platform)
+            << "no mirrored message for key" << key;
         return;
     }
 
@@ -1391,6 +1408,9 @@ void MergedChannel::replaceMergedMessage(const MessagePtr &previous,
         it->second->flags.has(MessageFlag::RecentMessage));
     if (!updated)
     {
+        qCDebug(chatterinoMerged)
+            << "replace failed:" << platformName(platform)
+            << "createMergedMessage returned null for key" << key;
         return;
     }
 
@@ -1411,18 +1431,28 @@ std::shared_ptr<Message> MergedChannel::createAndTrackMergedMessage(
 {
     if (!shouldMirrorSourceMessage(source))
     {
+        qCDebug(chatterinoMerged)
+            << "not mirroring" << platformName(platform)
+            << "message (filtered by shouldMirrorSourceMessage):"
+            << (source ? source->messageText : QStringLiteral("<null source>"));
         return nullptr;
     }
 
     const auto key = messageKey(source, platform);
     if (!key.isEmpty() && this->mirroredMessages_.contains(key))
     {
+        qCDebug(chatterinoMerged)
+            << "dropping duplicate" << platformName(platform)
+            << "message, key already mirrored:" << key;
         return nullptr;
     }
 
     auto merged = this->createMergedMessage(source, platform, markAsRecent);
     if (!merged)
     {
+        qCDebug(chatterinoMerged)
+            << "dropping" << platformName(platform)
+            << "message: createMergedMessage returned null for key" << key;
         return nullptr;
     }
 

@@ -785,14 +785,30 @@ void TikTokLiveChat::start()
                          // this user - i.e. they aren't live. Otherwise we
                          // have a roomId_ but no chat/check_alive activity,
                          // which is the actual "stuck" case.
-                         const QString msg =
-                             this->roomId_.isEmpty()
-                                 ? QStringLiteral("TikTok: %1 is not live")
-                                       .arg(this->username_)
-                                 : QStringLiteral(
-                                       "TikTok live chat unavailable "
-                                       "(no response from room)");
-                         this->setStatusText(msg, true);
+                         if (this->roomId_.isEmpty())
+                         {
+                             this->setStatusText(
+                                 QStringLiteral("TikTok: %1 is not live")
+                                     .arg(this->username_),
+                                 true);
+                         }
+                         else
+                         {
+                             // A room was pinned (room/enter or room/info
+                             // succeeded) but no chat/check_alive activity
+                             // ever confirmed liveness - the room-info
+                             // fetch/poll stopped producing evidence, so
+                             // this source can no longer receive chat.
+                             qCWarning(chatterinoTikTok).nospace()
+                                 << "[" << this->username_
+                                 << "] room-info watchdog fired: no "
+                                    "response from room";
+                             this->setStatusText(
+                                 QStringLiteral(
+                                     "TikTok live chat unavailable "
+                                     "(no response from room)"),
+                                 true);
+                         }
                          this->setLive(false);
                          this->armOfflineRecheck();
                      });
@@ -1102,15 +1118,33 @@ void TikTokLiveChat::launchControllerCreate()
                                             srcStr = fromWide(src);
                                             CoTaskMemFree(src);
                                         }
-                                        qCDebug(chatterinoTikTok).nospace()
-                                            << "[" << this->username_
-                                            << "] NavigationCompleted ok="
-                                            << static_cast<bool>(ok)
-                                            << " webErrorStatus="
-                                            << static_cast<int>(errorStatus)
-                                            << " source=" << srcStr;
-                                        if (!ok)
+                                        if (ok)
                                         {
+                                            qCDebug(chatterinoTikTok).nospace()
+                                                << "[" << this->username_
+                                                << "] NavigationCompleted ok="
+                                                << static_cast<bool>(ok)
+                                                << " webErrorStatus="
+                                                << static_cast<int>(
+                                                       errorStatus)
+                                                << " source=" << srcStr;
+                                        }
+                                        else
+                                        {
+                                            // Navigation failing means the
+                                            // hidden host never loaded
+                                            // TikTok's page, so this source
+                                            // cannot receive chat - warn so
+                                            // it shows up in a Release
+                                            // --log-file capture.
+                                            qCWarning(chatterinoTikTok)
+                                                    .nospace()
+                                                << "[" << this->username_
+                                                << "] navigation failed, "
+                                                << "webErrorStatus="
+                                                << static_cast<int>(
+                                                       errorStatus)
+                                                << " source=" << srcStr;
                                             this->setStatusText(
                                                 QStringLiteral(
                                                     "TikTok: navigation failed"),
@@ -1878,8 +1912,13 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
     }
     if (kind == QStringLiteral("ws-close"))
     {
-        qCDebug(chatterinoTikTok)
-            << "ws-close code=" << obj.value(QStringLiteral("code")).toInt();
+        // The webcast WebSocket closing is the primary signal that this
+        // TikTok source stopped receiving chat - surface it at warning so
+        // it shows up in a Release --log-file capture, not just debug
+        // builds.
+        qCWarning(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] websocket closed unexpectedly, "
+            << "code=" << obj.value(QStringLiteral("code")).toInt();
         if (this->impl_)
         {
             this->impl_->stuckConnectionTimer.stop();
@@ -1892,7 +1931,10 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
     }
     if (kind == QStringLiteral("ws-error"))
     {
-        qCDebug(chatterinoTikTok) << "ws-error";
+        // Same reasoning as ws-close: a websocket error means this source
+        // can no longer receive chat, so it belongs at warning level.
+        qCWarning(chatterinoTikTok)
+            << "[" << this->username_ << "] websocket error";
         if (this->impl_)
         {
             this->impl_->stuckConnectionTimer.stop();

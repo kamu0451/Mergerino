@@ -24,6 +24,7 @@
 #include <QThreadPool>
 #include <QTimer>
 #include <QtConcurrent>
+#include <QUrl>
 
 #include <algorithm>
 #include <atomic>
@@ -174,6 +175,28 @@ QString fromWide(const wchar_t *data)
         return {};
     }
     return QString::fromWCharArray(data);
+}
+
+// Navigation pinning: the hidden host must never leave TikTok. A
+// TikTok-controlled redirect (ad, compromised embed) could otherwise steer
+// the bridge-injected webview to an attacker page that then talks to our
+// native host. Allow only https URLs whose host is tiktok.com or a subdomain
+// of it; login flows legitimately traverse *.tiktok.com (accounts / www).
+bool isAllowedTikTokUrl(const QString &url)
+{
+    const QUrl parsed(url, QUrl::StrictMode);
+    if (!parsed.isValid())
+    {
+        return false;
+    }
+    if (parsed.scheme().compare(QStringLiteral("https"),
+                                Qt::CaseInsensitive) != 0)
+    {
+        return false;
+    }
+    const QString host = parsed.host().toLower();
+    return host == QStringLiteral("tiktok.com") ||
+           host.endsWith(QStringLiteral(".tiktok.com"));
 }
 
 // One ICoreWebView2Environment is reusable across many controllers; sharing
@@ -387,6 +410,8 @@ struct TikTokLiveChat::Impl {
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
     EventRegistrationToken navToken{};
+    EventRegistrationToken navStartToken{};
+    EventRegistrationToken newWindowToken{};
     EventRegistrationToken msgToken{};
     EventRegistrationToken resReqToken{};
     // Number of times CreateCoreWebView2Controller has come back with
@@ -476,6 +501,14 @@ struct TikTokLiveChat::Impl {
             if (navToken.value != 0)
             {
                 webview->remove_NavigationCompleted(navToken);
+            }
+            if (navStartToken.value != 0)
+            {
+                webview->remove_NavigationStarting(navStartToken);
+            }
+            if (newWindowToken.value != 0)
+            {
+                webview->remove_NewWindowRequested(newWindowToken);
             }
             if (msgToken.value != 0)
             {
@@ -1087,6 +1120,78 @@ void TikTokLiveChat::launchControllerCreate()
                                     })
                                     .Get(),
                                 &this->impl_->navToken);
+
+                            // NavigationStarting: pin the hidden host to
+                            // TikTok. Cancel any top-level navigation that
+                            // isn't https on tiktok.com / *.tiktok.com (login
+                            // legitimately traverses accounts / www
+                            // subdomains). A TikTok-controlled redirect could
+                            // otherwise land the bridge-injected webview on an
+                            // attacker page.
+                            this->impl_->webview->add_NavigationStarting(
+                                Callback<
+                                    ICoreWebView2NavigationStartingEventHandler>(
+                                    [this, guard](
+                                        ICoreWebView2 *,
+                                        ICoreWebView2NavigationStartingEventArgs
+                                            *args) -> HRESULT {
+                                        if (guard.expired())
+                                        {
+                                            return S_OK;
+                                        }
+                                        LPWSTR uri = nullptr;
+                                        QString uriStr;
+                                        if (args != nullptr &&
+                                            SUCCEEDED(args->get_Uri(&uri)) &&
+                                            uri != nullptr)
+                                        {
+                                            uriStr = fromWide(uri);
+                                            CoTaskMemFree(uri);
+                                        }
+                                        if (!isAllowedTikTokUrl(uriStr))
+                                        {
+                                            qCWarning(chatterinoTikTok).nospace()
+                                                << "[" << this->username_
+                                                << "] blocked navigation off "
+                                                   "TikTok: "
+                                                << uriStr;
+                                            if (args != nullptr)
+                                            {
+                                                args->put_Cancel(TRUE);
+                                            }
+                                        }
+                                        return S_OK;
+                                    })
+                                    .Get(),
+                                &this->impl_->navStartToken);
+
+                            // NewWindowRequested: the hidden host never opens
+                            // popups. Handle the request without creating a
+                            // window so a TikTok-triggered window.open /
+                            // target=_blank can't spawn an unpinned webview.
+                            this->impl_->webview->add_NewWindowRequested(
+                                Callback<
+                                    ICoreWebView2NewWindowRequestedEventHandler>(
+                                    [this, guard](
+                                        ICoreWebView2 *,
+                                        ICoreWebView2NewWindowRequestedEventArgs
+                                            *args) -> HRESULT {
+                                        if (guard.expired())
+                                        {
+                                            return S_OK;
+                                        }
+                                        if (args != nullptr)
+                                        {
+                                            args->put_Handled(TRUE);
+                                        }
+                                        qCWarning(chatterinoTikTok).nospace()
+                                            << "[" << this->username_
+                                            << "] blocked TikTok popup "
+                                               "(NewWindowRequested)";
+                                        return S_OK;
+                                    })
+                                    .Get(),
+                                &this->impl_->newWindowToken);
 
                             // WebMessageReceived: payloads from the JS hook
                             this->impl_->webview->add_WebMessageReceived(

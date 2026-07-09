@@ -77,8 +77,29 @@ Additive features/tests, all built + 663 tests green + smoke clean.
 ## Current state
 - Build: clean RelWithDebInfo green. Tests: 594 baseline -> 663 (69 added).
 - Branch `feat/hide-chat-bot-messages` pushed at `57ba59c`; CI dispatched
-  (P0-P5 HEAD already CI-green: Build + Test Windows).
+  Full P0-P6 HEAD CI-green (Build + Test Windows).
 - `review/keychain-ipc-auth` local only (SEC-G4 + SEC-02) — still awaiting
   sign-off before push.
 - Plan files + `review/` remain UNTRACKED (never committed), per instruction.
 - No orphaned processes/builds.
+
+## Post-P6 follow-ups (this session)
+- **Changelog-dialog fix** `5ff45a3` (pushed) — the post-update patch-notes
+  dialog re-showed on every launch because the version PATCH is
+  `git rev-list --count HEAD` (bumps per commit). Now gated on a SHA-1
+  fingerprint of the latest patchnotes.txt section (new setting
+  `lastShownPatchNotesFingerprint`): shows only when the notes actually change.
+  Verified via window-count (stale fp -> dialog; matching fp -> suppressed).
+- **Live-test pass** (~4.5h, YouTube-heavy + brief Kick): app stable, zero
+  crashes. All log flags were benign network/lifecycle churn (HTTP/2 GOAWAY,
+  websocket close-fails, 7TV reconnects ~1/15min, stream end/recover). Positive
+  evidence STAB-G2 (no Pusher ping-after-close) and YouTube recoverLiveChat work.
+- **Two minor Kick gaps found (candidates, not defects):** Kick Pusher events
+  `StreamerIsLive` / `StopStreamBroadcast` are unhandled ("Unknown event") — Kick
+  live/offline is detected via polling, not the instant push, so there's a small
+  delay. Optional enhancement.
+- **Optional cosmetic:** the generic-websocket "Failed to close" line logs at
+  WARN on every teardown (fires ~1/15min from 7TV reconnects); could be debug.
+- Session lessons captured as memories (ctest-authoritative, emote/badge test
+  teardown crash, CI feature-branch dispatch) + gotchas (git stale lock, guard
+  false-positives, C++ LSP phantom diagnostics).

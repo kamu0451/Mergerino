@@ -432,6 +432,7 @@ set(SOURCE_FILES
         providers/kick/KickLiveUpdates.hpp
         providers/kick/KickMessageBuilder.cpp
         providers/kick/KickMessageBuilder.hpp
+        providers/kick/KickTimeoutClamp.hpp
         providers/merged/MergedChannel.cpp
         providers/merged/MergedChannel.hpp
 

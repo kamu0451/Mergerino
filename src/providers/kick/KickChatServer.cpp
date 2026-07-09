@@ -9,6 +9,7 @@
 #include "providers/kick/KickApi.hpp"
 #include "providers/kick/KickEmotes.hpp"
 #include "providers/kick/KickMessageBuilder.hpp"
+#include "providers/kick/KickTimeoutClamp.hpp"
 #include "providers/seventv/eventapi/Dispatch.hpp"
 #include "providers/seventv/SeventvAPI.hpp"
 #include "providers/seventv/SeventvEmotes.hpp"
@@ -365,7 +366,7 @@ void KickChatServer::onUserBanned(KickChannel *channel, BoostJsonObject data)
         auto userID = data["user"]["id"].toUint64();
         if (cur->userID() == userID)
         {
-            channel->setSendWait(std::chrono::minutes{duration});
+            channel->setSendWait(clampKickTimeoutMinutes(duration));
         }
     }
 }

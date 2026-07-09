@@ -17,6 +17,7 @@
 #include "providers/kick/KickBadges.hpp"
 #include "providers/kick/KickChannel.hpp"
 #include "providers/kick/KickEmotes.hpp"
+#include "providers/kick/KickTimeoutClamp.hpp"
 #include "providers/seventv/SeventvBadges.hpp"
 #include "providers/seventv/SeventvEmotes.hpp"
 #include "providers/seventv/SeventvPersonalEmotes.hpp"
@@ -952,7 +953,7 @@ MessagePtrMut KickMessageBuilder::makeTimeoutMessage(KickChannel *channel,
         auto dur = data["duration"].toInt64();
         if (dur != 0)
         {
-            return std::chrono::seconds{dur * 60};
+            return clampKickTimeoutMinutes(dur);
         }
         auto expiresAt =
             QDateTime::fromString(data["expires_at"].toQString(), Qt::ISODate);

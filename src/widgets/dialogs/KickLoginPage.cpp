@@ -1252,7 +1252,8 @@ private:
             this->clearPendingTimeout();
             const auto error =
                 u"Kick did not return usable login tokens."_s;
-            qCWarning(chatterinoKick) << error << tokenData;
+            qCWarning(chatterinoKick)
+                << error << "response keys:" << tokenData.keys();
             this->setBrowserState(u"error"_s, error);
             return;
         }
@@ -1285,14 +1286,15 @@ private:
             })
             .onSuccess([this, accessToken, refreshToken,
                         expiresAt](const NetworkResult &result) {
-                const auto dataArray =
-                    result.parseJson().value("data"_L1).toArray();
+                const auto responseJson = result.parseJson();
+                const auto dataArray = responseJson.value("data"_L1).toArray();
                 if (dataArray.isEmpty() || !dataArray.at(0).isObject())
                 {
                     this->clearPendingTimeout();
                     const auto error =
                         u"Kick did not return the authenticated user."_s;
-                    qCWarning(chatterinoKick) << error << result.getData();
+                    qCWarning(chatterinoKick)
+                        << error << "response keys:" << responseJson.keys();
                     this->setBrowserState(u"error"_s, error);
                     return;
                 }
@@ -1315,7 +1317,8 @@ private:
                     this->clearPendingTimeout();
                     const auto error =
                         u"Kick returned incomplete user information."_s;
-                    qCWarning(chatterinoKick) << error << obj;
+                    qCWarning(chatterinoKick)
+                        << error << "response keys:" << obj.keys();
                     this->setBrowserState(u"error"_s, error);
                     return;
                 }

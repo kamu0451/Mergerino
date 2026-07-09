@@ -1908,8 +1908,12 @@ void UserInfoPopup::updateKickUserData()
         {
             self->ui_.ignoreHighlights->setEnabled(true);
         }
-        self->ui_.block->setChecked(/*is_ignoring=*/false);
-        self->ui_.block->setEnabled(true);
+        {
+            QSignalBlocker blocker(self->ui_.block);
+            self->ui_.block->setChecked(false);
+        }
+        self->ui_.block->setEnabled(false);
+        self->ui_.block->setVisible(false);
         self->ui_.ignoreHighlights->setChecked(isIgnoringHighlights);
         self->ui_.notesAdd->setEnabled(true);
     };
@@ -1968,7 +1972,9 @@ void UserInfoPopup::updateKickUserData()
     this->ui_.notesAdd->setEnabled(false);
 
     bool isMyself = false;  // FIXME: kick account
-    this->ui_.block->setVisible(!isMyself);
+    // Kick does not support blocking users; keep the checkbox hidden the
+    // same way updateGenericPlatformUserData() does for YouTube/TikTok.
+    this->ui_.block->setVisible(false);
     this->ui_.ignoreHighlights->setVisible(!isMyself);
 }
 

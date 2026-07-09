@@ -850,7 +850,13 @@ void KickChannel::applyStreamData(bool isLive, const QString &streamTitle,
 
 void KickChannel::updateStreamData(const KickChannelInfo &info)
 {
-    assert(info.userID == this->userID());
+    if (info.userID != this->userID())
+    {
+        qCWarning(chatterinoKick)
+            << *this << "Ignoring stream data for mismatched user ID"
+            << info.userID << "expected" << this->userID();
+        return;
+    }
     this->applyStreamData(info.stream.isLive, info.streamTitle,
                           info.category.name, info.stream.thumbnailUrl,
                           info.stream.viewerCount, info.stream.startTime);
@@ -858,7 +864,13 @@ void KickChannel::updateStreamData(const KickChannelInfo &info)
 
 void KickChannel::updateStreamData(const KickPrivateChannelInfo &info)
 {
-    assert(info.user.userID == this->userID());
+    if (info.user.userID != this->userID())
+    {
+        qCWarning(chatterinoKick)
+            << *this << "Ignoring stream data for mismatched user ID"
+            << info.user.userID << "expected" << this->userID();
+        return;
+    }
     this->applyStreamData(info.isLive, info.streamTitle, info.liveCategoryName,
                           info.thumbnailUrl, info.viewerCount, info.startTime);
 }

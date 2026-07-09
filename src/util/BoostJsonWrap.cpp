@@ -119,7 +119,7 @@ BoostJsonValue BoostJsonValue::operator[](size_t i) const
     {
         return {};
     }
-    return {a[i]};
+    return {(*a)[i]};
 }
 
 BoostJsonValue BoostJsonValue::operator[](std::string_view key) const

@@ -268,7 +268,8 @@ void YouTubeAccount::doRefresh()
             if (authToken.isEmpty())
             {
                 qCWarning(chatterinoYouTube)
-                    << "YouTube refresh returned no access token" << json;
+                    << "YouTube refresh returned no access token"
+                    << formatGoogleError(res);
                 self->finishRefresh(false);
                 return;
             }

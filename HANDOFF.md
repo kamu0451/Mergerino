@@ -54,16 +54,31 @@ Two auth-changing P2 items, committed locally only, awaiting diff review before 
   blast radius) for this pass.
 - **SEC-G3** (plugin FS canonicalization) — optional, skipped.
 
-## Not started — P6 (needs per-item approval)
-TEST-01 (KickMessageBuilder suite, after TEST-04 decoupling), TEST-02
-(ProtobufReader), TEST-03 (document 2nd snapshot suite in CLAUDE.md), FEAT-03
-(YouTube tab avatar), FEAT-08 (YouTube member-emoji autocomplete), FEAT-04/05/10
-(Kick popup-by-ID / isMyself / merged mod-rights), UX-01 (README), UX-02
-(Add-Tab live validation).
+## P6 — DONE (user approved all items on this drive; pushed)
+Additive features/tests, all built + 663 tests green + smoke clean.
+- **P6 tests** `85c2b40` — TEST-01 first Kick tests (7 KickMessageBuilder cases
+  via mock app; no TEST-04 decouple needed. The chat case uses plain text: an
+  Emote/Badge element registers an Image with the process-global pool which
+  tears down out of order in ctest's per-test process and crashes it, so
+  element/badge indexing stays covered by the snapshot suites). TEST-02 27
+  direct ProtobufReader cases incl. bounds-safety.
+- **P6 docs** `5e8198f` — TEST-03 (document the EventSub snapshot suite),
+  UX-01 (README Usage/Features section).
+- **P6 features** `bd609a6` — UX-02 (Add-Tab live validation reusing the OK
+  parser), FEAT-05 (Kick isMyself wired to the real current account), FEAT-04
+  (open Kick card by id; dormant path, degrades logged-out), FEAT-10 (YouTube in
+  merged mod-rights).
+- **P6 YouTube** `57ba59c` — FEAT-03 (YouTube tab avatar, anonymous channel-page
+  og:image fetch via youtubeHeaders(), same downloadAvatarInto/fallback path;
+  bare watch-URL/videoId sources fall through), FEAT-08 (accumulate custom
+  YouTube chat emoji into a bounded per-source EmoteMap, exposed to autocomplete
+  via EmoteSource). Read path stays anonymous (TOS-03 guard passes).
 
 ## Current state
-- Build: clean RelWithDebInfo green (final gate ~3m48s). Tests: 627/627.
-- Branch `feat/hide-chat-bot-messages` pushed at `8d26e4a`; CI dispatched.
-- `review/keychain-ipc-auth` local only (SEC-G4 + SEC-02).
+- Build: clean RelWithDebInfo green. Tests: 594 baseline -> 663 (69 added).
+- Branch `feat/hide-chat-bot-messages` pushed at `57ba59c`; CI dispatched
+  (P0-P5 HEAD already CI-green: Build + Test Windows).
+- `review/keychain-ipc-auth` local only (SEC-G4 + SEC-02) — still awaiting
+  sign-off before push.
 - Plan files + `review/` remain UNTRACKED (never committed), per instruction.
 - No orphaned processes/builds.

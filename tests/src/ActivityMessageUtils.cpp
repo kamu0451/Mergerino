@@ -365,7 +365,11 @@ TEST(ActivityMessageUtils, KickRewardFilterIsPlatformScoped)
     // dropped by the Kick-specific filter.
     Message youtubeWithRewardFlag;
     youtubeWithRewardFlag.platform = MessagePlatform::YouTube;
-    youtubeWithRewardFlag.flags.set(MessageFlag::CheerMessage);
+    // Use an alert flag the activity pane actually surfaces (matching the
+    // sibling platform-scoping tests). CheerMessage is deliberately dropped
+    // for non-Twitch platforms, which is unrelated to the Kick reward filter
+    // this test exercises.
+    youtubeWithRewardFlag.flags.set(MessageFlag::Subscription);
     youtubeWithRewardFlag.flags.set(MessageFlag::RedeemedChannelPointReward);
     youtubeWithRewardFlag.messageText = "Viewer redeemed something";
 

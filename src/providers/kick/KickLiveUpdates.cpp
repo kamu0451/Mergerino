@@ -116,6 +116,13 @@ private:
     std::chrono::steady_clock::time_point lastHeartbeat_;
     std::chrono::milliseconds heartbeatInterval_;
     QPointer<KickChatServer> chatServer_;
+    // Set once we've closed the connection due to a heartbeat timeout, so
+    // later heartbeat ticks (until the manager tears this client down) are
+    // no-ops instead of repeatedly closing and pinging an already-closed
+    // socket. This is local to this client and deliberately doesn't touch
+    // BasicPubSubClient::open_, which BasicPubSubManager still relies on to
+    // tell a clean close from a connection that never opened.
+    bool closing_ = false;
 };
 
 void KickLiveUpdatesClient::onMessage(const QByteArray &msg)
@@ -206,7 +213,7 @@ void KickLiveUpdatesClient::onMessageUi(const QByteArray &msg)
 
 void KickLiveUpdatesClient::checkHeartbeat()
 {
-    if (!this->isOpen())
+    if (!this->isOpen() || this->closing_)
     {
         return;
     }
@@ -215,7 +222,9 @@ void KickLiveUpdatesClient::checkHeartbeat()
         this->heartbeatInterval_ * 1.5)
     {
         qCDebug(chatterinoKick) << "Heartbeat timed out";
+        this->closing_ = true;
         this->close();
+        return;
     }
 
     this->sendText(R"({"event":"pusher:ping","data":0})"_ba);

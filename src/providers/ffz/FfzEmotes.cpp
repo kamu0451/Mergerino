@@ -15,6 +15,10 @@
 #include "singletons/Settings.hpp"
 #include "util/Helpers.hpp"
 
+#include <QTimer>
+
+#include <chrono>
+
 namespace {
 
 using namespace chatterino;
@@ -24,6 +28,11 @@ const auto &LOG = chatterinoFfzemotes;
 
 const QString CHANNEL_HAS_NO_EMOTES(
     "This channel has no FrankerFaceZ channel emotes.");
+
+// Maximum number of attempts (first try + retries) for the global/channel
+// emote fetches below before we give up until the next manual refresh.
+constexpr int EMOTE_FETCH_MAX_ATTEMPTS = 3;
+constexpr std::chrono::milliseconds EMOTE_FETCH_RETRY_BASE_DELAY{2000};
 
 // FFZ doesn't provide any data on the size for room badges,
 // so we assume 18x18 (same as a Twitch badge)
@@ -169,6 +178,21 @@ namespace chatterino {
 
 using namespace ffz::detail;
 
+bool ffz::detail::isRetryableFetchError(const NetworkResult &result)
+{
+    if (auto status = result.status())
+    {
+        // A definitive HTTP response was received - only retry server-side
+        // errors. A 4xx response (e.g. 404 "no channel emotes") isn't going
+        // to change on a retry.
+        return *status >= 500;
+    }
+
+    // No HTTP status means the request never got a response at all
+    // (timeout, connection reset, DNS failure, etc.) - that's transient.
+    return true;
+}
+
 EmoteMap ffz::detail::parseChannelEmotes(const QJsonObject &jsonRoot)
 {
     auto emotes = EmoteMap();
@@ -247,6 +271,12 @@ void FfzEmotes::loadEmotes()
         this->setEmotes(std::make_shared<EmoteMap>(std::move(parsedSet)));
     });
 
+    this->fetchGlobalEmotes(
+        ExponentialBackoff<3>(EMOTE_FETCH_RETRY_BASE_DELAY), 0);
+}
+
+void FfzEmotes::fetchGlobalEmotes(ExponentialBackoff<3> backoff, int attempt)
+{
     QString url("https://api.frankerfacez.com/v1/set/global");
 
     NetworkRequest(url)
@@ -257,7 +287,21 @@ void FfzEmotes::loadEmotes()
             auto parsedSet = parseGlobalEmotes(result.parseJson());
             this->setEmotes(std::make_shared<EmoteMap>(std::move(parsedSet)));
         })
-        .onError([](auto result) {
+        .onError([this, backoff, attempt](auto result) mutable {
+            if (isRetryableFetchError(result) &&
+                attempt + 1 < EMOTE_FETCH_MAX_ATTEMPTS)
+            {
+                auto delay = backoff.next();
+                qCDebug(LOG) << "Failed to fetch global FFZ emotes, "
+                                "retrying in"
+                             << delay.count() << "ms. "
+                             << result.formatError();
+                QTimer::singleShot(delay, [this, backoff, attempt] {
+                    this->fetchGlobalEmotes(backoff, attempt + 1);
+                });
+                return;
+            }
+
             qCWarning(chatterinoFfzemotes)
                 << "Failed to fetch global FFZ emotes. "
                 << result.formatError();
@@ -280,14 +324,28 @@ void FfzEmotes::loadChannel(
 {
     qCDebug(LOG) << "Reload FFZ Channel Emotes for channel" << channelID;
 
+    FfzEmotes::fetchChannelEmotes(
+        std::move(channel), channelID, std::move(emoteCallback),
+        std::move(modBadgeCallback), std::move(vipBadgeCallback),
+        std::move(channelBadgesCallback), manualRefresh, cacheHit,
+        ExponentialBackoff<3>(EMOTE_FETCH_RETRY_BASE_DELAY), 0);
+}
+
+void FfzEmotes::fetchChannelEmotes(
+    std::weak_ptr<Channel> channel, const QString &channelID,
+    std::function<void(EmoteMap &&)> emoteCallback,
+    std::function<void(std::optional<EmotePtr>)> modBadgeCallback,
+    std::function<void(std::optional<EmotePtr>)> vipBadgeCallback,
+    std::function<void(FfzChannelBadgeMap &&)> channelBadgesCallback,
+    bool manualRefresh, bool cacheHit, ExponentialBackoff<3> backoff,
+    int attempt)
+{
     NetworkRequest("https://api.frankerfacez.com/v1/room/id/" + channelID)
 
         .timeout(20000)
-        .onSuccess([emoteCallback = std::move(emoteCallback),
-                    modBadgeCallback = std::move(modBadgeCallback),
-                    vipBadgeCallback = std::move(vipBadgeCallback),
-                    channelBadgesCallback = std::move(channelBadgesCallback),
-                    channel, channelID, manualRefresh](const auto &result) {
+        .onSuccess([emoteCallback, modBadgeCallback, vipBadgeCallback,
+                    channelBadgesCallback, channel, channelID,
+                    manualRefresh](const auto &result) {
             writeProviderEmotesCache(channelID, "frankerfacez",
                                      result.getData());
             const auto json = result.parseJson();
@@ -319,39 +377,59 @@ void FfzEmotes::loadChannel(
                 }
             }
         })
-        .onError(
-            [channelID, channel, manualRefresh, cacheHit](const auto &result) {
-                auto shared = channel.lock();
-                if (!shared)
-                {
-                    return;
-                }
+        .onError([channelID, channel, emoteCallback, modBadgeCallback,
+                  vipBadgeCallback, channelBadgesCallback, manualRefresh,
+                  cacheHit, backoff,
+                  attempt](const auto &result) mutable {
+            auto shared = channel.lock();
+            if (!shared)
+            {
+                return;
+            }
 
-                if (result.status() == 404)
+            if (result.status() == 404)
+            {
+                // User does not have any FFZ emotes
+                if (manualRefresh)
                 {
-                    // User does not have any FFZ emotes
-                    if (manualRefresh)
-                    {
-                        shared->addSystemMessage(CHANNEL_HAS_NO_EMOTES);
-                    }
+                    shared->addSystemMessage(CHANNEL_HAS_NO_EMOTES);
                 }
-                else
+            }
+            else if (isRetryableFetchError(result) &&
+                     attempt + 1 < EMOTE_FETCH_MAX_ATTEMPTS)
+            {
+                auto delay = backoff.next();
+                qCDebug(LOG) << "Failed to fetch FFZ emotes for channel"
+                             << channelID << ", retrying in" << delay.count()
+                             << "ms. " << result.formatError();
+                QTimer::singleShot(
+                    delay, [channel, channelID, emoteCallback,
+                            modBadgeCallback, vipBadgeCallback,
+                            channelBadgesCallback, manualRefresh, cacheHit,
+                            backoff, attempt]() {
+                        FfzEmotes::fetchChannelEmotes(
+                            channel, channelID, emoteCallback,
+                            modBadgeCallback, vipBadgeCallback,
+                            channelBadgesCallback, manualRefresh, cacheHit,
+                            backoff, attempt + 1);
+                    });
+            }
+            else
+            {
+                auto errorString = result.formatError();
+                qCWarning(LOG) << "Error fetching FFZ emotes for channel"
+                               << channelID << ", error" << errorString;
+                shared->addSystemMessage(
+                    QStringLiteral("Failed to fetch FrankerFaceZ channel "
+                                   "emotes. (Error: %1)")
+                        .arg(errorString));
+                if (cacheHit)
                 {
-                    // TODO: Auto retry in case of a timeout, with a delay
-                    auto errorString = result.formatError();
-                    qCWarning(LOG) << "Error fetching FFZ emotes for channel"
-                                   << channelID << ", error" << errorString;
                     shared->addSystemMessage(
-                        QStringLiteral("Failed to fetch FrankerFaceZ channel "
-                                       "emotes. (Error: %1)")
-                            .arg(errorString));
-                    if (cacheHit)
-                    {
-                        shared->addSystemMessage(
-                            "Using cached FrankerFaceZ emotes as fallback.");
-                    }
+                        "Using cached FrankerFaceZ emotes as fallback.");
                 }
-            })
+            }
+        })
         .execute();
 }
 

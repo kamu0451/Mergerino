@@ -391,8 +391,9 @@ void IrcMessageHandler::parseMessageInto(Communi::IrcMessage *message,
 
         msg->flags.set(MessageFlag::Disabled);
         msg->flags.set(MessageFlag::InvalidReplyTarget);
-        if (!getSettings()->hideDeletionActions &&
-            sink.findMessageByID(deletionNoticeId) == nullptr)
+        // Always added; hidden at layout time when hideDeletionActions is
+        // enabled, so toggling the setting reveals past deletions.
+        if (sink.findMessageByID(deletionNoticeId) == nullptr)
         {
             sink.addMessage(MessageBuilder::makeDeletionMessageFromIRC(msg),
                             MessageContext::Original);
@@ -631,8 +632,9 @@ void IrcMessageHandler::handleClearMessageMessage(Communi::IrcMessage *message)
 
     msg->flags.set(MessageFlag::Disabled);
     msg->flags.set(MessageFlag::InvalidReplyTarget);
-    if (!getSettings()->hideDeletionActions &&
-        chan->findMessageByID(deletionNoticeId) == nullptr)
+    // Always added; hidden at layout time when hideDeletionActions is
+    // enabled, so toggling the setting reveals past deletions.
+    if (chan->findMessageByID(deletionNoticeId) == nullptr)
     {
         chan->addMessage(MessageBuilder::makeDeletionMessageFromIRC(msg),
                          MessageContext::Original);

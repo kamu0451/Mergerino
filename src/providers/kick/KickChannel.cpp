@@ -1581,8 +1581,10 @@ void KickChannel::updateSevenTVActivity()
     {
         return;
     }
-    // Make sure to not send activity again before receiving the response
-    this->nextSeventvActivity_ = this->nextSeventvActivity_.addSecs(300);
+    // Arm the throttle synchronously (before the request is even issued) so a
+    // burst of messages arriving before the response comes back doesn't fire
+    // multiple presence POSTs.
+    this->nextSeventvActivity_ = QDateTime::currentDateTimeUtc().addSecs(300);
 
     qCDebug(chatterinoSeventv) << "Sending activity in" << this->getName();
 

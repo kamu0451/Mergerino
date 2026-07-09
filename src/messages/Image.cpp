@@ -560,6 +560,41 @@ QSizeF Image::size() const
     return this->expectedSize_.toSizeF() * this->scale_;
 }
 
+bool isTransientImageLoadError(QNetworkReply::NetworkError error,
+                               std::optional<int> httpStatus)
+{
+    // If the server produced an HTTP response, classify by status code.
+    if (httpStatus.has_value())
+    {
+        int status = *httpStatus;
+        // 5xx are server-side hiccups; 408/429 explicitly ask us to back off
+        // and retry. Everything else that resolved (404, 410, other 4xx) is a
+        // definitive miss.
+        return status >= 500 || status == 408 || status == 429;
+    }
+
+    // No HTTP response: a transport-layer failure. Retry the ones that are
+    // plausibly temporary; treat cancellation / redirect / policy errors as
+    // definitive.
+    switch (error)
+    {
+        case QNetworkReply::ConnectionRefusedError:
+        case QNetworkReply::RemoteHostClosedError:
+        case QNetworkReply::HostNotFoundError:
+        case QNetworkReply::TimeoutError:
+        case QNetworkReply::TemporaryNetworkFailureError:
+        case QNetworkReply::NetworkSessionFailedError:
+        case QNetworkReply::ProxyConnectionRefusedError:
+        case QNetworkReply::ProxyConnectionClosedError:
+        case QNetworkReply::ProxyTimeoutError:
+        case QNetworkReply::UnknownNetworkError:
+        case QNetworkReply::UnknownProxyError:
+            return true;
+        default:
+            return false;
+    }
+}
+
 void Image::actuallyLoad()
 {
     auto weak = weakOf(this);
@@ -571,6 +606,15 @@ void Image::actuallyLoad()
         }
 
         assert(!isAppAboutToQuit());
+
+        if (result.getData().isEmpty())
+        {
+            // A 0-byte body (even with a 2xx status) is a cache miss / transient
+            // hiccup rather than a decodable image - keep the image reloadable
+            // instead of decoding it into a permanent empty.
+            shared->handleLoadFailure(true);
+            return;
+        }
 
         QBuffer buffer;
         buffer.setData(result.getData());
@@ -616,15 +660,18 @@ void Image::actuallyLoad()
 
         assignFrames(shared, parsed);
     };
-    auto onError = [weak](const auto & /*result*/) {
+    auto onError = [weak](const auto &result) {
         auto shared = weak.lock();
         if (!shared)
         {
             return false;
         }
 
-        // fourtf: is this the right thing to do?
-        shared->empty_ = true;
+        // Distinguish transient failures (timeout, network error, 5xx) from
+        // definitive ones (404/410, ...). Transient failures re-arm the image
+        // for another bounded attempt instead of blanking it for the session.
+        shared->handleLoadFailure(
+            isTransientImageLoadError(result.error(), result.status()));
 
         return true;
     };
@@ -666,6 +713,28 @@ void Image::actuallyLoad()
     }
 }
 
+void Image::handleLoadFailure(bool transient)
+{
+    // This may run on a network worker thread, but shouldLoad_/loadAttempts_
+    // are GUI-thread only, so hop over. The captured strong ref keeps the
+    // Image alive until the callback runs.
+    runInGuiThread([self = this->shared_from_this(), transient]() {
+        if (transient && self->loadAttempts_ < Image::maxLoadAttempts)
+        {
+            // Keep the image reloadable so the next pixmapOrLoad()/expiration
+            // cycle retries it, but bound the number of attempts so we don't
+            // hammer a persistently failing endpoint.
+            self->loadAttempts_ += 1;
+            self->shouldLoad_ = true;
+            return;
+        }
+
+        // Definitive failure (404/410, decode error) or the retry budget is
+        // exhausted: give up and treat the image as empty.
+        self->empty_ = true;
+    });
+}
+
 void Image::expireFrames()
 {
     assertInGuiThread();
@@ -676,6 +745,7 @@ void Image::expireFrames()
 
     this->frames_->clear();
     this->shouldLoad_ = true;  // Mark as needing load again
+    this->loadAttempts_ = 0;   // Fresh load cycle gets a fresh retry budget
 }
 
 #ifndef DISABLE_IMAGE_EXPIRATION_POOL

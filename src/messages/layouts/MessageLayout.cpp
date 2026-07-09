@@ -574,6 +574,7 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
 
     bool hideModerated = getSettings()->hideModerated;
     bool hideModerationActions = getSettings()->hideModerationActions;
+    bool hideDeletionActions = getSettings()->hideDeletionActions;
     bool hideBlockedTermAutomodMessages =
         getSettings()->showBlockedTermAutomodMessages.getEnum() ==
         ShowModerationState::Never;
@@ -635,6 +636,16 @@ void MessageLayout::actuallyLayout(const MessageLayoutContext &ctx)
                 // want to share if they briefly show their chat on stream)
                 continue;
             }
+        }
+
+        // Single-message deletion notices (IRC CLEARMSG / EventSub
+        // channel.moderate "delete") are built unconditionally so that toggling
+        // the setting can reveal them; hide them here when the user opted out.
+        // The "delete:" id prefix comes from
+        // MessageBuilder::makeDeletionNoticeMessageId.
+        if (hideDeletionActions && this->message_->id.startsWith(u"delete:"))
+        {
+            continue;
         }
 
         if (hideSimilar && this->message_->flags.has(MessageFlag::Similar))

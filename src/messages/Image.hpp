@@ -10,6 +10,7 @@
 #include <boost/variant.hpp>
 #include <pajlada/signals/signal.hpp>
 #include <QList>
+#include <QNetworkReply>
 #include <QPixmap>
 #include <QString>
 #include <QThread>
@@ -74,12 +75,27 @@ namespace chatterino {
 class Image;
 using ImagePtr = std::shared_ptr<Image>;
 
+/// @brief Classifies an image-load failure as transient (worth retrying) or
+/// definitive.
+///
+/// Transient failures are network/transport-layer errors (timeout, connection
+/// reset, DNS hiccup, ...) that produced no HTTP response, plus HTTP 5xx / 408 /
+/// 429 responses. Definitive failures are the remaining resolved HTTP statuses
+/// (404, 410, other 4xx). @p httpStatus is the HTTP status code if a response
+/// was received, otherwise `std::nullopt`.
+bool isTransientImageLoadError(QNetworkReply::NetworkError error,
+                               std::optional<int> httpStatus);
+
 /// This class is thread safe.
 class Image : public std::enable_shared_from_this<Image>
 {
 public:
     // Maximum amount of RAM used by the image in bytes.
     static constexpr int maxBytesRam = 20 * 1024 * 1024;
+
+    // Number of times a transiently-failing load is retried before the image
+    // is given up on and marked empty.
+    static constexpr int maxLoadAttempts = 3;
 
     ~Image();
 
@@ -117,6 +133,12 @@ private:
 
     void setPixmap(const QPixmap &pixmap);
     void actuallyLoad();
+    /// @brief Handles a failed load attempt (may be called from a worker
+    /// thread). On a transient failure the image is re-armed for another load
+    /// attempt, up to `maxLoadAttempts`; otherwise (definitive failure or the
+    /// retry budget is exhausted) it is marked permanently empty. The member
+    /// mutations are hopped onto the GUI thread.
+    void handleLoadFailure(bool transient);
     void expireFrames();
 
     const Url url_{};
@@ -130,6 +152,10 @@ private:
     std::atomic_bool empty_{false};
 
     bool shouldLoad_{false};
+
+    // Number of load attempts that have transiently failed so far. GUI thread
+    // only (mutated via handleLoadFailure()'s GUI-thread hop and expireFrames).
+    int loadAttempts_{0};
 
     /// Size this image should take when loaded (in both dimensions).
     ///

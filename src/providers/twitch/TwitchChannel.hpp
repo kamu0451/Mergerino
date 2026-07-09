@@ -32,6 +32,7 @@
 
 class TestIrcMessageHandlerP;
 class TestEventSubMessagesP;
+class TestEventSubModeration;
 
 namespace chatterino {
 
@@ -590,6 +591,7 @@ private:
     friend class Commands_E2E_Test;
     friend class ::TestIrcMessageHandlerP;
     friend class ::TestEventSubMessagesP;
+    friend class ::TestEventSubModeration;
 
     QTimer sendWaitTimer_;
     // Timepoint at which the user can send messages again

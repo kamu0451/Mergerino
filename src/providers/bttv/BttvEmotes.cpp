@@ -21,6 +21,9 @@
 #include <QLoggingCategory>
 #include <QStringLiteral>
 #include <QThread>
+#include <QTimer>
+
+#include <chrono>
 
 namespace {
 
@@ -28,6 +31,11 @@ using namespace chatterino;
 
 const QString CHANNEL_HAS_NO_EMOTES(
     "This channel has no BetterTTV channel emotes.");
+
+// Maximum number of attempts (first try + retries) for the global/channel
+// emote fetches below before we give up until the next manual refresh.
+constexpr int EMOTE_FETCH_MAX_ATTEMPTS = 3;
+constexpr std::chrono::milliseconds EMOTE_FETCH_RETRY_BASE_DELAY{2000};
 
 /// The emote page template.
 ///
@@ -176,6 +184,21 @@ namespace chatterino {
 
 using namespace bttv::detail;
 
+bool bttv::detail::isRetryableFetchError(const NetworkResult &result)
+{
+    if (auto status = result.status())
+    {
+        // A definitive HTTP response was received - only retry server-side
+        // errors. A 4xx response (e.g. 404 "no channel emotes") isn't going
+        // to change on a retry.
+        return *status >= 500;
+    }
+
+    // No HTTP status means the request never got a response at all
+    // (timeout, connection reset, DNS failure, etc.) - that's transient.
+    return true;
+}
+
 EmoteMap bttv::detail::parseChannelEmotes(const QJsonObject &jsonRoot,
                                           const QString &channelDisplayName)
 {
@@ -247,6 +270,12 @@ void BttvEmotes::loadEmotes()
         }
     });
 
+    this->fetchGlobalEmotes(
+        ExponentialBackoff<3>(EMOTE_FETCH_RETRY_BASE_DELAY), 0);
+}
+
+void BttvEmotes::fetchGlobalEmotes(ExponentialBackoff<3> backoff, int attempt)
+{
     NetworkRequest(QString(globalEmoteApiUrl))
         .timeout(30000)
         .onSuccess([this](auto result) {
@@ -259,7 +288,20 @@ void BttvEmotes::loadEmotes()
                     std::make_shared<EmoteMap>(std::move(pair.second)));
             }
         })
-        .onError([](auto result) {
+        .onError([this, backoff, attempt](auto result) mutable {
+            if (isRetryableFetchError(result) &&
+                attempt + 1 < EMOTE_FETCH_MAX_ATTEMPTS)
+            {
+                auto delay = backoff.next();
+                qCDebug(chatterinoBttv)
+                    << "Failed to fetch global BTTV emotes, retrying in"
+                    << delay.count() << "ms. " << result.formatError();
+                QTimer::singleShot(delay, [this, backoff, attempt] {
+                    this->fetchGlobalEmotes(backoff, attempt + 1);
+                });
+                return;
+            }
+
             qCWarning(chatterinoBttv) << "Failed to fetch global BTTV emotes. "
                                       << result.formatError();
         })
@@ -277,10 +319,23 @@ void BttvEmotes::loadChannel(std::weak_ptr<Channel> channel,
                              std::function<void(EmoteMap &&)> callback,
                              bool manualRefresh, bool cacheHit)
 {
+    BttvEmotes::fetchChannelEmotes(
+        std::move(channel), channelId, channelDisplayName,
+        std::move(callback), manualRefresh, cacheHit,
+        ExponentialBackoff<3>(EMOTE_FETCH_RETRY_BASE_DELAY), 0);
+}
+
+void BttvEmotes::fetchChannelEmotes(std::weak_ptr<Channel> channel,
+                                    const QString &channelId,
+                                    const QString &channelDisplayName,
+                                    std::function<void(EmoteMap &&)> callback,
+                                    bool manualRefresh, bool cacheHit,
+                                    ExponentialBackoff<3> backoff, int attempt)
+{
     NetworkRequest(QString(bttvChannelEmoteApiUrl) + channelId)
         .timeout(20000)
-        .onSuccess([callback = std::move(callback), channel, channelId,
-                    channelDisplayName, manualRefresh](auto result) {
+        .onSuccess([callback, channel, channelId, channelDisplayName,
+                    manualRefresh](auto result) {
             auto emotes =
                 parseChannelEmotes(result.parseJson(), channelDisplayName);
             bool hasEmotes = !emotes.empty();
@@ -300,7 +355,9 @@ void BttvEmotes::loadChannel(std::weak_ptr<Channel> channel,
                 }
             }
         })
-        .onError([channelId, channel, manualRefresh, cacheHit](auto result) {
+        .onError([channelId, channelDisplayName, channel, callback,
+                  manualRefresh, cacheHit, backoff,
+                  attempt](auto result) mutable {
             auto shared = channel.lock();
             if (!shared)
             {
@@ -315,9 +372,24 @@ void BttvEmotes::loadChannel(std::weak_ptr<Channel> channel,
                     shared->addSystemMessage(CHANNEL_HAS_NO_EMOTES);
                 }
             }
+            else if (isRetryableFetchError(result) &&
+                     attempt + 1 < EMOTE_FETCH_MAX_ATTEMPTS)
+            {
+                auto delay = backoff.next();
+                qCDebug(chatterinoBttv)
+                    << "Failed to fetch BTTV emotes for channel" << channelId
+                    << ", retrying in" << delay.count() << "ms. "
+                    << result.formatError();
+                QTimer::singleShot(
+                    delay, [channel, channelId, channelDisplayName, callback,
+                            manualRefresh, cacheHit, backoff, attempt]() {
+                        BttvEmotes::fetchChannelEmotes(
+                            channel, channelId, channelDisplayName, callback,
+                            manualRefresh, cacheHit, backoff, attempt + 1);
+                    });
+            }
             else
             {
-                // TODO: Auto retry in case of a timeout, with a delay
                 auto errorString = result.formatError();
                 qCWarning(chatterinoBttv)
                     << "Error fetching BTTV emotes for channel" << channelId

@@ -6,6 +6,7 @@
 
 #include "common/Aliases.hpp"
 #include "common/Atomic.hpp"
+#include "util/ExponentialBackoff.hpp"
 
 #include <pajlada/signals/scoped-connection.hpp>
 #include <QJsonObject>
@@ -23,6 +24,7 @@ struct Emote;
 using EmotePtr = std::shared_ptr<const Emote>;
 class EmoteMap;
 class Channel;
+class NetworkResult;
 struct BttvLiveUpdateEmoteUpdateAddMessage;
 struct BttvLiveUpdateEmoteRemoveMessage;
 
@@ -30,6 +32,12 @@ namespace bttv::detail {
 
 EmoteMap parseChannelEmotes(const QJsonObject &jsonRoot,
                             const QString &channelDisplayName);
+
+/// Decides whether a failed global/channel BTTV emote fetch is worth
+/// retrying: true for transport-level failures (no HTTP response at all,
+/// e.g. a timeout) and 5xx server errors, false for a definitive 4xx
+/// client response (which won't change on a retry).
+bool isRetryableFetchError(const NetworkResult &result);
 
 }  // namespace bttv::detail
 
@@ -89,6 +97,19 @@ public:
         const BttvLiveUpdateEmoteRemoveMessage &message);
 
 private:
+    /// Fetches the global BTTV emote list, retrying a bounded number of
+    /// times (with a growing delay) on transient network failures.
+    void fetchGlobalEmotes(ExponentialBackoff<3> backoff, int attempt);
+
+    /// Fetches a channel's BTTV emotes, retrying a bounded number of times
+    /// (with a growing delay) on transient network failures.
+    static void fetchChannelEmotes(std::weak_ptr<Channel> channel,
+                                   const QString &channelId,
+                                   const QString &channelDisplayName,
+                                   std::function<void(EmoteMap &&)> callback,
+                                   bool manualRefresh, bool cacheHit,
+                                   ExponentialBackoff<3> backoff, int attempt);
+
     Atomic<std::shared_ptr<const EmoteMap>> global_;
 
     std::vector<std::unique_ptr<pajlada::Signals::ScopedConnection>>

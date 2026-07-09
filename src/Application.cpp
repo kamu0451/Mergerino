@@ -557,6 +557,10 @@ int Application::run()
                 settings->pendingPostUpdateVersion = "";
             }
             settings->currentVersion.setValue(CHATTERINO_VERSION);
+            // Record which patch notes were shown so a later version bump that
+            // carries the same notes does not re-open the dialog.
+            settings->lastShownPatchNotesFingerprint.setValue(
+                latestPatchNotesFingerprint());
             settings->requestSave();
         };
 
@@ -618,8 +622,16 @@ int Application::run()
                 CHATTERINO_VERSION == QStringLiteral("1.3.2") &&
                 getSettings()->streamDatabaseIntroShownVersion.getValue() !=
                     CHATTERINO_VERSION;
+            // Only surface the post-update dialog when the patch notes actually
+            // changed. The version bumps on every commit (PATCH = git commit
+            // count), so a plain version delta -- e.g. any local/dev build --
+            // must not re-show notes the user has already seen.
+            const bool hasNewPatchNotes =
+                latestPatchNotesFingerprint() !=
+                getSettings()->lastShownPatchNotesFingerprint.getValue();
             const bool showPostUpdate =
-                !this->previousVersionForPatchNotes_.isEmpty();
+                !this->previousVersionForPatchNotes_.isEmpty() &&
+                hasNewPatchNotes;
 
             if (showStreamDatabaseIntro)
             {

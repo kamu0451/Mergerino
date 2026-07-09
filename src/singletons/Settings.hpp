@@ -844,6 +844,15 @@ public:
         "/misc/pendingPostUpdateVersion",
         "",
     };
+    // Fingerprint of the patch-notes section last shown in the post-update
+    // dialog. The version bumps on every commit (PATCH = git commit count), so
+    // gating the dialog on the version alone re-shows the same notes on every
+    // dev/local build; keying on the notes content instead only shows them when
+    // patchnotes.txt actually gained a newer section.
+    QStringSetting lastShownPatchNotesFingerprint = {
+        "/misc/lastShownPatchNotesFingerprint",
+        "",
+    };
     BoolSetting streamDatabaseIntroShown = {
         "/misc/streamDatabaseIntroShown",
         false,

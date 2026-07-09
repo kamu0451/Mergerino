@@ -20,6 +20,7 @@
 #include "widgets/Window.hpp"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDate>
 #include <QDesktopServices>
 #include <QDialogButtonBox>
@@ -290,6 +291,19 @@ QString patchNotesHtml(const QString &text)
 }
 
 }  // namespace
+
+QString latestPatchNotesFingerprint()
+{
+    const auto notes = loadLatestPatchNotes();
+    if (notes.isEmpty() ||
+        notes == QStringLiteral("No patch notes were found."))
+    {
+        return {};
+    }
+    return QString::fromLatin1(
+        QCryptographicHash::hash(notes.toUtf8(), QCryptographicHash::Sha1)
+            .toHex());
+}
 
 StreamDatabaseUpdateDialog::StreamDatabaseUpdateDialog(
     QWidget *parent, std::function<void()> onContinueToPatchNotes)

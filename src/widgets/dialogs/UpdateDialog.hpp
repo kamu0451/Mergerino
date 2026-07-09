@@ -21,6 +21,12 @@ namespace chatterino {
 
 class Label;
 
+/// A stable fingerprint of the latest patch-notes section in patchnotes.txt.
+/// Used to decide whether the post-update dialog has new notes to show (so a
+/// bare version bump with unchanged notes does not re-nag). Empty string if no
+/// patch notes could be loaded.
+QString latestPatchNotesFingerprint();
+
 class StreamDatabaseUpdateDialog : public BaseWindow
 {
 public:

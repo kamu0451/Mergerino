@@ -8,6 +8,7 @@
 #include "common/Channel.hpp"
 #include "common/Common.hpp"
 #include "providers/irc/IrcConnection2.hpp"
+#include "util/RateLimiter.hpp"
 #include "util/RatelimitBucket.hpp"
 
 #include <IrcMessage>
@@ -210,8 +211,8 @@ private:
     pajlada::Signals::SignalHolder signalHolder;
 
     std::mutex lastMessageMutex_;
-    std::queue<std::chrono::steady_clock::time_point> lastMessagePleb_;
-    std::queue<std::chrono::steady_clock::time_point> lastMessageMod_;
+    BurstRateLimiter rateLimiterPleb_;
+    BurstRateLimiter rateLimiterMod_;
     std::chrono::steady_clock::time_point lastErrorTimeSpeed_;
     std::chrono::steady_clock::time_point lastErrorTimeAmount_;
 };

@@ -651,6 +651,7 @@ set(SOURCE_FILES
         util/RapidjsonHelpers.hpp
         util/RatelimitBucket.cpp
         util/RatelimitBucket.hpp
+        util/RateLimiter.hpp
         util/RenameThread.cpp
         util/RenameThread.hpp
         util/SampleData.cpp

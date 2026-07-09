@@ -4,6 +4,7 @@
 #include "common/Channel.hpp"
 #include "common/ChannelChatters.hpp"
 #include "messages/MessageElement.hpp"
+#include "util/RateLimiter.hpp"
 
 #include <pajlada/signals/signal.hpp>
 
@@ -242,7 +243,7 @@ private:
     std::vector<QString> lastSeventvEmoteNames_;
     QDateTime nextSeventvActivity_;
 
-    std::queue<std::chrono::steady_clock::time_point> lastMessageTimestamps_;
+    BurstRateLimiter rateLimiter_;
     std::chrono::steady_clock::time_point lastMessageSpeedErrorTs_;
     std::chrono::steady_clock::time_point lastMessageAmountErrorTs_;
 

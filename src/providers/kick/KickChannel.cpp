@@ -1469,42 +1469,34 @@ std::chrono::milliseconds KickChannel::minMessageOffset() const
 bool KickChannel::checkMessageRatelimit()
 {
     auto now = std::chrono::steady_clock::now();
-    auto &timestamps = this->lastMessageTimestamps_;
 
     // FIXME: haven't tested this fully
     const auto cooldown = 5s;
 
-    // This is mostly identical to the logic in TwitchIrcServer
-    if (!timestamps.empty() &&
-        timestamps.back() + this->minMessageOffset() > now)
+    // The sliding-window mechanics live in BurstRateLimiter (shared with the
+    // Twitch send path); Kick keeps its own minMessageOffset()/maxBurstMessages()
+    // and its own throttled system-message text here.
+    auto result = this->rateLimiter_.check(now, this->minMessageOffset(),
+                                           this->maxBurstMessages(), cooldown);
+
+    if (result == RateLimitResult::TooFast)
     {
-        if (this->lastMessageSpeedErrorTs_ + 30s < now)
+        if (shouldNotify(this->lastMessageSpeedErrorTs_, now, 30s))
         {
             this->addSystemMessage(u"You are sending messages too quickly."_s);
-            this->lastMessageSpeedErrorTs_ = now;
         }
         return false;
     }
 
-    // remove messages older than `cooldown`
-    while (!timestamps.empty() && timestamps.front() + cooldown < now)
+    if (result == RateLimitResult::TooMany)
     {
-        timestamps.pop();
-    }
-
-    // check if you are sending too many messages
-    if (timestamps.size() >= this->maxBurstMessages())
-    {
-        if (this->lastMessageAmountErrorTs_ + 30s < now)
+        if (shouldNotify(this->lastMessageAmountErrorTs_, now, 30s))
         {
             this->addSystemMessage(u"You are sending too many messages."_s);
-
-            this->lastMessageAmountErrorTs_ = now;
         }
         return false;
     }
 
-    timestamps.push(now);
     return true;
 }
 

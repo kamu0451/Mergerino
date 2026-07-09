@@ -373,6 +373,7 @@ KickStreamInfo::KickStreamInfo(BoostJsonObject obj)
 
 KickChannelInfo::KickChannelInfo(BoostJsonObject obj)
     : userID(obj["broadcaster_user_id"].toUint64())
+    , slug(obj["slug"].toQString())
     , category(obj["category"].toObject())
     , stream(obj["stream"].toObject())
     , streamTitle(obj["stream_title"].toQString())

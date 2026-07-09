@@ -486,7 +486,9 @@ void MergedChannel::sendMessage(const QString &message)
 bool MergedChannel::isMod() const
 {
     return (this->twitchChannel_ && this->twitchChannel_->isMod()) ||
-           (this->kickChannel_ && this->kickChannel_->isMod());
+           (this->kickChannel_ && this->kickChannel_->isMod()) ||
+           (this->youtubeLiveChat_ &&
+            this->youtubeLiveChat_->hasModeratorPrivileges());
 }
 
 bool MergedChannel::isBroadcaster() const
@@ -498,7 +500,9 @@ bool MergedChannel::isBroadcaster() const
 bool MergedChannel::hasModRights() const
 {
     return (this->twitchChannel_ && this->twitchChannel_->hasModRights()) ||
-           (this->kickChannel_ && this->kickChannel_->hasModRights());
+           (this->kickChannel_ && this->kickChannel_->hasModRights()) ||
+           (this->youtubeLiveChat_ &&
+            this->youtubeLiveChat_->hasModeratorPrivileges());
 }
 
 bool MergedChannel::isLive() const

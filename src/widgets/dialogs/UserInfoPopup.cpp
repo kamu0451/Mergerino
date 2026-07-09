@@ -69,6 +69,8 @@
 #include <QStringBuilder>
 #include <QTimer>
 
+#include <span>
+
 namespace {
 constexpr QStringView TEXT_FOLLOWERS = u"Followers: %1";
 constexpr QStringView TEXT_CREATED = u"Created: %1";
@@ -1826,6 +1828,21 @@ void UserInfoPopup::updateKickUserData()
 {
     assert(this->isKick_);
 
+    // Capture the Kick user id we already know (the normal path carries it as
+    // platformUserID_; opening by "id:<n>" leaves it in userId_) so that
+    // self-detection and opening-by-id can use it before the async fetch runs.
+    if (this->kickUserID_ == 0)
+    {
+        bool ok = false;
+        auto parsedID = !this->platformUserID_.isEmpty()
+                            ? this->platformUserID_.toULongLong(&ok)
+                            : this->userId_.toULongLong(&ok);
+        if (ok)
+        {
+            this->kickUserID_ = parsedID;
+        }
+    }
+
     auto onChannelFetchFailed = [](UserInfoPopup *self) {
         // this can occur when the account doesn't exist.
         self->ui_.followerCountLabel->setText(
@@ -1918,7 +1935,49 @@ void UserInfoPopup::updateKickUserData()
         self->ui_.notesAdd->setEnabled(true);
     };
 
-    // FIXME: this doesn't support opening by user ID
+    // Opening by Kick user id: the private endpoints below look users up by
+    // slug/username, so first resolve the id to a slug via the public API and
+    // re-enter with the resolved name. Requires a logged-in Kick account (the
+    // public API is authenticated); degrades to "unavailable" otherwise.
+    if (this->userName_.isEmpty())
+    {
+        if (this->kickUserID_ != 0)
+        {
+            uint64_t ids[] = {this->kickUserID_};
+            getKickApi()->getChannels(
+                ids, [self = QPointer(this),
+                      onChannelFetchFailed](const auto &res) {
+                    if (!self)
+                    {
+                        return;
+                    }
+                    if (res && !res->empty() && !res->front().slug.isEmpty())
+                    {
+                        self->userName_ = res->front().slug;
+                        self->kickUserSlug_ = res->front().slug;
+                        self->updateKickUserData();
+                    }
+                    else
+                    {
+                        qCDebug(chatterinoKick)
+                            << "Kick channel-by-id lookup failed for"
+                            << self->kickUserID_;
+                        onChannelFetchFailed(self.get());
+                    }
+                });
+        }
+        else
+        {
+            onChannelFetchFailed(this);
+        }
+
+        this->ui_.block->setEnabled(false);
+        this->ui_.ignoreHighlights->setEnabled(false);
+        this->ui_.notesAdd->setEnabled(false);
+        this->ui_.block->setVisible(false);
+        this->ui_.ignoreHighlights->setVisible(!this->kickTargetIsMyself());
+        return;
+    }
 
     KickApi::privateChannelInfo(
         this->userName_, [self = QPointer(this), onChannelFetched,
@@ -1971,11 +2030,30 @@ void UserInfoPopup::updateKickUserData()
     this->ui_.ignoreHighlights->setEnabled(false);
     this->ui_.notesAdd->setEnabled(false);
 
-    bool isMyself = false;  // FIXME: kick account
+    bool isMyself = this->kickTargetIsMyself();
     // Kick does not support blocking users; keep the checkbox hidden the
     // same way updateGenericPlatformUserData() does for YouTube/TikTok.
     this->ui_.block->setVisible(false);
     this->ui_.ignoreHighlights->setVisible(!isMyself);
+}
+
+bool UserInfoPopup::kickTargetIsMyself() const
+{
+    auto account = getApp()->getAccounts()->kick.current();
+    if (account->isAnonymous())
+    {
+        return false;
+    }
+    if (this->kickUserID_ != 0)
+    {
+        return account->userID() == this->kickUserID_;
+    }
+    if (this->userName_.isEmpty())
+    {
+        return false;
+    }
+    return account->username().compare(this->userName_, Qt::CaseInsensitive) ==
+           0;
 }
 
 void UserInfoPopup::onKickProfilePictureClick(Qt::MouseButton button)

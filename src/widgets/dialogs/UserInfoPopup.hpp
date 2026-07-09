@@ -93,6 +93,10 @@ private:
     void updateAvatarUrl();
 
     void updateKickUserData();
+    // Returns true when the Kick user this card describes is the currently
+    // logged-in Kick account (by user id when known, otherwise by username).
+    // Returns false when logged out or the target is unknown.
+    bool kickTargetIsMyself() const;
     void onKickProfilePictureClick(Qt::MouseButton button);
 
     QStringView platformName() const;

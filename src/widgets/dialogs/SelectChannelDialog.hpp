@@ -84,8 +84,10 @@ private:
         QLineEdit *kickName{};
         QCheckBox *enableYouTube{};
         QLineEdit *youtubeUrl{};
+        QLabel *youtubeHint{};
         QCheckBox *enableTikTok{};
         QLineEdit *tiktokInput{};
+        QLabel *tiktokHint{};
         QComboBox *indicatorMode{};
         QCheckBox *filterActivity{};
         QCheckBox *slowerChat{};
@@ -115,6 +117,7 @@ private:
     void setMergedDefaults();
     void loadMergedDefaultsFromChannel(const IndirectChannel &indirectChannel);
     void syncMergedFieldState();
+    void updateMergedInputHints();
     void updatePlatformOverridePlaceholders();
     void updateStreamDatabaseBadgeFeedVisibility();
     void updateDialogSize();

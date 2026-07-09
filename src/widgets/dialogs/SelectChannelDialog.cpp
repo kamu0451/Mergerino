@@ -604,6 +604,47 @@ void applyAnimatedRowProgress(QWidget *widget, qreal progress)
     widget->show();
 }
 
+// Live inline validation for the merged-tab YouTube/TikTok source fields.
+// Reuses the exact parsers the submit path runs (normalizeYouTubeSource /
+// TikTokLiveChat::normalizeSource) so the hint can never disagree with what
+// OK accepts: `parseable` is `!parser(text).isEmpty()`, the same test
+// buildMergedSelection uses. Returns true when the hint's visibility changed,
+// so the caller can re-fit the dialog. Only shows when the platform is
+// enabled and the field is non-empty (empty -> no hint, keeps it non-nagging).
+bool applyPlatformInputHint(bool platformEnabled, QLineEdit *input,
+                            QLabel *hint, bool parseable,
+                            const QString &platformName)
+{
+    if (input == nullptr || hint == nullptr)
+    {
+        return false;
+    }
+
+    const bool wasVisible = hint->isVisible();
+    const bool nonEmpty = !input->text().trimmed().isEmpty();
+
+    if (!platformEnabled || !nonEmpty)
+    {
+        hint->clear();
+        hint->setVisible(false);
+        return wasVisible;
+    }
+
+    if (parseable)
+    {
+        hint->setStyleSheet("color: #4c9a5a; font-size: 11px;");
+        hint->setText(QStringLiteral("OK  looks valid"));
+    }
+    else
+    {
+        hint->setStyleSheet("color: #c25b5b; font-size: 11px;");
+        hint->setText(
+            QStringLiteral("unrecognized %1 input").arg(platformName));
+    }
+    hint->setVisible(true);
+    return !wasVisible;
+}
+
 }  // namespace
 
 SelectChannelDialog::SelectChannelDialog(bool showSpecialPage, QWidget *parent)
@@ -691,12 +732,20 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage,
     ui.youtubeUrl = new QLineEdit();
     ui.youtubeUrl->setPlaceholderText("@handle or any YouTube video link");
     platformLayout->addRow("YouTube", ui.youtubeUrl);
+    ui.youtubeHint = new QLabel();
+    ui.youtubeHint->setWordWrap(true);
+    ui.youtubeHint->setVisible(false);
+    platformLayout->addRow(ui.youtubeHint);
 
     ui.enableTikTok = new QCheckBox("Enable TikTok");
     platformLayout->addRow(ui.enableTikTok);
     ui.tiktokInput = new QLineEdit();
     ui.tiktokInput->setPlaceholderText("@username or /@user/live URL");
     platformLayout->addRow("TikTok", ui.tiktokInput);
+    ui.tiktokHint = new QLabel();
+    ui.tiktokHint->setWordWrap(true);
+    ui.tiktokHint->setVisible(false);
+    platformLayout->addRow(ui.tiktokHint);
 
     auto *tiktokNote = new QLabel(
         "TikTok chat is read by loading TikTok's own web player in the "
@@ -779,6 +828,10 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage,
                      });
     QObject::connect(ui.twitchName, &QLineEdit::textChanged, this,
                      [this] { this->updateStreamDatabaseBadgeFeedVisibility(); });
+    QObject::connect(ui.youtubeUrl, &QLineEdit::textChanged, this,
+                     [this] { this->updateMergedInputHints(); });
+    QObject::connect(ui.tiktokInput, &QLineEdit::textChanged, this,
+                     [this] { this->updateMergedInputHints(); });
     QObject::connect(ui.enableActivity, &QCheckBox::toggled, this,
                      [this](bool enabled) {
                          if (enabled && this->ui_.filterActivity != nullptr &&
@@ -1157,7 +1210,34 @@ void SelectChannelDialog::syncMergedFieldState()
     this->ui_.kickName->setEnabled(this->ui_.enableKick->isChecked());
     this->ui_.youtubeUrl->setEnabled(this->ui_.enableYouTube->isChecked());
     this->ui_.tiktokInput->setEnabled(this->ui_.enableTikTok->isChecked());
+    this->updateMergedInputHints();
     this->updateStreamDatabaseBadgeFeedVisibility();
+}
+
+void SelectChannelDialog::updateMergedInputHints()
+{
+    if (this->ui_.youtubeHint == nullptr || this->ui_.tiktokHint == nullptr)
+    {
+        return;
+    }
+
+    bool changed = false;
+    changed |= applyPlatformInputHint(
+        this->ui_.enableYouTube->isChecked(), this->ui_.youtubeUrl,
+        this->ui_.youtubeHint,
+        !normalizeYouTubeSource(this->ui_.youtubeUrl->text()).isEmpty(),
+        QStringLiteral("YouTube"));
+    changed |= applyPlatformInputHint(
+        this->ui_.enableTikTok->isChecked(), this->ui_.tiktokInput,
+        this->ui_.tiktokHint,
+        !TikTokLiveChat::normalizeSource(this->ui_.tiktokInput->text())
+             .isEmpty(),
+        QStringLiteral("TikTok"));
+
+    if (changed && this->isVisible())
+    {
+        this->updateDialogSize();
+    }
 }
 
 void SelectChannelDialog::updatePlatformOverridePlaceholders()

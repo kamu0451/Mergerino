@@ -123,6 +123,7 @@ struct KickChannelInfo {
     KickChannelInfo(BoostJsonObject obj);
 
     uint64_t userID = 0;
+    QString slug;
     KickCategoryInfo category;
     KickStreamInfo stream;
     QString streamTitle;

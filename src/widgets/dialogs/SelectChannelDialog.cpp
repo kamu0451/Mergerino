@@ -698,6 +698,15 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage,
     ui.tiktokInput->setPlaceholderText("@username or /@user/live URL");
     platformLayout->addRow("TikTok", ui.tiktokInput);
 
+    auto *tiktokNote = new QLabel(
+        "TikTok chat is read by loading TikTok's own web player in the "
+        "background, which may conflict with TikTok's Terms of Service. "
+        "Anonymous mode is recommended; if you log in, use a throwaway "
+        "account, since account bans are possible.");
+    tiktokNote->setWordWrap(true);
+    tiktokNote->setStyleSheet("color: palette(mid); font-size: 11px;");
+    platformLayout->addRow(tiktokNote);
+
     ui.indicatorMode = new QComboBox();
     populateIndicatorModeCombo(ui.indicatorMode,
                                getSettings()->mergedPlatformIndicatorMode

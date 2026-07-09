@@ -9,6 +9,7 @@
 #    include "util/DebugCount.hpp"
 
 #    include <sol/forward.hpp>
+#    include <sol/protected_function.hpp>
 #    include <sol/types.hpp>
 
 #    include <memory>

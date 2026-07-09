@@ -31,6 +31,69 @@ jobs:
           # clone bakes "1.5.1" into every CI build regardless of branch state.
           fetch-depth: 0
 
+      - name: TOS-03 guard - anonymous InnerTube read path
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The YouTube InnerTube (youtubei) read path must stay anonymous: no
+          # OAuth/Authorization token may ever be attached to an InnerTube
+          # request. Attaching one would move scraping risk from IP/rate level
+          # to account level. Rather than key on the "youtubei" URL literal
+          # (which can be extracted to a constant, or sit in a separate helper),
+          # this guard keys on the actual read-path attachment mechanism:
+          # every InnerTube read builds its headers via youtubeHeaders() and
+          # sends them with .headerList(youtubeHeaders()). Legitimate OAuth use
+          # is confined to the official googleapis.com/youtube/v3 send/moderate
+          # calls, which attach .header("Authorization", ...) inline and never
+          # go through youtubeHeaders().
+          AUTH_MARKERS='"Authorization"|Bearer[[:space:]]|authToken\('
+          guard_failed=0
+          for file in src/providers/youtube/*.cpp; do
+            # Check 1: the shared read-path header builder youtubeHeaders()
+            # must contain no auth marker anywhere in its body.
+            headers_body_viol=$(awk '
+              /youtubeHeaders\(\)$/ { inFn = 1 }
+              inFn { print NR ": " $0 }
+              inFn && /^}/ { inFn = 0 }
+            ' "$file" | grep -E -- "$AUTH_MARKERS" || true)
+            if [ -n "$headers_body_viol" ]; then
+              echo "TOS-03 VIOLATION in $file (youtubeHeaders body):"
+              echo "An auth marker appears inside youtubeHeaders(), the shared"
+              echo "InnerTube read-path header builder. The read path must stay"
+              echo "anonymous - see the invariant comment in YouTubeLiveChat.cpp."
+              echo "$headers_body_viol"
+              guard_failed=1
+            fi
+
+            # Check 2: no single top-level function may combine a read request
+            # (.headerList(youtubeHeaders())) with an auth marker. Flags are set
+            # regardless of order and reset at each column-0 closing brace, so
+            # this is order-independent and does not rely on any URL literal.
+            # The auth pattern is a hardcoded awk regex literal (not passed via
+            # -v) so backslash-escaping of the paren is unambiguous.
+            combined_viol=$(awk '
+              /headerList\(youtubeHeaders\(\)\)/ { hasRead = 1 }
+              /"Authorization"|Bearer[[:space:]]|authToken\(/ { hasAuth = 1 }
+              /^}/ {
+                if (hasRead && hasAuth) {
+                  print "  function ending at line " NR " mixes a youtubeHeaders() read with an auth marker"
+                }
+                hasRead = 0; hasAuth = 0
+              }
+            ' "$file")
+            if [ -n "$combined_viol" ]; then
+              echo "TOS-03 VIOLATION in $file (read request + auth in one function):"
+              echo "$combined_viol"
+              guard_failed=1
+            fi
+          done
+
+          if [ "$guard_failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "TOS-03 guard passed: youtubeHeaders() is auth-free and no InnerTube read function attaches credentials."
+
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4.3.0
         with:

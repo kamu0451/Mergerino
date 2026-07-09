@@ -2,6 +2,16 @@
 //
 // SPDX-License-Identifier: MIT
 
+// INVARIANT: the InnerTube (youtubei) read path implemented in this file
+// (browse, next, live_chat/get_live_chat, updated_metadata) must remain
+// anonymous. Do not attach an account's OAuth token / Authorization header
+// to any youtubei request here - that would move the risk of scraping
+// InnerTube from IP/rate-limit level to account level. OAuth is only
+// permitted on the official googleapis.com/youtube/v3 send/moderate calls
+// in this file (postLiveChatMessage, postLiveChatBan, deleteMessage, etc.),
+// which are a separate, user-initiated write path. CI enforces this via the
+// "TOS-03 guard" step in .github/workflows/build.yml.
+
 #include "providers/youtube/YouTubeLiveChat.hpp"
 
 #include "Application.hpp"

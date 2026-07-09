@@ -52,8 +52,13 @@ settings.json
 # Ignore any files beginning with activate- as they can be used for account credentials
 activate-*
 
-# Local OAuth credentials for private development builds
-src/providers/youtube/YouTubeOAuthSecrets.local.hpp
+# Local OAuth credentials for private development builds. Any *.local.*
+# file is treated as developer-private so a new secrets header cannot be
+# committed by accident just because its exact path is not listed here.
+*.local.hpp
+*.local.*
+.env
+.env.*
 
 .gdb_history
 

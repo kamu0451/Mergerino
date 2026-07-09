@@ -949,8 +949,18 @@ void KickChannel::resolveChannelInfo()
                 qCWarning(chatterinoKick)
                     << *self
                     << "Failed to resolve channel info:" << res.error();
-                self->addSystemMessage(u"Failed to resolve channel info: "_s %
-                                       res.error());
+                if (KickApi::isCloudflareChallengeError(res.error()))
+                {
+                    if (!self->cloudflareChallengeWarned_.exchange(true))
+                    {
+                        self->addSystemMessage(res.error());
+                    }
+                }
+                else
+                {
+                    self->addSystemMessage(
+                        u"Failed to resolve channel info: "_s % res.error());
+                }
                 return;
             }
 

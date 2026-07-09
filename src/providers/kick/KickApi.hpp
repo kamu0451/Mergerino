@@ -138,6 +138,12 @@ public:
 
     static QString slugify(const QString &usernameOrSlug);
 
+    /// Returns true if `errorMessage` (as previously handed to a Callback via
+    /// ExpectedStr) is the message this API produces when a request was
+    /// blocked by a Cloudflare challenge page. Callers can use this to show a
+    /// clearer, rate-limited notice instead of the raw error.
+    static bool isCloudflareChallengeError(const QString &errorMessage);
+
     static void privateChannelInfo(const QString &username,
                                    Callback<KickPrivateChannelInfo> cb);
 

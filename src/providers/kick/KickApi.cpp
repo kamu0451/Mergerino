@@ -28,6 +28,38 @@ std::vector<std::pair<QByteArray, QByteArray>> kickNoAuthHeaders()
     };
 }
 
+// Kick's unofficial endpoints sit behind Cloudflare. When Cloudflare decides a
+// request looks automated, it answers with a 403/503 HTML interstitial
+// ("challenge" page) instead of the JSON these endpoints normally return.
+// This is surfaced to the user as a plain system message - no attempt is made
+// to solve or bypass the challenge.
+const QString KICK_CLOUDFLARE_CHALLENGE_MESSAGE =
+    u"Kick is currently blocking automated requests (Cloudflare challenge); "
+    "Kick chat may be unavailable until it clears."_s;
+
+bool isCloudflareChallenge(const NetworkResult &res)
+{
+    auto status = res.status();
+    if (!status || (*status != 403 && *status != 503))
+    {
+        return false;
+    }
+
+    // Every tell (doctype, "cf-" markers, "Just a moment") Cloudflare's
+    // interstitial pages carry shows up within the first bytes of the body,
+    // so there's no need to scan the whole thing.
+    auto sample = res.getData().left(2048).toLower();
+    if (sample.isEmpty())
+    {
+        return false;
+    }
+
+    return sample.trimmed().startsWith("<!doctype") ||
+           sample.contains("cf-chl") ||
+           sample.contains("cf-browser-verification") ||
+           sample.contains("just a moment");
+}
+
 // Kick returns stream timestamps in UTC. The livestream "start_time" field is a
 // space-separated MySQL datetime with no zone designator ("2024-05-20 18:30:00"),
 // which Qt would otherwise read as local time -- inflating stream uptime by the
@@ -136,6 +168,14 @@ void getJsonNoAuth(const QString &url, std::function<void(ExpectedStr<T>)> cb)
     NetworkRequest(url)
         .headerList(kickNoAuthHeaders())
         .onError([cb](const NetworkResult &res) {
+            if (isCloudflareChallenge(res))
+            {
+                qCWarning(chatterinoKick)
+                    << "Kick request blocked by a Cloudflare challenge (HTTP"
+                    << res.status().value_or(0) << ")";
+                cb(makeUnexpected(KICK_CLOUDFLARE_CHALLENGE_MESSAGE));
+                return;
+            }
             cb(makeUnexpected(res.formatError()));
         })
         .onSuccess([cb = std::move(cb)](const NetworkResult &res) {
@@ -387,6 +427,11 @@ QString KickApi::slugify(const QString &usernameOrSlug)
     return slugified;
 }
 
+bool KickApi::isCloudflareChallengeError(const QString &errorMessage)
+{
+    return errorMessage == KICK_CLOUDFLARE_CHALLENGE_MESSAGE;
+}
+
 void KickApi::privateChannelInfo(const QString &username,
                                  Callback<KickPrivateChannelInfo> cb)
 {
@@ -430,6 +475,14 @@ void KickApi::privateRecentMessages(
     NetworkRequest(url)
         .headerList(kickNoAuthHeaders())
         .onError([cb](const NetworkResult &res) {
+            if (isCloudflareChallenge(res))
+            {
+                qCWarning(chatterinoKick)
+                    << "Kick request blocked by a Cloudflare challenge (HTTP"
+                    << res.status().value_or(0) << ")";
+                cb(makeUnexpected(KICK_CLOUDFLARE_CHALLENGE_MESSAGE));
+                return;
+            }
             cb(makeUnexpected(res.formatError()));
         })
         .onSuccess([cb = std::move(cb)](const NetworkResult &res) {
@@ -636,6 +689,14 @@ void KickApi::doRequest(NetworkRequest &&req, Callback<T> cb)
 
     std::move(request)
         .onError([cb](const NetworkResult &res) {
+            if (isCloudflareChallenge(res))
+            {
+                qCWarning(chatterinoKick)
+                    << "Kick request blocked by a Cloudflare challenge (HTTP"
+                    << res.status().value_or(0) << ")";
+                cb(makeUnexpected(KICK_CLOUDFLARE_CHALLENGE_MESSAGE));
+                return;
+            }
             auto message = res.parseJson().value("message").toString();
             if (!message.isEmpty())
             {

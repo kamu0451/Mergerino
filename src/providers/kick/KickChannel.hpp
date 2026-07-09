@@ -259,6 +259,9 @@ private:
     std::optional<std::chrono::steady_clock::time_point> sendWaitEnd_;
     std::atomic_bool loadedRecentMessages_ = false;
     std::atomic_flag loadingRecentMessages_ = ATOMIC_FLAG_INIT;
+    // Latch so a Cloudflare-challenge notice is only shown once per channel
+    // per session, even if resolveChannelInfo() keeps getting retried.
+    std::atomic_bool cloudflareChallengeWarned_ = false;
 
     RoomModes roomModes_;
 

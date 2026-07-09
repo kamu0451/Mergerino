@@ -45,6 +45,8 @@ To run the binary directly: `./bin/chatterino-test` (test target name is unchang
 
 **Snapshot tests**: message-building changes frequently break snapshots. To refresh them, flip `UPDATE_SNAPSHOTS` to `true` at the top of `tests/src/IrcMessageHandler.cpp`, rerun tests, flip it back, rerun, then review the resulting JSON diffs in `tests/snapshots/`.
 
+There is a second, independent snapshot suite for EventSub messages in `tests/src/EventSubMessages.cpp`, refreshed the same way via its own `UPDATE_SNAPSHOTS` constant at the top of that file, with fixtures also under `tests/snapshots/`.
+
 Benchmarks live in `benchmarks/` and are gated behind `-DBUILD_BENCHMARKS=On` (Google Benchmark).
 
 ## CI / Release pipeline

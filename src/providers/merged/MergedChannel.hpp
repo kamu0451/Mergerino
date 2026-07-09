@@ -151,6 +151,17 @@ private:
     void addSystemStatusMessage(const QString &message);
     void announceJoinedLiveChat(MessagePlatform platform,
                                 const QString &title = {});
+    /// Announces "Joined <platform> live chat" iff a new streaming session
+    /// started - i.e. the source's current session id (YouTube videoId /
+    /// TikTok roomId) differs from the id we last announced for. Shared by
+    /// the YouTube/TikTok liveStatusChanged handlers and their late-join seed
+    /// paths. announceJoinedLiveChat() updates the per-session latch, so
+    /// transient live->live churn on the same session id is suppressed -
+    /// keying on the session id (not a bool) is what prevents Joined spam.
+    void announceIfNewSession(MessagePlatform platform,
+                              const QString &currentSessionId,
+                              const QString &announcedSessionId,
+                              const QString &title);
     void refreshStatusText();
 
     static QColor platformAccent(MessagePlatform platform);

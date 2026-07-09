@@ -524,6 +524,8 @@ set(SOURCE_FILES
         providers/youtube/YouTubeCommon.hpp
         providers/youtube/YouTubeLiveChat.cpp
         providers/youtube/YouTubeLiveChat.hpp
+        providers/youtube/YouTubeParsing.cpp
+        providers/youtube/YouTubeParsing.hpp
         providers/tiktok/ProtobufReader.hpp
         providers/tiktok/TikTokFrameDecoder.cpp
         providers/tiktok/TikTokFrameDecoder.hpp

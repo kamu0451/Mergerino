@@ -1097,14 +1097,11 @@ void MergedChannel::initializeSources()
                     // live_ at the provider level (recoverLiveChat keeps
                     // live_ true while it tries to recover), so we never
                     // see false->true on the same videoId from recovery.
-                    const QString currentId =
-                        this->youtubeLiveChat_->videoId();
-                    if (currentId != this->youtubeAnnouncedVideoId_)
-                    {
-                        this->announceJoinedLiveChat(
-                            MessagePlatform::YouTube,
-                            this->youtubeLiveChat_->liveTitle());
-                    }
+                    this->announceIfNewSession(
+                        MessagePlatform::YouTube,
+                        this->youtubeLiveChat_->videoId(),
+                        this->youtubeAnnouncedVideoId_,
+                        this->youtubeLiveChat_->liveTitle());
                 }
                 else
                 {
@@ -1134,13 +1131,10 @@ void MergedChannel::initializeSources()
         this->youtubeLive_ = this->youtubeLiveChat_->isLive();
         if (this->youtubeLive_)
         {
-            const QString currentId = this->youtubeLiveChat_->videoId();
-            if (currentId != this->youtubeAnnouncedVideoId_)
-            {
-                this->announceJoinedLiveChat(
-                    MessagePlatform::YouTube,
-                    this->youtubeLiveChat_->liveTitle());
-            }
+            this->announceIfNewSession(MessagePlatform::YouTube,
+                                       this->youtubeLiveChat_->videoId(),
+                                       this->youtubeAnnouncedVideoId_,
+                                       this->youtubeLiveChat_->liveTitle());
         }
     }
 
@@ -1180,14 +1174,11 @@ void MergedChannel::initializeSources()
                     // recovery. Per-roomId comparison alone gates this:
                     // transient drops keep the same roomId so they no
                     // longer re-fire the "Joined" message.
-                    const QString currentId =
-                        this->tiktokLiveChat_->roomId();
-                    if (currentId != this->tiktokAnnouncedRoomId_)
-                    {
-                        this->announceJoinedLiveChat(
-                            MessagePlatform::TikTok,
-                            this->tiktokLiveChat_->liveTitle());
-                    }
+                    this->announceIfNewSession(
+                        MessagePlatform::TikTok,
+                        this->tiktokLiveChat_->roomId(),
+                        this->tiktokAnnouncedRoomId_,
+                        this->tiktokLiveChat_->liveTitle());
                 }
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
@@ -1203,13 +1194,10 @@ void MergedChannel::initializeSources()
         this->tiktokLive_ = this->tiktokLiveChat_->isLive();
         if (this->tiktokLive_)
         {
-            const QString currentId = this->tiktokLiveChat_->roomId();
-            if (currentId != this->tiktokAnnouncedRoomId_)
-            {
-                this->announceJoinedLiveChat(
-                    MessagePlatform::TikTok,
-                    this->tiktokLiveChat_->liveTitle());
-            }
+            this->announceIfNewSession(MessagePlatform::TikTok,
+                                       this->tiktokLiveChat_->roomId(),
+                                       this->tiktokAnnouncedRoomId_,
+                                       this->tiktokLiveChat_->liveTitle());
         }
     }
 }
@@ -1531,6 +1519,17 @@ bool MergedChannel::shouldMirrorSourceMessage(const MessagePtr &message)
 
     return text != "joined" && text != "joined channel" &&
            text != "connected" && text != "reconnected";
+}
+
+void MergedChannel::announceIfNewSession(MessagePlatform platform,
+                                         const QString &currentSessionId,
+                                         const QString &announcedSessionId,
+                                         const QString &title)
+{
+    if (currentSessionId != announcedSessionId)
+    {
+        this->announceJoinedLiveChat(platform, title);
+    }
 }
 
 void MergedChannel::announceJoinedLiveChat(MessagePlatform platform,

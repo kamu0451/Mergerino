@@ -72,6 +72,7 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/KickTimeoutClamp.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ImageLoadRetry.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/EmoteFetchRetry.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/YouTubeParsing.cpp
 
     ${CMAKE_CURRENT_LIST_DIR}/src/lib/Snapshot.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/lib/Snapshot.hpp

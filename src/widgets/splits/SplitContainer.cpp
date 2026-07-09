@@ -15,6 +15,7 @@
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
@@ -297,10 +298,43 @@ void tryKickAvatar(const TabAvatarRequest &request,
 void tryYouTubeAvatar(const TabAvatarRequest &request,
                       QPointer<NotebookTab> tab, int nextStage)
 {
-    // TODO: YouTube channel avatar requires extracting the channelId from the
-    // watch page (og:image or externalId) — not yet implemented. Fall through
-    // for now so YouTube-only tabs simply show no avatar.
-    loadAvatarForTab(request, tab, nextStage);
+    const auto source = request.youtubeKey;
+    if (source.isEmpty())
+    {
+        loadAvatarForTab(request, tab, nextStage);
+        return;
+    }
+
+    // Key the cache on the normalized channel identity so the same channel
+    // entered as a handle / URL / channelId shares one cached avatar. Fall
+    // back to the raw source when normalization yields nothing recognizable.
+    const auto normalized = YouTubeLiveChat::normalizeSource(source);
+    const auto cacheKey =
+        QStringLiteral("youtube:") +
+        (normalized.isEmpty() ? source : normalized).toLower();
+    auto &cache = tabAvatarCache();
+    if (auto it = cache.constFind(cacheKey); it != cache.constEnd())
+    {
+        if (!tab.isNull())
+        {
+            tab->setAvatar(it.value());
+        }
+        return;
+    }
+
+    auto fallback = [request, tab, nextStage]() {
+        loadAvatarForTab(request, tab, nextStage);
+    };
+
+    YouTubeLiveChat::fetchChannelAvatarUrl(
+        source, [cacheKey, tab, fallback](QString avatarUrl) mutable {
+            if (avatarUrl.isEmpty())
+            {
+                fallback();
+                return;
+            }
+            downloadAvatarInto(cacheKey, avatarUrl, tab, fallback);
+        });
 }
 
 void loadAvatarForTab(const TabAvatarRequest &request,

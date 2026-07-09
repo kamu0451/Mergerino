@@ -21,6 +21,7 @@
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "widgets/splits/InputCompletionItem.hpp"
 
 #include <algorithm>
@@ -124,6 +125,8 @@ void EmoteSource::initializeFromChannel(const Channel *channel)
         includesPlatform(this->platformFilter_, MessagePlatform::AnyOrTwitch);
     const bool includeKick =
         includesPlatform(this->platformFilter_, MessagePlatform::Kick);
+    const bool includeYouTube =
+        includesPlatform(this->platformFilter_, MessagePlatform::YouTube);
     const auto *mergedChannel = dynamic_cast<const MergedChannel *>(channel);
     const auto *tc = dynamic_cast<const TwitchChannel *>(channel);
     // returns true also for special Twitch channels (/live, /mentions, /whispers, etc.)
@@ -241,6 +244,17 @@ void EmoteSource::initializeFromChannel(const Channel *channel)
                               *getApp()->getKickChatServer()->globalEmotes(),
                               "Kick Emote");
                 }
+            }
+        }
+
+        if (includeYouTube)
+        {
+            // Custom (channel/member) YouTube chat emoji accumulated by the
+            // shared YouTubeLiveChat as messages stream in. Empty until the
+            // live chat has actually delivered a custom emoji.
+            if (auto *youtube = mergedChannel->youtubeLiveChat())
+            {
+                addEmotes(emotes, youtube->customEmotes(), "YouTube Emote");
             }
         }
     }

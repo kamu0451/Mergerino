@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "messages/Emote.hpp"
 #include "messages/Message.hpp"
 #include "util/QStringHash.hpp"
 
@@ -59,6 +60,13 @@ public:
     QString previewThumbnailUrl() const;
     QString resolvedSource() const;
 
+    // Custom (channel/member) chat emoji seen in this source's live chat,
+    // keyed by their :shortcut: name. Populated as messages are parsed (see
+    // parseRendererMessage) so emote autocomplete can offer them. Standard
+    // unicode emoji are intentionally excluded - they already come from the
+    // Emoji provider. GUI-thread only, like every other accessor here.
+    const EmoteMap &customEmotes() const;
+
     pajlada::Signals::Signal<QString> sourceResolved;
     pajlada::Signals::Signal<MessagePtr> messageReceived;
     pajlada::Signals::Signal<MessagePtr> systemMessageReceived;
@@ -69,6 +77,13 @@ public:
     static QString maybeExtractVideoId(const QString &url);
     static QString normalizeSource(const QString &source);
     static bool isLikelyChannelId(const QString &value);
+
+    // Anonymously fetch the channel's avatar image URL for `source` (a handle,
+    // channelId, channel URL, or custom name). Resolves with an empty string
+    // on any failure. Read-only scrape path: uses youtubeHeaders() only and
+    // never attaches an account/OAuth token (see file-level INVARIANT).
+    static void fetchChannelAvatarUrl(const QString &source,
+                                      std::function<void(QString)> onResolved);
     static QString extractLiveChatContinuation(
         const QJsonObject &liveChatRenderer);
     static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
@@ -143,6 +158,7 @@ private:
     static QString extractFirstMatch(const QString &text,
                                      const QStringList &patterns);
     static QString extractVideoChannelId(const QString &html);
+    static QString extractChannelAvatarUrl(const QString &html);
     static QString extractEmbedLiveVideoId(const QString &html);
     static QString extractLiveVideoId(const QString &html,
                                       bool allowPageCanonical);
@@ -154,7 +170,8 @@ private:
     static uint64_t parseViewerCount(const QJsonValue &value);
     static MessagePtr parseRendererMessage(const QJsonObject &renderer,
                                           const QString &rendererName,
-                                          const QString &channelName);
+                                          const QString &channelName,
+                                          EmoteMap *customEmoteSink = nullptr);
 
     QString streamUrl_;
     QString videoId_;
@@ -209,6 +226,11 @@ private:
     std::unordered_set<QString> seenMessageIds_;
     std::unordered_map<QString, QString> liveChatBanIds_;
     QString joinedLiveVideoId_;
+    // Accumulated custom chat emoji for autocomplete. Bounded and deduped by
+    // shortcut inside accumulateCustomYouTubeEmoji(). Not cleared between
+    // streams: a channel's member/custom emoji persist across broadcasts, so
+    // keeping them means they stay completable while the source is loaded.
+    EmoteMap customEmotes_;
 };
 
 }  // namespace chatterino

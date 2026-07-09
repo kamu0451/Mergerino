@@ -328,6 +328,47 @@ EmotePtr makeYouTubeEmojiEmote(const QJsonObject &emoji)
     });
 }
 
+bool isCustomYouTubeEmoji(const QJsonObject &emoji)
+{
+    // Channel/member emoji are flagged isCustomEmoji; standard unicode emoji
+    // are not. Only the custom ones have channel-specific :shortcut: names
+    // worth completing - unicode shortcuts already come from the Emoji
+    // provider, so completing them here would just duplicate those entries.
+    return emoji["isCustomEmoji"].toBool();
+}
+
+// Record a custom (channel/member) chat emoji into the per-source completion
+// map so emote autocomplete can offer its :shortcut:. Dedupes by shortcut (the
+// EmoteMap key); first sighting wins. Bounded so a long session on a channel
+// with a large emoji set can't grow the map without limit. No-op when there's
+// no sink, the emote failed to build, or the emoji is a standard unicode one.
+void accumulateCustomYouTubeEmoji(EmoteMap *customEmoteSink,
+                                  const QJsonObject &emoji,
+                                  const EmotePtr &emote)
+{
+    constexpr std::size_t maxAccumulatedEmotes = 512;
+
+    if (customEmoteSink == nullptr || !emote || !isCustomYouTubeEmoji(emoji))
+    {
+        return;
+    }
+
+    const auto shortcut = youtubeEmojiShortcut(emoji);
+    if (shortcut.isEmpty() || !shortcut.startsWith(u':'))
+    {
+        return;
+    }
+
+    const EmoteName name{shortcut};
+    if (customEmoteSink->contains(name) ||
+        customEmoteSink->size() >= maxAccumulatedEmotes)
+    {
+        return;
+    }
+
+    customEmoteSink->emplace(name, emote);
+}
+
 QString youtubeAccessibilityLabel(const QJsonObject &object)
 {
     return object["accessibility"]
@@ -525,7 +566,8 @@ std::optional<QColor> youtubeAuthorNameColor(const QJsonObject &authorSource)
     return std::nullopt;
 }
 
-bool appendYouTubeText(MessageBuilder &builder, const QJsonValue &value)
+bool appendYouTubeText(MessageBuilder &builder, const QJsonValue &value,
+                       EmoteMap *customEmoteSink = nullptr)
 {
     const auto object = value.toObject();
     if (object.contains("simpleText"))
@@ -559,6 +601,7 @@ bool appendYouTubeText(MessageBuilder &builder, const QJsonValue &value)
         {
             builder.emplace<EmoteElement>(emote, MessageElementFlag::Emote,
                                           builder.textColor());
+            accumulateCustomYouTubeEmoji(customEmoteSink, emoji, emote);
             appended = true;
             continue;
         }
@@ -573,12 +616,14 @@ bool appendYouTubeText(MessageBuilder &builder, const QJsonValue &value)
 
 void appendYouTubeTextParts(MessageBuilder &builder,
                             const std::vector<QJsonValue> &parts,
-                            const QString &fallbackText)
+                            const QString &fallbackText,
+                            EmoteMap *customEmoteSink = nullptr)
 {
     bool appended = false;
     for (const auto &part : parts)
     {
-        appended = appendYouTubeText(builder, part) || appended;
+        appended =
+            appendYouTubeText(builder, part, customEmoteSink) || appended;
     }
 
     if (!appended)
@@ -1467,6 +1512,55 @@ void YouTubeLiveChat::resolveChannelIdFromSearch(
 
             (*callback)({});
                                  }))
+        .execute();
+}
+
+void YouTubeLiveChat::fetchChannelAvatarUrl(
+    const QString &source, std::function<void(QString)> onResolved)
+{
+    // Static, self-contained anonymous fetch. Normalize the user-entered
+    // source down to a stable channel identifier, then load that channel's
+    // page and pull the avatar image URL out of its <meta og:image> /
+    // ytInitialData. Read-only path - youtubeHeaders() only, no account token.
+    const auto normalized = normalizeSource(source);
+    if (normalized.isEmpty())
+    {
+        // A bare watch/shorts URL or unrecognized source: no channel handle to
+        // resolve here. Let the caller fall through to its next avatar stage.
+        onResolved({});
+        return;
+    }
+
+    QString path;
+    if (normalized.startsWith('@'))
+    {
+        path = QStringLiteral("/") + normalized;
+    }
+    else if (isLikelyChannelId(normalized))
+    {
+        path = QStringLiteral("/channel/") + normalized;
+    }
+    else
+    {
+        // Legacy custom name / handle without the leading '@'. YouTube resolves
+        // this via redirect; followRedirects(true) below lands on the channel.
+        path = QStringLiteral("/") + normalized;
+    }
+
+    const auto url = QStringLiteral("https://www.youtube.com") + path;
+    auto callback =
+        std::make_shared<std::function<void(QString)>>(std::move(onResolved));
+    NetworkRequest(url.toStdString())
+        .headerList(youtubeHeaders())
+        .followRedirects(true)
+        .timeout(15000)
+        .onSuccess([callback](const NetworkResult &result) {
+            const auto html = QString::fromUtf8(result.getData());
+            (*callback)(extractChannelAvatarUrl(html));
+        })
+        .onError([callback](const NetworkResult &) {
+            (*callback)({});
+        })
         .execute();
 }
 
@@ -2585,7 +2679,8 @@ void YouTubeLiveChat::poll()
                 const auto renderer = item[rendererName].toObject();
                 this->updateModeratorPrivilegesFromRenderer(renderer);
                 auto message = parseRendererMessage(
-                    renderer, rendererName, this->videoId_);
+                    renderer, rendererName, this->videoId_,
+                    &this->customEmotes_);
                 if (!message || message->id.isEmpty())
                 {
                     continue;
@@ -3212,6 +3307,11 @@ QString YouTubeLiveChat::resolvedSource() const
     return normalizeSource(this->streamUrl_);
 }
 
+const EmoteMap &YouTubeLiveChat::customEmotes() const
+{
+    return this->customEmotes_;
+}
+
 QString YouTubeLiveChat::maybeExtractVideoId(const QString &urlString)
 {
     const auto trimmed = trimmedSource(urlString);
@@ -3464,6 +3564,21 @@ QString YouTubeLiveChat::extractVideoChannelId(const QString &html)
          R"yt("browseId":"(UC[A-Za-z0-9_-]{22})")yt",
          R"yt("channelId":"(UC[A-Za-z0-9_-]{22})")yt",
          R"yt(itemprop="channelId" content="(UC[A-Za-z0-9_-]{22})")yt"});
+}
+
+QString YouTubeLiveChat::extractChannelAvatarUrl(const QString &html)
+{
+    // On a channel page YouTube sets og:image / image_src to the channel's
+    // avatar (a yt3.ggpht.com / yt3.googleusercontent.com URL). Fall back to
+    // the avatar thumbnail embedded in ytInitialData, whose URL is JSON-escaped
+    // (\/), so unescape the slashes before handing it back.
+    auto avatar = extractFirstMatch(
+        html,
+        {R"yt(<meta property="og:image" content="(https://yt3\.[^"]+)")yt",
+         R"yt(<link rel="image_src" href="(https://yt3\.[^"]+)")yt",
+         R"yt("avatar":\{"thumbnails":\[\{"url":"(https:[^"]+yt3\.[^"]+)")yt"});
+    avatar.replace(QStringLiteral("\\/"), QStringLiteral("/"));
+    return avatar;
 }
 
 QString YouTubeLiveChat::extractEmbedLiveVideoId(const QString &html)
@@ -3781,7 +3896,8 @@ QString compactMembershipGiftText(const QString &text, const QString &author)
 
 MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
                                                  const QString &rendererName,
-                                                 const QString &channelName)
+                                                 const QString &channelName,
+                                                 EmoteMap *customEmoteSink)
 {
     if (renderer.isEmpty())
     {
@@ -3963,7 +4079,8 @@ MessagePtr YouTubeLiveChat::parseRendererMessage(const QJsonObject &renderer,
     }
     else
     {
-        appendYouTubeTextParts(builder, renderedTextParts, text);
+        appendYouTubeTextParts(builder, renderedTextParts, text,
+                               customEmoteSink);
     }
     return builder.release();
 }

@@ -12,7 +12,6 @@
 #include "providers/NetworkConfigurationProvider.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "RunGui.hpp"
-#include "singletons/CrashHandler.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Updates.hpp"
@@ -159,10 +158,6 @@ int main(int argc, char **argv)
             delete file;
         }
     }
-
-#ifdef CHATTERINO_WITH_CRASHPAD
-    const auto crashpadHandler = installCrashHandler(args, *paths);
-#endif
 
     // run in gui mode or browser extension host mode
     if (args.shouldRunBrowserExtensionHost)

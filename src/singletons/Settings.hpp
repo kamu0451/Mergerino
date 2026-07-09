@@ -307,8 +307,6 @@ public:
         NotebookTabVisibility::AllTabs,
     };
 
-    //    BoolSetting collapseLongMessages =
-    //    {"/appearance/messages/collapseLongMessages", false};
     QStringSetting chatFontFamily{
         "/appearance/currentFontFamily",
         DEFAULT_FONT_FAMILY,
@@ -381,9 +379,6 @@ public:
         "/appearance/splitheader/viewerDeltaWindowMinutes", 5};
     FloatSetting customThemeMultiplier = {"/appearance/customThemeMultiplier",
                                           -0.5f};
-    // BoolSetting useCustomWindowFrame = {"/appearance/useCustomWindowFrame",
-    // false};
-
     FloatSetting overlayScaleFactor = {"/appearance/overlay/scaleFactor", 1};
     IntSetting overlayBackgroundOpacity = {
         "/appearance/overlay/backgroundOpacity", 50};
@@ -649,8 +644,6 @@ public:
     };
 
     /// Highlighting
-    //    BoolSetting enableHighlights = {"/highlighting/enabled", true};
-
     BoolSetting enableSelfHighlight = {
         "/highlighting/selfHighlight/nameIsHighlightKeyword", true};
     BoolSetting showSelfHighlightInMentions = {
@@ -684,12 +677,6 @@ public:
 
     BoolSetting enableRedeemedHighlight = {
         "/highlighting/redeemedHighlight/highlighted", true};
-    //    BoolSetting enableRedeemedHighlightSound = {
-    //        "/highlighting/redeemedHighlight/enableSound", false};
-    //    BoolSetting enableRedeemedHighlightTaskbar = {
-    //        "/highlighting/redeemedHighlight/enableTaskbarFlashing", false};
-    //    QStringSetting redeemedHighlightSoundUrl = {
-    //        "/highlighting/redeemedHighlightSoundUrl", ""};
     QStringSetting redeemedHighlightColor = {
         "/highlighting/redeemedHighlightColor", ""};
 
@@ -697,23 +684,11 @@ public:
         "/highlighting/firstMessageHighlight/highlighted", true};
     BoolSetting enableFirstMessageSessionHighlight = {
         "/highlighting/firstMessageSessionHighlight/enabled", false};
-    //    BoolSetting enableFirstMessageHighlightSound = {
-    //        "/highlighting/firstMessageHighlight/enableSound", false};
-    //    BoolSetting enableFirstMessageHighlightTaskbar = {
-    //        "/highlighting/firstMessageHighlight/enableTaskbarFlashing", false};
-    //    QStringSetting firstMessageHighlightSoundUrl = {
-    //        "/highlighting/firstMessageHighlightSoundUrl", ""};
     QStringSetting firstMessageHighlightColor = {
         "/highlighting/firstMessageHighlightColor", ""};
 
     BoolSetting enableElevatedMessageHighlight = {
         "/highlighting/elevatedMessageHighlight/highlighted", true};
-    //    BoolSetting enableElevatedMessageHighlightSound = {
-    //        "/highlighting/elevatedMessageHighlight/enableSound", false};
-    //    BoolSetting enableElevatedMessageHighlightTaskbar = {
-    //        "/highlighting/elevatedMessageHighlight/enableTaskbarFlashing", false};
-    //    QStringSetting elevatedMessageHighlightSoundUrl = {
-    //        "/highlighting/elevatedMessageHighlight/soundUrl", ""};
     QStringSetting elevatedMessageHighlightColor = {
         "/highlighting/elevatedMessageHighlight/color", ""};
 
@@ -876,10 +851,6 @@ public:
     QStringSetting streamDatabaseIntroShownVersion = {
         "/misc/streamDatabaseIntroShownVersion",
         "",
-    };
-    BoolSetting activityPanePlatformStyleHighlightsMigrationDone = {
-        "/misc/activityPanePlatformStyleHighlightsMigrationDone",
-        false,
     };
     IntSetting overlayKnowledgeLevel = {"/misc/overlayKnowledgeLevel", 0};
 
@@ -1046,10 +1017,6 @@ public:
     /// Returns true if the user is now blocked, false if now unblocked.
     bool toggleLocallyBlocked(const QString &userName);
 
-    BoolSetting activityPaneRelativeTimeMigrationDone = {
-        "/misc/activityPaneRelativeTimeMigrationDone",
-        false,
-    };
     BoolSetting headerChatModeIndicator = {
         "/appearance/splitheader/showChatModeIndicator",
         true,

@@ -43,7 +43,7 @@ QString randomMessage()
 
 namespace chatterino {
 
-LastRunCrashDialog::LastRunCrashDialog(const Args &args, const Paths &paths)
+LastRunCrashDialog::LastRunCrashDialog(const Args &, const Paths &)
 {
     this->setWindowFlag(Qt::WindowContextHelpButtonHint, false);
     this->setWindowTitle(u"Mergerino - " % randomMessage());
@@ -54,36 +54,6 @@ LastRunCrashDialog::LastRunCrashDialog(const Args &args, const Paths &paths)
     QString text =
         u"Mergerino unexpectedly crashed and restarted. "_s
         "<i>You can disable automatic restarts in the settings.</i><br><br>";
-
-#ifdef CHATTERINO_WITH_CRASHPAD
-    auto reportsDir = QDir(paths.crashdumpDirectory).filePath(u"reports"_s);
-    text += u"A <b>crash report</b> has been saved to "
-            "<a href=\"file:///" %
-            reportsDir % u"\">" % reportsDir % u"</a>.<br>";
-
-    if (args.exceptionCode)
-    {
-        text += u"The last run crashed with code <code>0x" %
-                QString::number(*args.exceptionCode, 16) % u"</code>";
-
-        if (args.exceptionMessage)
-        {
-            text += u" (" % *args.exceptionMessage % u")";
-        }
-
-        text += u".<br>"_s;
-    }
-
-    text +=
-        "Crash reports are <b>only stored locally</b> and never uploaded.<br>"
-        "<br>Review the saved crash report and share it manually if you need "
-        "to investigate the issue."_s;
-
-    if (Version::instance().isNightly())
-    {
-        text += u" Make sure you're using the latest nightly version!"_s;
-    }
-#endif
 
     auto label = layout.emplace<QLabel>(text);
     label->setTextInteractionFlags(Qt::TextBrowserInteraction);

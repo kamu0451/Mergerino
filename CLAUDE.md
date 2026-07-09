@@ -23,7 +23,7 @@ vcpkg alternative: `vcpkg install` then configure with `-DCMAKE_TOOLCHAIN_FILE="
 
 Run: `build-conan\bin\mergerino.exe`. To produce a standalone bundle: `windeployqt build-conan\bin\mergerino.exe --release --no-compiler-runtime --no-translations --no-opengl-sw --dir build-conan\bin`.
 
-Key CMake options (from `CMakeLists.txt`): `BUILD_TESTS`, `BUILD_BENCHMARKS`, `CHATTERINO_PLUGINS` (Lua/Sol2, on by default), `CHATTERINO_SPELLCHECK` (requires Hunspell — CI turns this on), `BUILD_WITH_CRASHPAD` (off by default, and off in the release workflow), `CHATTERINO_LTO`, `USE_PRECOMPILED_HEADERS`. `CMAKE_EXPORT_COMPILE_COMMANDS` is forced ON so every Ninja build drops a `compile_commands.json` for clangd / VS Code.
+Key CMake options (from `CMakeLists.txt`): `BUILD_TESTS`, `BUILD_BENCHMARKS`, `CHATTERINO_PLUGINS` (Lua/Sol2, on by default), `CHATTERINO_SPELLCHECK` (requires Hunspell — CI turns this on), `CHATTERINO_LTO`, `USE_PRECOMPILED_HEADERS`. `CMAKE_EXPORT_COMPILE_COMMANDS` is forced ON so every Ninja build drops a `compile_commands.json` for clangd / VS Code.
 
 ## Logging
 

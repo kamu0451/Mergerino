@@ -237,12 +237,6 @@ TwitchChannel::TwitchChannel(const QString &name)
                          this->syncSendWaitTimer();
                      });
 
-    // debugging
-#if 0
-    for (int i = 0; i < 1000; i++) {
-        this->addSystemMessage("asef");
-    }
-#endif
 }
 
 TwitchChannel::~TwitchChannel()

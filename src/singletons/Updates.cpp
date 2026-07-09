@@ -15,6 +15,7 @@
 #include <cassert>
 
 #include <QApplication>
+#include <QCryptographicHash>
 #include <QDesktopServices>
 #include <QFile>
 #include <QJsonArray>
@@ -144,6 +145,45 @@ void Updates::installUpdates()
                 return;
             }
 
+            // Integrity check: verify the downloaded archive matches the
+            // SHA-256 digest the releases API advertised for this asset. This
+            // guards against a corrupted or tampered transfer / stale CDN
+            // artifact - it is NOT a full code-signing trust chain, since the
+            // digest is served from the same origin (the release JSON) as the
+            // download URL. On mismatch we refuse to launch the updater and
+            // surface the same UX as an ordinary failed download.
+            if (!this->updateDigest_.isEmpty())
+            {
+                QString actual = QString::fromLatin1(
+                    QCryptographicHash::hash(data,
+                                             QCryptographicHash::Sha256)
+                        .toHex());
+                if (actual.compare(this->updateDigest_,
+                                   Qt::CaseInsensitive) != 0)
+                {
+                    qCWarning(chatterinoUpdate)
+                        << "update integrity check failed: expected sha256"
+                        << this->updateDigest_ << "but download hashes to"
+                        << actual << "- refusing to launch updater";
+                    this->setStatus_(DownloadFailed);
+                    postToThread([] {
+                        auto *errBox = new QMessageBox(
+                            QMessageBox::Information, "Mergerino Update",
+                            "Failed while trying to download the update.");
+                        errBox->setAttribute(Qt::WA_DeleteOnClose);
+                        errBox->show();
+                        errBox->raise();
+                    });
+                    return;
+                }
+            }
+            else
+            {
+                qCDebug(chatterinoUpdate)
+                    << "no sha256 digest advertised for the update asset; "
+                       "skipping integrity check";
+            }
+
             auto filename =
                 combinePath(this->paths.miscDirectory, "update.zip");
 
@@ -253,6 +293,7 @@ void Updates::checkForUpdates()
             // version-less Mergerino.zip; tolerate a missing asset by
             // falling back to a browser-open in installUpdates().
             this->updatePortable_.clear();
+            this->updateDigest_.clear();
             QJsonArray assets = json.value("assets").toArray();
             for (const auto &assetVal : assets)
             {
@@ -263,6 +304,18 @@ void Updates::checkForUpdates()
                 {
                     this->updatePortable_ =
                         asset.value("browser_download_url").toString();
+                    // GitHub advertises a per-asset content digest
+                    // ("sha256:<hex>") for assets uploaded since 2025. Keep
+                    // just the hex so installUpdates() can verify the
+                    // downloaded zip against it. Tolerate its absence (older
+                    // assets) by leaving updateDigest_ empty.
+                    QString digest = asset.value("digest").toString();
+                    if (digest.startsWith(QStringLiteral("sha256:"),
+                                          Qt::CaseInsensitive))
+                    {
+                        this->updateDigest_ =
+                            digest.mid(7).trimmed().toLower();
+                    }
                     break;
                 }
             }

@@ -113,3 +113,14 @@ Additive features/tests, all built + 663 tests green + smoke clean.
   logs (`.merge-smoke*.log`, `.rework-smoke.log`, `.local-build.log`) left in place.
 - Produced a **security/ToS fix list for upstream (Fixlation)** summarizing the
   SEC-*/TOS-* items so his agent can mirror them.
+- **Verified the Fixlation list against `upstream/main`** (Fixlation/Mergerino,
+  latest 1.3.2 `dd18649`): every item is real in his tree verbatim — SEC-01
+  (`KickLoginPage.cpp:1255/1295/1318`), LOG-03/SEC-03 (`YouTubeAccount.cpp:271`),
+  SEC-02 (`KickAccount.cpp` uses `QStringSetting`, bypasses the existing keychain),
+  SEC-G1 (`BoostJsonWrap.cpp` `return {a[i]}`), SEC-G2 (`KickMessageBuilder.cpp:951`
+  `dur*60`), STAB-G3 (`KickChannel.cpp:849/857` assert), SEC-G4 (hardcoded
+  `mergerino_gui` queue, no secret), SEC-04/05 (no TikTok nav-gating / no updater
+  hash), SEC-06 (`.gitignore` pins only the exact secrets path). TOS-01/02 missing;
+  TOS-03 is preventive (read path already anonymous — the ask is a CI guard); Helix
+  429 correctly flagged as not-done. The leaked plaintext token *data* was
+  local-only (never in any repo); the vulnerable *code* is shared upstream.

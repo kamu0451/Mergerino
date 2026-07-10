@@ -103,3 +103,13 @@ Additive features/tests, all built + 663 tests green + smoke clean.
 - Session lessons captured as memories (ctest-authoritative, emote/badge test
   teardown crash, CI feature-branch dispatch) + gotchas (git stale lock, guard
   false-positives, C++ LSP phantom diagnostics).
+- **Security-trace cleanup** — deleted `.tiktok-trace.log` (stale May-13 TikTok
+  trace holding 51 `refresh_token` fields) + all this session's scratch logs.
+  Confirmed no plaintext tokens remain: settings.json has none (the SEC-02
+  verification run migrated the Kick secrets into the Windows Credential Manager
+  and erased the plaintext; no YouTube account is stored). Consequence: the
+  deployed feat build can't read those keychain entries, so the Kick account may
+  show logged-out until SEC-02 is deployed. Remaining untracked clean scratch
+  logs (`.merge-smoke*.log`, `.rework-smoke.log`, `.local-build.log`) left in place.
+- Produced a **security/ToS fix list for upstream (Fixlation)** summarizing the
+  SEC-*/TOS-* items so his agent can mirror them.

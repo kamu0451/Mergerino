@@ -613,7 +613,7 @@ bool decodeFetchResult(std::span<const std::uint8_t> bytes, DecodedFrame &out)
 }
 
 // Optional one-shot frame dump for diagnostics. Set TIKTOK_DUMP_DIR to a
-// writable directory (e.g. C:\Users\Repe\tiktok-frames). The first
+// writable directory (e.g. C:\temp\tiktok-frames). The first
 // kMaxDumpedFrames push frames received process-wide get written as paired
 // raw_<N>.bin (pre-inflate WS payload) and inflated_<N>.bin (gunzipped
 // FetchResult bytes) for hand-decoding against the v3 schema.

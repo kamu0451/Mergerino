@@ -88,3 +88,83 @@ TEST(YouTubeParsing, parseYouTubeIsoDateTimeParsesValidTimestamps)
     EXPECT_FALSE(parseYouTubeIsoDateTime("").isValid());
     EXPECT_FALSE(parseYouTubeIsoDateTime("not-a-date").isValid());
 }
+
+TEST(YouTubeParsing, normalizeYouTubeTextRunUrlRejectsDangerousSchemes)
+{
+    EXPECT_TRUE(normalizeYouTubeTextRunUrl("javascript:alert(1)").isEmpty());
+    EXPECT_TRUE(normalizeYouTubeTextRunUrl(
+                    "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==")
+                    .isEmpty());
+    EXPECT_TRUE(normalizeYouTubeTextRunUrl("ftp://x").isEmpty());
+}
+
+TEST(YouTubeParsing, normalizeYouTubeTextRunUrlPassesThroughHttpAndHttps)
+{
+    EXPECT_EQ(normalizeYouTubeTextRunUrl("http://example.com/foo"),
+              "http://example.com/foo");
+    EXPECT_EQ(normalizeYouTubeTextRunUrl("https://example.com/foo?a=1"),
+              "https://example.com/foo?a=1");
+}
+
+TEST(YouTubeParsing, normalizeYouTubeTextRunUrlExpandsRelativePrefixes)
+{
+    EXPECT_EQ(normalizeYouTubeTextRunUrl("//example.com/path"),
+              "https://example.com/path");
+    EXPECT_EQ(normalizeYouTubeTextRunUrl("/watch?v=dQw4w9WgXcQ"),
+              "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+}
+
+TEST(YouTubeParsing, normalizeYouTubeTextRunUrlUnwrapsRedirectQueryParam)
+{
+    EXPECT_EQ(
+        normalizeYouTubeTextRunUrl(
+            "https://www.youtube.com/redirect?q=https%3A%2F%2Fexample.com%2Fpage"),
+        "https://example.com/page");
+
+    // Empty q= has nothing to unwrap to, so the redirect URL itself is returned.
+    EXPECT_EQ(normalizeYouTubeTextRunUrl("https://www.youtube.com/redirect?q="),
+              "https://www.youtube.com/redirect?q=");
+
+    // Only one level of unwrapping happens: a redirect whose q= target is
+    // itself a (double-encoded) /redirect URL comes back still wrapped,
+    // not recursively unwrapped.
+    EXPECT_EQ(
+        normalizeYouTubeTextRunUrl(
+            "https://www.youtube.com/redirect?q=https%3A%2F%2Fwww.youtube.com%2Fredirect%3Fq%3Dhttps%253A%252F%252Fexample.com"),
+        "https://www.youtube.com/redirect?q=https%3A%2F%2Fexample.com");
+}
+
+TEST(YouTubeParsing, youtubeNavigationEndpointUrlPrefersUrlEndpoint)
+{
+    const auto endpoint = parseObject(R"({
+        "urlEndpoint": {"url": "https://example.com/from-url-endpoint"}
+    })");
+    EXPECT_EQ(youtubeNavigationEndpointUrl(endpoint),
+              "https://example.com/from-url-endpoint");
+}
+
+TEST(YouTubeParsing, youtubeNavigationEndpointUrlFallsBackToWatchEndpoint)
+{
+    const auto endpoint = parseObject(R"({
+        "watchEndpoint": {"videoId": "dQw4w9WgXcQ"}
+    })");
+    EXPECT_EQ(youtubeNavigationEndpointUrl(endpoint),
+              "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+}
+
+TEST(YouTubeParsing, youtubeNavigationEndpointUrlFallsBackToBrowseEndpoint)
+{
+    const auto endpoint = parseObject(R"({
+        "browseEndpoint": {"browseId": "UC-lHJZR3Gqxm24_Vd_AJ5Yw"}
+    })");
+    EXPECT_EQ(youtubeNavigationEndpointUrl(endpoint),
+              "https://www.youtube.com/channel/UC-lHJZR3Gqxm24_Vd_AJ5Yw");
+}
+
+TEST(YouTubeParsing, youtubeNavigationEndpointUrlReturnsEmptyWhenNoEndpointPresent)
+{
+    EXPECT_TRUE(youtubeNavigationEndpointUrl(QJsonObject{}).isEmpty());
+    EXPECT_TRUE(
+        youtubeNavigationEndpointUrl(parseObject(R"({"someOtherField": true})"))
+            .isEmpty());
+}

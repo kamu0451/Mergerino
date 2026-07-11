@@ -76,6 +76,8 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/RateLimiter.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/KickMessageBuilder.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ProtobufReader.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/LoggedUsers.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/MessageIsEmoteOnly.cpp
 
     ${CMAKE_CURRENT_LIST_DIR}/src/lib/Snapshot.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/lib/Snapshot.hpp

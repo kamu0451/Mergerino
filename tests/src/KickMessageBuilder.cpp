@@ -99,18 +99,21 @@ public:
     KickChatServer kickChatServer;
 };
 
-// Count message elements whose runtime type() equals `type`.
-size_t countElements(const Message &msg, std::string_view type)
+// Collects the rendered text of every TextElement in a message, in element
+// order. Some builder output (e.g. the Kicks-gift name) is only ever visible
+// through its own TextElement and never makes it into Message::messageText,
+// so asserting on messageText alone can't verify it landed correctly.
+QStringList textElementTexts(const Message &msg)
 {
-    size_t n = 0;
+    QStringList out;
     for (const auto &el : msg.elements)
     {
-        if (el->type() == type)
+        if (const auto *text = dynamic_cast<TextElement *>(el.get()))
         {
-            n++;
+            out.append(text->words().join(' '));
         }
     }
-    return n;
+    return out;
 }
 
 
@@ -183,6 +186,12 @@ TEST_F(KickMessageBuilderTest, ChatMessageBasicFields)
     EXPECT_EQ(message->loginName, "coolviewer");
     EXPECT_EQ(message->userID, "998877");
     EXPECT_EQ(message->messageText, "hello world");
+
+    // No highlight phrases are configured on the mock application, so the
+    // returned alert must be the default "nothing matched" value.
+    EXPECT_FALSE(result.second.playSound);
+    EXPECT_FALSE(result.second.windowAlert);
+    EXPECT_TRUE(result.second.customSound.isEmpty());
 }
 
 // ---------- makeTimeoutMessage: timeout + permanent ban ----------
@@ -232,6 +241,79 @@ TEST_F(KickMessageBuilderTest, PermanentBanMessage)
     EXPECT_TRUE(message->messageText.contains("permanently banned"));
     // No duration should be printed for a permanent ban.
     EXPECT_FALSE(message->messageText.contains("for"));
+}
+
+TEST_F(KickMessageBuilderTest, TimeoutMessageWithoutModerator)
+{
+    auto json = parse(R"({
+        "user": { "username": "BadUser" },
+        "permanent": false,
+        "duration": 5
+    })");
+    BoostJsonObject data(json.as_object());
+
+    auto message = KickMessageBuilder::makeTimeoutMessage(
+        this->channel.get(), QDateTime::currentDateTime(), data);
+
+    ASSERT_NE(message, nullptr);
+    EXPECT_TRUE(message->flags.has(MessageFlag::Timeout));
+    EXPECT_EQ(message->timeoutUser, "baduser");
+
+    // No banned_by -> loginName (normally set to the moderator) stays unset,
+    // and the phrasing is "BadUser has been timed out for 5m." with no
+    // moderator mentioned at all.
+    EXPECT_TRUE(message->loginName.isEmpty());
+    EXPECT_TRUE(message->messageText.contains("BadUser has been timed out"));
+    EXPECT_TRUE(message->messageText.contains("5m"));
+}
+
+TEST_F(KickMessageBuilderTest, TimeoutMessageDurationFromExpiresAt)
+{
+    // duration is 0 but expires_at is 5 minutes out; the builder must derive
+    // the printed duration from the expiry timestamp instead of rendering an
+    // empty/zero duration.
+    const auto now = QDateTime::fromMSecsSinceEpoch(1700000000000LL, Qt::UTC);
+    const auto expiresAt = now.addSecs(300);
+
+    const auto jsonText = QStringLiteral(R"({
+        "user": { "username": "BadUser" },
+        "banned_by": { "username": "ModGuy" },
+        "permanent": false,
+        "duration": 0,
+        "expires_at": "%1"
+    })")
+                              .arg(expiresAt.toString(Qt::ISODate))
+                              .toStdString();
+    auto json = parse(jsonText);
+    BoostJsonObject data(json.as_object());
+
+    auto message =
+        KickMessageBuilder::makeTimeoutMessage(this->channel.get(), now, data);
+
+    ASSERT_NE(message, nullptr);
+    EXPECT_TRUE(message->messageText.contains("5m"));
+}
+
+TEST_F(KickMessageBuilderTest, TimeoutMessageInvalidExpiresAtFallsBackToZero)
+{
+    // duration is 0 and expires_at fails to parse. KickMessageBuilder.cpp
+    // falls back to a bare 0-second duration rather than propagating garbage
+    // from QDateTime::fromString() -- formatTime(0) renders as an empty
+    // string, so "for" ends up with nothing behind it but the trailing ".".
+    auto json = parse(R"({
+        "user": { "username": "BadUser" },
+        "banned_by": { "username": "ModGuy" },
+        "permanent": false,
+        "duration": 0,
+        "expires_at": "not-a-real-timestamp"
+    })");
+    BoostJsonObject data(json.as_object());
+
+    auto message = KickMessageBuilder::makeTimeoutMessage(
+        this->channel.get(), QDateTime::currentDateTime(), data);
+
+    ASSERT_NE(message, nullptr);
+    EXPECT_TRUE(message->messageText.contains("for ."));
 }
 
 // ---------- makeGiftedSubscriptionMessage: multi-recipient gift ----------
@@ -319,9 +401,22 @@ TEST_F(KickMessageBuilderTest, KicksGiftedMessage)
     EXPECT_TRUE(message->flags.has(MessageFlag::CheerMessage));
     EXPECT_EQ(message->kickGiftKicks, 100U);
     EXPECT_EQ(message->loginName, "Tipper");
-    // The gift name is rendered as its own bold TextElement rather than folded
-    // into messageText, so assert on the element plus the kicks summary text.
-    EXPECT_GE(countElements(*message, TextElement::TYPE), 1U);
     EXPECT_TRUE(message->messageText.contains("gifted"));
     EXPECT_TRUE(message->messageText.contains("100 Kicks"));
+
+    // The gift name is rendered as its own bold TextElement rather than
+    // folded into messageText, and appendOrEmplaceText() then appends the
+    // kicks summary directly onto that same element -- so a bare element
+    // count is trivially satisfied by unrelated TextElements ("gifted"). Find
+    // the element that actually holds the gift name and check its content.
+    bool foundGiftName = false;
+    for (const auto &text : textElementTexts(*message))
+    {
+        if (text.contains("Rose"))
+        {
+            foundGiftName = true;
+            EXPECT_TRUE(text.contains("100 Kicks"));
+        }
+    }
+    EXPECT_TRUE(foundGiftName);
 }

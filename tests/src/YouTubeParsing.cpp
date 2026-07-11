@@ -82,6 +82,42 @@ TEST(YouTubeParsing, extractIsLiveFromNextResponseReadsViewCountRenderer)
     EXPECT_FALSE(extractIsLiveFromNextResponse(QJsonObject{}));
 }
 
+TEST(YouTubeParsing, extractIsLiveFromNextResponseRejectsWaitingRooms)
+{
+    // Real shape captured from an ended stream that reverted to a stale
+    // waiting room (videoId 0tBLmmIWrTQ): the view-count renderer still says
+    // "isLive": true, but the counter reads "1 waiting" and the dateText is
+    // "Scheduled for ...". Trusting isLive alone latched the channel live.
+    const auto waitingRoom = parseObject(R"({
+        "contents": {"twoColumnWatchNextResults": {"results": {"results": {
+            "contents": [{"videoPrimaryInfoRenderer": {
+                "dateText": {"simpleText": "Scheduled for Jun 6, 2026"},
+                "viewCount": {"videoViewCountRenderer": {
+                    "viewCount": {"runs": [{"text": "1 waiting"}]},
+                    "isLive": true,
+                    "originalViewCount": "1"}}}}]
+        }}}}
+    })");
+    EXPECT_FALSE(extractIsLiveFromNextResponse(waitingRoom));
+
+    // The same renderer with an actively-broadcasting counter stays live.
+    const auto watchingNow = parseObject(R"({
+        "contents": {"twoColumnWatchNextResults": {"results": {"results": {
+            "contents": [{"videoPrimaryInfoRenderer": {
+                "viewCount": {"videoViewCountRenderer": {
+                    "viewCount": {"runs": [{"text": "1,234 watching now"}]},
+                    "isLive": true}}}}]
+        }}}}
+    })");
+    EXPECT_TRUE(extractIsLiveFromNextResponse(watchingNow));
+
+    // videoDetails fallback: upcoming broadcasts carry isLive true too.
+    const auto upcomingDetails = parseObject(R"({
+        "videoDetails": {"isLive": true, "isUpcoming": true}
+    })");
+    EXPECT_FALSE(extractIsLiveFromNextResponse(upcomingDetails));
+}
+
 TEST(YouTubeParsing, parseYouTubeIsoDateTimeParsesValidTimestamps)
 {
     EXPECT_TRUE(parseYouTubeIsoDateTime("2026-01-15T12:00:00Z").isValid());

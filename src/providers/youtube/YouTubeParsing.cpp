@@ -642,13 +642,42 @@ QString extractLiveChatContinuationFromJson(const QJsonValue &value)
     return {};
 }
 
+namespace {
+
+// Flattens a `{"simpleText": ...}` / `{"runs": [{"text": ...}, ...]}` text
+// value. Local minimal variant: view-count texts never carry emoji runs.
+QString flattenSimpleOrRunsText(const QJsonValue &value)
+{
+    const auto object = value.toObject();
+    if (object.contains("simpleText"))
+    {
+        return object["simpleText"].toString();
+    }
+
+    QString text;
+    for (const auto &runValue : object["runs"].toArray())
+    {
+        text.append(runValue.toObject()["text"].toString());
+    }
+    return text;
+}
+
+}  // namespace
+
 // Walks the InnerTube /next response for a definitive "live now" signal.
 // The watch-page microformat path used by /player isn't present here, so
 // we look for the videoPrimaryInfoRenderer's view-count block, which carries
-// `isLive: true` exactly when the broadcast is live. As a backup we also
-// honour `videoDetails.isLiveContent` + `videoDetails.isLive` if YouTube
-// changes the renderer shape. Conservative: returns false on any structure
-// we don't recognise so we don't false-positive recently-ended streams.
+// `isLive: true` when the broadcast is live. Crucially, YouTube ALSO sets
+// `isLive: true` on that renderer for waiting rooms (scheduled/upcoming
+// streams, including ended streams that revert to a stale waiting room) --
+// and waiting-room chat serves get_live_chat continuations, so trusting the
+// flag alone latches an ended channel "live" with a phantom "1 waiting"
+// viewer count. Waiting rooms are distinguished by their counter text
+// ("N waiting" instead of "N watching now") and a "Scheduled for ..."
+// dateText; the InnerTube context pins hl=en so those strings are stable.
+// As a backup we also honour `videoDetails.isLive` (minus `isUpcoming`) if
+// YouTube changes the renderer shape. Conservative: returns false on any
+// structure we don't recognise so we don't false-positive ended streams.
 bool extractIsLiveFromNextResponse(const QJsonObject &json)
 {
     const auto contents = json["contents"]
@@ -669,11 +698,30 @@ bool extractIsLiveFromNextResponse(const QJsonObject &json)
         const auto renderer = viewCount["videoViewCountRenderer"].toObject();
         if (renderer.contains("isLive"))
         {
-            return renderer["isLive"].toBool(false);
+            if (!renderer["isLive"].toBool(false))
+            {
+                return false;
+            }
+
+            const auto countText =
+                flattenSimpleOrRunsText(renderer["viewCount"]);
+            if (countText.contains(QStringLiteral("waiting"),
+                                   Qt::CaseInsensitive))
+            {
+                return false;
+            }
+
+            const auto dateText = flattenSimpleOrRunsText(primary["dateText"]);
+            return !dateText.startsWith(QStringLiteral("Scheduled for"),
+                                        Qt::CaseInsensitive);
         }
     }
 
     const auto videoDetails = json["videoDetails"].toObject();
+    if (videoDetails["isUpcoming"].toBool(false))
+    {
+        return false;
+    }
     if (videoDetails.contains("isLive"))
     {
         return videoDetails["isLive"].toBool(false);

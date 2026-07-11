@@ -323,13 +323,37 @@ void Toasts::sendWindowsNotification(const QString &channelName,
 
         QString sanitizedTitle;
         sanitizedTitle.reserve(std::min<qsizetype>(channelTitle.size(), 180));
-        for (const auto &ch : channelTitle)
+        for (qsizetype i = 0; i < channelTitle.size(); i++)
         {
             if (sanitizedTitle.size() >= 180)
             {
                 break;
             }
-            if (ch.isNull() || ch.isNonCharacter() || ch.isLowSurrogate() ||
+            const QChar ch = channelTitle.at(i);
+            if (ch.isHighSurrogate() && i + 1 < channelTitle.size() &&
+                channelTitle.at(i + 1).isLowSurrogate())
+            {
+                const QChar low = channelTitle.at(i + 1);
+                // Keep valid surrogate pairs (emoji etc.) intact; never
+                // split one across the truncation limit.
+                if (sanitizedTitle.size() + 2 > 180)
+                {
+                    break;
+                }
+                if (QChar::isNonCharacter(QChar::surrogateToUcs4(ch, low)))
+                {
+                    sanitizedTitle.append(u' ');
+                }
+                else
+                {
+                    sanitizedTitle.append(ch);
+                    sanitizedTitle.append(low);
+                }
+                i++;
+                continue;
+            }
+            // Any surrogate reaching this point is unpaired.
+            if (ch.isNull() || ch.isNonCharacter() || ch.isSurrogate() ||
                 ch.category() == QChar::Other_Control)
             {
                 sanitizedTitle.append(u' ');

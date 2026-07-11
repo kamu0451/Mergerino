@@ -784,9 +784,10 @@ SelectChannelDialog::SelectChannelDialog(bool showSpecialPage,
         createCheckboxRow(ui.slowerChat, slowerChatTooltip, this));
 
     ui.slowerChatRate = new QDoubleSpinBox();
-    ui.slowerChatRate->setDecimals(0);
-    ui.slowerChatRate->setRange(1.0, MAX_SLOWER_CHAT_MESSAGES_PER_SECOND);
-    ui.slowerChatRate->setSingleStep(1.0);
+    ui.slowerChatRate->setDecimals(2);
+    ui.slowerChatRate->setRange(MIN_SLOWER_CHAT_MESSAGES_PER_SECOND,
+                                MAX_SLOWER_CHAT_MESSAGES_PER_SECOND);
+    ui.slowerChatRate->setSingleStep(0.25);
     ui.slowerChatRate->setButtonSymbols(QAbstractSpinBox::NoButtons);
     ui.slowerChatRate->setFixedWidth(32);
     const auto slowerChatRateTooltip = QStringLiteral(

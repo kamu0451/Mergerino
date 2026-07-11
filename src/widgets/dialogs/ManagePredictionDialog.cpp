@@ -6,6 +6,7 @@
 
 #include "Application.hpp"
 #include "common/Channel.hpp"
+#include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
@@ -16,10 +17,8 @@
 #include "widgets/Window.hpp"
 #include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 
-#include <QCoreApplication>
 #include <QDateTime>
 #include <QDesktopServices>
-#include <QDir>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -119,19 +118,14 @@ QString badgeResource(size_t index, int outcomeCount)
 
 QPixmap loadBadgePixmap(size_t index, int outcomeCount)
 {
-    QPixmap badge(badgeResource(index, outcomeCount));
-    if (!badge.isNull())
+    const auto resource = badgeResource(index, outcomeCount);
+    QPixmap badge(resource);
+    if (badge.isNull())
     {
-        return badge;
+        qCWarning(chatterinoWidget)
+            << "Failed to load prediction badge resource:" << resource;
     }
 
-    const auto fileName = badgeFileName(index, outcomeCount);
-    const QDir appDir(QCoreApplication::applicationDirPath());
-    const QString sourcePath = QDir::cleanPath(appDir.filePath(
-        QStringLiteral("../../MergerinoSource/resources/predictions/%1").arg(
-            fileName)));
-
-    badge.load(sourcePath);
     return badge;
 }
 
@@ -1053,8 +1047,12 @@ void ManagePredictionDialog::updateTimerUi()
                                          : open ? QStringLiteral("Submissions Open")
                                                 : QStringLiteral(
                                                       "Submissions Closed"));
-    this->statusLabel_->setProperty("chooseMode", choosing);
-    repolish(this->statusLabel_);
+    if (this->lastChooseModeState_ != choosing)
+    {
+        this->lastChooseModeState_ = choosing;
+        this->statusLabel_->setProperty("chooseMode", choosing);
+        repolish(this->statusLabel_);
+    }
     this->descriptionLabel_->setVisible(choosing);
     this->timerBar_->setProgress(this->timerProgress());
     this->timerBar_->setVisible(open && !choosing);
@@ -1069,6 +1067,14 @@ void ManagePredictionDialog::updateTimerUi()
         this->lastSubmissionsOpen_ = open;
         this->updateDialogSize();
     }
+
+    // Nothing left to animate once submissions are closed - the remaining
+    // state changes (locking, choosing an outcome, resolving) all call
+    // updateTimerUi() directly from their network callbacks.
+    if (!open && this->timer_ != nullptr && this->timer_->isActive())
+    {
+        this->timer_->stop();
+    }
 }
 
 void ManagePredictionDialog::updateActionButton()
@@ -1078,8 +1084,12 @@ void ManagePredictionDialog::updateActionButton()
     this->summaryButton_->setVisible(!choosing);
     this->deleteButton_->setVisible(!choosing);
     this->backButton_->setVisible(choosing);
-    this->actionButton_->setProperty("primary", false);
-    repolish(this->actionButton_);
+    if (this->lastActionButtonPrimaryState_ != false)
+    {
+        this->lastActionButtonPrimaryState_ = false;
+        this->actionButton_->setProperty("primary", false);
+        repolish(this->actionButton_);
+    }
 
     if (this->submitting_)
     {

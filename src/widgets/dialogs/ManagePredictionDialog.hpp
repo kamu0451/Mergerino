@@ -11,6 +11,7 @@
 #include <QString>
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 class QLabel;
@@ -86,6 +87,8 @@ private:
     bool submitting_ = false;
     bool lastSubmissionsOpen_ = false;
     bool choosingOutcome_ = false;
+    std::optional<bool> lastChooseModeState_;
+    std::optional<bool> lastActionButtonPrimaryState_;
 };
 
 }  // namespace chatterino

@@ -1198,7 +1198,7 @@ void Notebook::showFolderContextMenu(const QString &folderId, QPoint globalPos)
                        this->toggleFolderExpanded(folderId);
     });
     menu.addSeparator();
-    menu.addAction(QStringLiteral("Delete tab"), [this, folderId] {
+    menu.addAction(QStringLiteral("Delete folder"), [this, folderId] {
         this->removeFolder(folderId);
     });
     menu.exec(globalPos);

@@ -447,31 +447,28 @@ void openUrlInBrowser(const QUrl &url)
     }
 }
 
-QColor viewerCountColor()
-{
-    return QColor(232, 232, 232);
-}
-
-QColor viewerCountIconColor()
-{
-    return viewerCountColor();
-}
-
 class ViewerCountIcon final : public BaseWidget
 {
 public:
     explicit ViewerCountIcon(BaseWidget *parent)
         : BaseWidget(parent)
     {
+        this->updateIconColor();
     }
 
 protected:
+    void themeChangedEvent() override
+    {
+        BaseWidget::themeChangedEvent();
+        this->updateIconColor();
+    }
+
     void paintEvent(QPaintEvent *) override
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
 
-        auto pen = QPen(viewerCountIconColor());
+        auto pen = QPen(this->color_);
         pen.setWidthF(1.9 * this->scale());
         pen.setCapStyle(Qt::RoundCap);
         pen.setJoinStyle(Qt::RoundJoin);
@@ -496,6 +493,16 @@ protected:
                           centerX + size * 0.31, top + size * 0.80);
         painter.drawPath(shoulders);
     }
+
+private:
+    void updateIconColor()
+    {
+        auto color = this->theme->splits.header.text;
+        color.setAlpha(this->theme->isLightTheme() ? 120 : 150);
+        this->color_ = color;
+    }
+
+    QColor color_;
 };
 
 struct ViewerCountEntry {
@@ -2502,7 +2509,9 @@ void SplitHeader::themeChangedEvent()
         palette.setColor(QPalette::WindowText, this->theme->splits.header.text);
     }
     this->titleLabel_->setPalette(palette);
-    palette.setColor(QPalette::WindowText, viewerCountColor());
+    auto viewerCountColor = this->theme->splits.header.text;
+    viewerCountColor.setAlpha(this->theme->isLightTheme() ? 120 : 150);
+    palette.setColor(QPalette::WindowText, viewerCountColor);
     this->viewerCountLabel_->setPalette(palette);
 
     auto queuedPalette = QPalette();

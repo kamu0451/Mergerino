@@ -68,7 +68,6 @@ public:
         bool active = false;
     };
 
-    static std::vector<BadgeItem> makeMockBadges();
     static std::vector<BadgeItem> parseEventBadges(const QByteArray &data,
                                                    bool activeOnly = true,
                                                    bool upcomingOnly = false);

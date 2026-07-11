@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Contributors to Chatterino <https://chatterino.com>
+//
+// SPDX-License-Identifier: MIT
+
 #include "widgets/dialogs/YouTubeLoginPage.hpp"
 
 #include "Application.hpp"
@@ -49,6 +53,9 @@ constexpr qsizetype PKCE_VERIFIER_BYTES = 32;
 constexpr qsizetype STATE_BYTES = 32;
 constexpr int AUTHORIZATION_TIMEOUT_MS = 5 * 60 * 1000;
 constexpr int NETWORK_STEP_TIMEOUT_MS = 30 * 1000;
+// Gives the browser tab time to poll /status and show the error before the
+// AuthSession (and its loopback HTTP server) is torn down.
+constexpr int ERROR_CLEANUP_DELAY_MS = 30 * 1000;
 
 QByteArray generateRandomBytes(qsizetype size)
 {
@@ -308,6 +315,7 @@ public:
         this->pendingTimer_.setSingleShot(true);
         QObject::connect(&this->pendingTimer_, &QTimer::timeout, this, [this] {
             this->setBrowserState(u"error"_s, this->pendingTimeoutMessage_);
+            this->scheduleErrorCleanup();
         });
     }
 
@@ -385,6 +393,7 @@ private:
                     : QString(u"Google returned an authorization error: " %
                               description);
             this->setBrowserState(u"error"_s, message);
+            this->scheduleErrorCleanup();
             return htmlResponse(renderCallbackPage(), 400);
         }
 
@@ -393,6 +402,7 @@ private:
             const auto message =
                 u"Google did not return an authorization code."_s;
             this->setBrowserState(u"error"_s, message);
+            this->scheduleErrorCleanup();
             return htmlResponse(renderCallbackPage(), 400);
         }
 
@@ -401,6 +411,7 @@ private:
             const auto message =
                 u"Google returned an invalid login state. Start again."_s;
             this->setBrowserState(u"error"_s, message);
+            this->scheduleErrorCleanup();
             return htmlResponse(renderCallbackPage(), 400);
         }
 
@@ -456,6 +467,7 @@ private:
                 qCWarning(chatterinoYouTube)
                     << "Getting YouTube token failed" << error;
                 this->setBrowserState(u"error"_s, error);
+                this->scheduleErrorCleanup();
             })
             .onSuccess([this](const NetworkResult &result) {
                 this->setBrowserState(
@@ -487,6 +499,7 @@ private:
                 << error << "hasAccessToken:" << !accessToken.isEmpty()
                 << "hasRefreshToken:" << !refreshToken.isEmpty();
             this->setBrowserState(u"error"_s, error);
+            this->scheduleErrorCleanup();
             return;
         }
 
@@ -510,6 +523,7 @@ private:
                 qCWarning(chatterinoYouTube)
                     << "Getting YouTube channel failed" << error;
                 this->setBrowserState(u"error"_s, error);
+                this->scheduleErrorCleanup();
             })
             .onSuccess([this, accessToken, refreshToken,
                         expiresAt](const NetworkResult &result) {
@@ -522,6 +536,7 @@ private:
                         u"YouTube did not return the authenticated channel."_s;
                     qCWarning(chatterinoYouTube) << error << result.getData();
                     this->setBrowserState(u"error"_s, error);
+                    this->scheduleErrorCleanup();
                     return;
                 }
 
@@ -539,6 +554,7 @@ private:
                         u"YouTube returned incomplete channel information."_s;
                     qCWarning(chatterinoYouTube) << error << channel;
                     this->setBrowserState(u"error"_s, error);
+                    this->scheduleErrorCleanup();
                     return;
                 }
 
@@ -584,6 +600,15 @@ private:
     {
         this->pendingTimer_.stop();
         this->pendingTimeoutMessage_.clear();
+    }
+
+    // Every terminal error branch must call this so the session (and its
+    // loopback HTTP server on 127.0.0.1:38277) doesn't leak until the next
+    // login attempt or app exit.
+    void scheduleErrorCleanup()
+    {
+        QTimer::singleShot(ERROR_CLEANUP_DELAY_MS, this,
+                          &QObject::deleteLater);
     }
 
     void showError(const QString &message)

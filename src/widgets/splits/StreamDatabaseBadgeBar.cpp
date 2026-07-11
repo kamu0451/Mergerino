@@ -1351,7 +1351,6 @@ StreamDatabaseEventsPoller &streamDatabaseEventsPoller()
 
 StreamDatabaseBadgeBar::StreamDatabaseBadgeBar(QWidget *parent)
     : BaseWidget(parent)
-    , badges_(StreamDatabaseBadgeBar::makeMockBadges())
     , network_(this)
     , tickerSlideAnimation_(this)
     , detailAnimation_(this)
@@ -1426,111 +1425,6 @@ StreamDatabaseBadgeBar::StreamDatabaseBadgeBar(QWidget *parent)
 StreamDatabaseBadgeBar::~StreamDatabaseBadgeBar()
 {
     streamDatabaseEventsPoller().unregisterBar(this);
-}
-
-std::vector<StreamDatabaseBadgeBar::BadgeItem>
-    StreamDatabaseBadgeBar::makeMockBadges()
-{
-    return {
-        {
-            QStringLiteral("QSMP2"),
-            QStringLiteral("QSMP Season 2"),
-            QStringLiteral("ACTIVE"),
-            QStringLiteral("ENDS JUL 1, 07:59 UTC"),
-            QStringLiteral(
-                "Watch 60 minutes of Quackity, QSMP, or QuackityToo while "
-                "they are live in the QSMP category."),
-            QStringLiteral("#22C55E"),
-            QStringLiteral(
-                "https://static-cdn.jtvnw.net/badges/v1/"
-                "2fa68fb9-fcdd-4795-bfab-f408e10efaef/2"),
-            QStringLiteral(
-                "https://www.streamdatabase.com/twitch/global-badges/qsmp2/1"),
-            QStringLiteral("qsmp2"),
-            QStringLiteral("1"),
-            {
-                {QStringLiteral("Quackity"), QStringLiteral("quackity")},
-                {QStringLiteral("QSMP"), QStringLiteral("qsmp")},
-                {QStringLiteral("QuackityToo"), QStringLiteral("quackitytoo")},
-            },
-        },
-        {
-            QStringLiteral("BrawlhallAwoo"),
-            QStringLiteral("Brawlhalla Fest 2026"),
-            QStringLiteral("ACTIVE"),
-            QStringLiteral("ENDS JUN 16, 15:58 UTC"),
-            QStringLiteral(
-                "Subscribe once or gift one subscription to an eligible "
-                "Brawlhalla stream."),
-            QStringLiteral("#3BA7FF"),
-            QStringLiteral(
-                "https://static-cdn.jtvnw.net/badges/v1/"
-                "a3e4f5e7-a6c9-4458-b8c4-f83a0f725566/2"),
-            QStringLiteral(
-                "https://www.streamdatabase.com/twitch/global-badges/"
-                "brawlhallawoo/1"),
-            QStringLiteral("brawlhallawoo"),
-            QStringLiteral("1"),
-            {},
-        },
-        {
-            QStringLiteral("007 Gun Barrel"),
-            QStringLiteral("007 First Light Launch"),
-            QStringLiteral("ACTIVE"),
-            QStringLiteral("ENDS JUN 23, 13:59 UTC"),
-            QStringLiteral(
-                "Subscribe once or gift one subscription to an eligible 007 "
-                "First Light stream."),
-            QStringLiteral("#B7BEC9"),
-            QStringLiteral(
-                "https://static-cdn.jtvnw.net/badges/v1/"
-                "6ae7ce40-99e6-4d83-8487-f8b990bf5f32/2"),
-            QStringLiteral(
-                "https://www.streamdatabase.com/twitch/global-badges/"
-                "007-gun-barrel/1"),
-            QStringLiteral("007-gun-barrel"),
-            QStringLiteral("1"),
-            {},
-        },
-        {
-            QStringLiteral("Mod Founder"),
-            QStringLiteral("Mod Appreciation Day"),
-            QStringLiteral("ACTIVE"),
-            QStringLiteral("ENDS JUN 30"),
-            QStringLiteral(
-                "Apply and get accepted into the Twitch Moderators Club "
-                "before the Mod Appreciation Day 2026 cutoff."),
-            QStringLiteral("#7CFC00"),
-            QStringLiteral(
-                "https://static-cdn.jtvnw.net/badges/v1/"
-                "b1d1da41-5616-42a5-b1fa-132753d29f8a/2"),
-            QStringLiteral(
-                "https://www.streamdatabase.com/twitch/global-badges/"
-                "mod-founder/1"),
-            QStringLiteral("mod-founder"),
-            QStringLiteral("1"),
-            {},
-        },
-        {
-            QStringLiteral("RuneScape Skull"),
-            QStringLiteral("Deadman All Stars"),
-            QStringLiteral("ACTIVE"),
-            QStringLiteral("ENDS JUN 21, 00:59 UTC"),
-            QStringLiteral(
-                "Subscribe once or gift one subscription to an eligible Old "
-                "School RuneScape Deadman All Stars creator."),
-            QStringLiteral("#C9AD83"),
-            QStringLiteral(
-                "https://static-cdn.jtvnw.net/badges/v1/"
-                "7f382386-e3ce-4c3d-8c23-464851415321/2"),
-            QStringLiteral(
-                "https://www.streamdatabase.com/twitch/global-badges/"
-                "runescape-skull/1"),
-            QStringLiteral("runescape-skull"),
-            QStringLiteral("1"),
-            {},
-        },
-    };
 }
 
 std::vector<StreamDatabaseBadgeBar::BadgeItem>

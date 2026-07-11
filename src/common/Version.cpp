@@ -41,7 +41,9 @@ Version::Version()
     this->generateExtraString();
 
 #ifdef Q_OS_WIN
-    // keep in sync with .CI/chatterino-installer.iss
+    // Consumed by WinToast (Toasts.cpp, for notification grouping) and
+    // main.cpp's SetCurrentProcessExplicitAppUserModelID call - keep both in
+    // sync if this ever changes.
     this->appUserModelID_ = L"Mergerino.Mergerino";
 #endif
 }

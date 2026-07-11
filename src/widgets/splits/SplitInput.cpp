@@ -543,13 +543,6 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
         this->updateCompletionPopup();
     });
 
-    auto *pollPredictionButtonTimer = new QTimer(this);
-    pollPredictionButtonTimer->setInterval(1000);
-    QObject::connect(pollPredictionButtonTimer, &QTimer::timeout, this, [this] {
-        this->updatePollPredictionButtons();
-    });
-    pollPredictionButtonTimer->start();
-
     getSettings()->enableSpellChecking.connect(
         [this] {
             this->checkSpellingChanged();
@@ -1215,6 +1208,34 @@ void SplitInput::updatePollPredictionButtons()
         return;
     }
 
+    const auto channel = this->split_->getChannel();
+    const auto twitchChannel = twitchChannelForPollPrediction(channel);
+
+    // The poll/prediction bar's contents can change without emitting a
+    // signal (e.g. a countdown), so we poll it on a timer -- but only while
+    // this split is actually visible and eligible, instead of forever.
+    const bool timerEligible = !this->isHidden() && twitchChannel != nullptr;
+    if (timerEligible)
+    {
+        if (this->pollPredictionButtonTimer_ == nullptr)
+        {
+            this->pollPredictionButtonTimer_ = new QTimer(this);
+            this->pollPredictionButtonTimer_->setInterval(1000);
+            QObject::connect(this->pollPredictionButtonTimer_,
+                             &QTimer::timeout, this, [this] {
+                                 this->updatePollPredictionButtons();
+                             });
+        }
+        if (!this->pollPredictionButtonTimer_->isActive())
+        {
+            this->pollPredictionButtonTimer_->start();
+        }
+    }
+    else if (this->pollPredictionButtonTimer_ != nullptr)
+    {
+        this->pollPredictionButtonTimer_->stop();
+    }
+
     auto *pollPredictionBar = this->split_->twitchPollsAndPredictionsBar_;
     if (pollPredictionBar == nullptr)
     {
@@ -1225,8 +1246,6 @@ void SplitInput::updatePollPredictionButtons()
         return;
     }
 
-    const auto channel = this->split_->getChannel();
-    const auto twitchChannel = twitchChannelForPollPrediction(channel);
     const bool sendingToTwitch =
         containsPlatform(this->selectedSendPlatforms(),
                          MessagePlatform::AnyOrTwitch);
@@ -2672,6 +2691,7 @@ void SplitInput::hide()
     this->hidden = true;
     this->setMaximumHeight(0);
     this->updateGeometry();
+    this->updatePollPredictionButtons();
 }
 
 void SplitInput::show()
@@ -2684,6 +2704,7 @@ void SplitInput::show()
     this->hidden = false;
     this->setMaximumHeight(this->scaledMaxHeight());
     this->updateGeometry();
+    this->updatePollPredictionButtons();
 }
 
 bool SplitInput::isHidden() const

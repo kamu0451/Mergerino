@@ -4480,7 +4480,8 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
     const bool canModerateMessage =
         message->platform == MessagePlatform::YouTube
             ? canModerateYouTube
-            : moderationChannel && moderationChannel->hasModRights();
+            : message->platform != MessagePlatform::TikTok &&
+                  moderationChannel && moderationChannel->hasModRights();
 
     if (!message->id.isEmpty() && canModerateMessage)
     {
@@ -4521,7 +4522,7 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
                             kickChannel->deleteMessage(id);
                         }
                     }
-                    else
+                    else if (platform == MessagePlatform::AnyOrTwitch)
                     {
                         auto *mergedTwitchChannel =
                             dynamic_cast<TwitchChannel *>(
@@ -4535,6 +4536,9 @@ void ChannelView::addMessageContextMenuItems(QMenu *menu,
                                         .get());
                         }
                     }
+                    // TikTok has no delete API; the "Delete message" action
+                    // is not offered for TikTok messages (see
+                    // canModerateMessage above).
                 }
             });
     }
@@ -4824,7 +4828,8 @@ void ChannelView::showUserInfoPopup(const QString &userName,
         return;
     }
 
-    auto *userPopup = new UserInfoPopup(false, this->split_);
+    auto *userPopup =
+        new UserInfoPopup(getSettings()->autoCloseUserPopup, this->split_);
 
     auto openingChannel = this->hasSourceChannel() ? this->sourceChannel_
                                                    : this->underlyingChannel_;

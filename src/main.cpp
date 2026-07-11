@@ -110,7 +110,10 @@ void fileLogMessageHandler(QtMsgType type, const QMessageLogContext &ctx,
     // Roll over before this write would exceed the cap. We keep a single ".1"
     // backup: flush+close the current file, replace any existing "<path>.1"
     // with it via rename, then open a fresh truncated "<path>" as the new
-    // sink. On reopen failure we stop file logging (g_logFile = nullptr)
+    // sink. If the rename fails (e.g. the backup is held open elsewhere), the
+    // original file is left in place, so reopen it in Append mode instead of
+    // Truncate - we'd rather temporarily exceed the size cap than destroy the
+    // log. On reopen failure we stop file logging (g_logFile = nullptr)
     // rather than crash; we must NOT emit a qC* log here or we would recurse
     // straight back into this handler.
     if (!g_logFilePath.isEmpty() &&
@@ -124,11 +127,15 @@ void fileLogMessageHandler(QtMsgType type, const QMessageLogContext &ctx,
 
         const QString backupPath = g_logFilePath + QStringLiteral(".1");
         QFile::remove(backupPath);
-        QFile::rename(g_logFilePath, backupPath);
+        const bool renamed = QFile::rename(g_logFilePath, backupPath);
 
         auto *rolled = new QFile(g_logFilePath);
-        if (rolled->open(QIODevice::WriteOnly | QIODevice::Truncate |
-                         QIODevice::Text))
+        const QIODevice::OpenMode openMode =
+            renamed ? (QIODevice::WriteOnly | QIODevice::Truncate |
+                      QIODevice::Text)
+                    : (QIODevice::WriteOnly | QIODevice::Append |
+                      QIODevice::Text);
+        if (rolled->open(openMode))
         {
             g_logFile = rolled;
         }

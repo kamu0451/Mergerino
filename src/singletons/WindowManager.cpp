@@ -256,6 +256,7 @@ WindowManager::WindowManager(const Args &appArgs_, const Paths &paths,
     this->forceLayoutChannelViewsListener.add(settings.hideChatBotMessages);
     this->forceLayoutChannelViewsListener.add(settings.hideCommandMessages);
     this->forceLayoutChannelViewsListener.add(settings.hideEmoteOnlyMessages);
+    this->forceLayoutChannelViewsListener.add(settings.hideDeletionActions);
     this->forceLayoutChannelViewsListener.add(
         settings.blockedUsers.delayedItemsChanged);
     this->forceLayoutChannelViewsListener.add(

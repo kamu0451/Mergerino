@@ -305,10 +305,10 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
                                                    slowerChatTooltip, this));
 
         this->ui_.slowerChatRate = new QDoubleSpinBox();
-        this->ui_.slowerChatRate->setDecimals(0);
-        this->ui_.slowerChatRate->setRange(1.0,
+        this->ui_.slowerChatRate->setDecimals(2);
+        this->ui_.slowerChatRate->setRange(MIN_SLOWER_CHAT_MESSAGES_PER_SECOND,
                                            MAX_SLOWER_CHAT_MESSAGES_PER_SECOND);
-        this->ui_.slowerChatRate->setSingleStep(1.0);
+        this->ui_.slowerChatRate->setSingleStep(0.25);
         this->ui_.slowerChatRate->setButtonSymbols(
             QAbstractSpinBox::NoButtons);
         this->ui_.slowerChatRate->setFixedWidth(32);

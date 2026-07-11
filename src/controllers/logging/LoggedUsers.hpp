@@ -30,7 +30,16 @@ inline QString normalizeLoggedUserName(const QString &userName)
     static const QRegularExpression unsafePathChars(
         QStringLiteral(R"([\\/:*?"<>|\x00-\x1f])"));
     normalized.remove(unsafePathChars);
-    return normalized.trimmed();
+    normalized = normalized.trimmed();
+    // Windows resolves "." and ".." as path segments and silently drops
+    // trailing dots from file names, so dot-only or dot-terminated names
+    // would remap the per-user log path; treat them as invalid. This also
+    // covers names consisting solely of dots.
+    if (normalized.endsWith(u'.'))
+    {
+        return {};
+    }
+    return normalized;
 }
 
 inline std::vector<ChannelLog> normalizeLoggedUsers(

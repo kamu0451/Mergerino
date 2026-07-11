@@ -57,6 +57,7 @@ private:
 
     // Keeps cached values of logging settings for the message ingestion path.
     std::unordered_set<ChannelName> onlyLogListedChannels_;
+    std::unordered_set<QString> loggedUsers_;
     pajlada::Signals::SignalHolder settingConnections_;
 
     void addMessageToChannel(const QString &channelName, MessagePtr message,

@@ -39,6 +39,29 @@ Logging::Logging(Settings &settings)
         [this, refreshLoggedChannels]() {
             refreshLoggedChannels();
         });
+
+    auto refreshLoggedUsers = [this, &settings] {
+        std::lock_guard lock(this->loggingChannelsMutex_);
+        this->loggedUsers_.clear();
+
+        for (const auto &loggedUser : *settings.loggedUsers.readOnly())
+        {
+            const auto normalized =
+                logging::normalizeLoggedUserName(loggedUser.channelName());
+            if (!normalized.isEmpty())
+            {
+                this->loggedUsers_.insert(normalized);
+            }
+        }
+    };
+
+    refreshLoggedUsers();
+
+    this->settingConnections_.managedConnect(
+        settings.loggedUsers.delayedItemsChanged,
+        [this, refreshLoggedUsers]() {
+            refreshLoggedUsers();
+        });
 }
 
 void Logging::addMessage(const QString &channelName, MessagePtr message,
@@ -55,11 +78,17 @@ void Logging::addMessage(const QString &channelName, MessagePtr message,
     }
 
     const auto lowerChannelName = channelName.toLower();
-    const auto lowerUserName =
-        logging::normalizeLoggedUserName(message->loginName);
-    const bool logUser = logging::isLoggedUser(lowerUserName);
 
     std::lock_guard lock(this->loggingChannelsMutex_);
+
+    // Normalizing runs a regex per message; skip it while no users are logged.
+    QString lowerUserName;
+    if (!this->loggedUsers_.empty())
+    {
+        lowerUserName = logging::normalizeLoggedUserName(message->loginName);
+    }
+    const bool logUser = !lowerUserName.isEmpty() &&
+                         this->loggedUsers_.contains(lowerUserName);
 
     const bool logChannel = !getSettings()->onlyLogListedChannels ||
                             this->onlyLogListedChannels_.contains(

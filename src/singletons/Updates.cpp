@@ -9,6 +9,7 @@
 #include "common/QLogging.hpp"
 #include "common/Version.hpp"
 #include "singletons/Paths.hpp"
+#include "singletons/Settings.hpp"
 #include "util/CombinePath.hpp"
 #include "util/PostToThread.hpp"
 
@@ -223,6 +224,13 @@ void Updates::installUpdates()
                 this->setStatus_(RunUpdaterFailed);
                 return;
             }
+
+            // Record which version we're handing off to so the restarted
+            // process can show post-update patch notes. Force a synchronous
+            // save - we're about to exit and the updater will overwrite this
+            // binary, so there is no later opportunity to flush settings.
+            getSettings()->pendingPostUpdateVersion = this->onlineVersion_;
+            getSettings()->requestSave();
 
             QApplication::exit(0);
         })

@@ -6,6 +6,7 @@
 
 #include "Application.hpp"
 #include "common/Channel.hpp"
+#include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
@@ -19,9 +20,7 @@
 #include <QAbstractItemModel>
 #include <QAbstractItemView>
 #include <QComboBox>
-#include <QCoreApplication>
 #include <QCursor>
-#include <QDir>
 #include <QEasingCurve>
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
@@ -175,19 +174,14 @@ QString badgeResource(size_t index, int outcomeCount)
 
 QPixmap loadBadgePixmap(size_t index, int outcomeCount)
 {
-    QPixmap badge(badgeResource(index, outcomeCount));
-    if (!badge.isNull())
+    const auto resource = badgeResource(index, outcomeCount);
+    QPixmap badge(resource);
+    if (badge.isNull())
     {
-        return badge;
+        qCWarning(chatterinoWidget)
+            << "Failed to load prediction badge resource:" << resource;
     }
 
-    const auto fileName = badgeFileName(index, outcomeCount);
-    const QDir appDir(QCoreApplication::applicationDirPath());
-    const QString sourcePath = QDir::cleanPath(appDir.filePath(
-        QStringLiteral("../../MergerinoSource/resources/predictions/%1").arg(
-            fileName)));
-
-    badge.load(sourcePath);
     return badge;
 }
 

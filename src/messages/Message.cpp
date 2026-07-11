@@ -447,6 +447,14 @@ QJsonObject Message::toJson() const
 
 bool Message::isEmoteOnly() const
 {
+    // A cheer's visible body is its cheermote(s) plus any emotes, so it would
+    // otherwise satisfy the emote-only check below and get hidden by "hide
+    // emote-only messages" -- but it's a paid bits message, not emote spam.
+    if (this->flags.has(MessageFlag::CheerMessage) || this->bits > 0)
+    {
+        return false;
+    }
+
     bool hasEmote = false;
     for (const auto &element : this->elements)
     {

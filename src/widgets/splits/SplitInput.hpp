@@ -29,6 +29,7 @@
 
 class QNetworkReply;
 class QCompleter;
+class QTimer;
 
 namespace chatterino {
 
@@ -267,6 +268,10 @@ protected:
     void checkSpellingChanged();
 
     InputHighlighter *inputHighlighter = nullptr;
+
+    // Lazily created; only runs while this split is visible and its channel
+    // is eligible for poll/prediction buttons (see updatePollPredictionButtons)
+    QTimer *pollPredictionButtonTimer_ = nullptr;
 
     void updateFonts();
 

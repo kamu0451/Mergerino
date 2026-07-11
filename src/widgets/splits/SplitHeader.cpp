@@ -2309,6 +2309,15 @@ void SplitHeader::updateChannelText()
 
 void SplitHeader::updateIcons()
 {
+    // During application shutdown the providers (e.g. the TwitchChannel backing
+    // a MergedChannel) are destroyed before the split widgets, so reaching into
+    // the channel here (hasModRights() -> TwitchChannel::isBroadcaster()) would
+    // be a use-after-free. Header icons are irrelevant once we're quitting.
+    if (isAppAboutToQuit())
+    {
+        return;
+    }
+
     auto channel = this->split_->getChannel();
     auto activityInactive = this->theme->splits.header.text;
     activityInactive.setAlpha(this->theme->isLightTheme() ? 120 : 150);

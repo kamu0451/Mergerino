@@ -2,6 +2,8 @@
 
 ## Unversioned
 
+- Bugfix: A YouTube channel no longer stays marked live (with a phantom "1 viewer") after the stream ends. Ended streams that revert to a scheduled waiting room were mistaken for live broadcasts because YouTube keeps their live flag set and their chat endpoint responsive; waiting rooms are now recognized and treated as offline.
+- Bugfix: Fixed a possible crash on exit when closing the window while a channel's header icons were refreshing.
 - Bugfix: Highlight sounds, window alerts, and /mentions entries from YouTube/TikTok messages no longer fire once per open tab when several merged tabs share the same stream.
 - Bugfix: YouTube moderation tools no longer disappear for the rest of the stream after a single transient network error (timeout/5xx); only a real permission failure hides them. A stream whose chat is unavailable (members-only/disabled) is retried with backoff instead of every 3 seconds.
 - Bugfix: Chat links wrapped in YouTube's redirect URLs now unwrap to their real target (the unwrap silently never worked for percent-encoded links).

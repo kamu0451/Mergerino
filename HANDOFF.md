@@ -1,78 +1,71 @@
 # Handoff
 
 ## Goal
-Ship the remediation drive: open PR #2 (feat/hide-chat-bot-messages -> main),
-deep-review it, fix everything worth fixing, merge to main, and run the
-deployed app from main.
+Post-merge hygiene + a live bug: audit the repo for private/secret content,
+scrub a leaked personal email from history, clean up branches, and fix the
+"YouTube channel stays live after the stream ends" bug.
 
 ## Completed
-- [x] **PR #2 created and merged** as `0fecf40` (history rewritten from the
-  original `446887a` to scrub a personal author email) — the whole drive (upstream
-  1.2.6->1.3.2 merge, Helix ToS rework, P0-P6 remediation; 299 files).
-- [x] **Multi-agent review of the full PR diff** (10 subsystem reviewers +
-  adversarial verification of all 65 findings): 55 confirmed, 9 refuted,
-  1 out-of-scope. Verdict data: scratchpad `done-verdicts.json` /
-  `sonnet-verdicts.json` (session temp).
-- [x] **Fix round** (4 commits, all built + ctest green before push):
-  - `a9631be` providers — Kick history stable sort / newest-own-identity /
-    badge tier / emote-map preserved on failure / recent-messages latch;
-    YouTube mod latch 401/403-only, missing-continuation backoff 3s->60s,
-    scoped viewer count, account leak, redirect `q=` FullyDecoded; merged
-    highlight dedupe across shared sources; BTTV+FFZ retry lifetime; 7TV
-    paint alignment; HelixChatterGroups deleted; Twitch logout only after
-    oauth2/validate 401.
-  - `57cd967` UI/core — autoCloseUserPopup rewired (default flipped false),
-    TikTok excluded from Twitch delete, theme viewer-count color, SplitInput
-    timer gated, mock badges removed, spinbox 0.25 min, YouTube login leak,
-    log rollover no longer truncates, cheer != emote-only, hideDeletionActions
-    relayout, logging cached set + dot-name rejection, surrogate-safe toasts,
-    SPDX headers.
-  - `9376112` CI — zip ships `kick_onboarding`; TOS-03 guard fail-open closed
-    (sentinels, recursive scan, inline-auth check; verified pass+catch locally
-    AND guard step passed on the real runner).
-  - `072c2af` tests — 663 -> 687 green; the new redirect test EXPOSED the
-    PrettyDecoded production bug (fixed in `a9631be`).
-- [x] **Deployed from main**: .dev-cycle.bat rebuilt + relaunched
-  `C:\Program Files\Mergerino\mergerino.exe` (v1.5.234, main @ merge commit).
-
-## Deliberately NOT fixed (upstream-inherited; forward to Fixlation)
-- CurrentUserBadges.hpp ~700-line dead registry (currentUserHasBadge() never
-  true); StreamDatabase intro gated on hardcoded "1.3.2" (unreachable);
-  CreatePollDialog dead channel-points icon fetch; 7TV badge refresh became a
-  no-op invalidate (upstream 1.3.2 simplification); anon Helix credential
-  fallback (TwitchAccountManager.cpp:469 — design decision, documented risk).
-
-## Test-coverage follow-ups (known, not urgent)
-- No tests: ChatterinoImport pipeline (~770 lines, destructive), StreamDatabase
-  parseEventBadges (~500 lines), UpdateDialog patch-notes parsing.
-
-## HELD FOR SIGN-OFF — local branch `review/keychain-ipc-auth` (NOT pushed)
-- `5f2b0cb` SEC-G4 (IPC queue name + session secret), `efac95c` SEC-02
-  (tokens -> QtKeychain; verified live on a real Kick account).
-- NOTE: branched pre-P3; main has moved ~30 commits since — needs a rebase
-  onto `main` and a fresh-login + YouTube round-trip test before push.
+- [x] **Privacy audit of tracked content**: plan files (`REMEDIATION-PLAN.md`,
+  `REVIEW-PLAN.md`, `review/`), scratch logs, and `.analyze_dump.py` confirmed
+  untracked; no secrets/keys/.env anywhere tracked. Removed the one personal
+  path (`C:\Users\Repe\...`) from a TikTokFrameDecoder comment.
+  `resources/kick_onboarding/client-credentials.png` shows a Kick Client ID --
+  user confirmed it is not theirs, left as-is.
+- [x] **Email scrub via history rewrite**: the PR #2 merge commit carried
+  `nappihaukka+aigit@gmail.com`. Rewrote main from the merge forward with
+  identical trees (merge is now `0fecf40`, GitHub GPG signature dropped),
+  force-pushed with lease. Old objects remain sha-addressable on GitHub until
+  GC; user should enable "Block command line pushes that expose my email".
+- [x] **Branch cleanup**: deleted `feat/hide-chat-bot-messages` (merged) and
+  `fix/crash-on-close` local+origin. Before deleting the latter, ported its
+  still-valid half to main as `3ad0e54` (shutdown guard in
+  `SplitHeader::updateIcons` -- use-after-free on quit); its RunGui half is
+  obsolete (that recovery block no longer exists on main).
+- [x] **YouTube stuck-live fix** (`352e273`): an ended stream can revert to a
+  scheduled *waiting room* whose `videoViewCountRenderer` still says
+  `isLive:true` AND whose chat serves get_live_chat continuations, so the
+  /next gate passed, the first poll succeeded, and the channel latched live
+  with a phantom "1 viewer" (really "1 waiting"). Confirmed by fetching the
+  real watch page of stuck videoId `0tBLmmIWrTQ` (`isUpcoming:true`,
+  `isLiveNow:false`, counter "1 waiting", dateText "Scheduled for ...").
+  `extractIsLiveFromNextResponse` (src/providers/youtube/YouTubeParsing.cpp)
+  now rejects "waiting" counter text, "Scheduled for" dateText, and
+  `videoDetails.isUpcoming`. Regression tests use the captured shape.
+- [x] **Deployed + verified live**: .dev-cycle.bat relaunched the app
+  (PID 928604); fresh log shows `fetchLiveChatPage rejecting non-live
+  videoId="0tBLmmIWrTQ"` while a genuinely-live channel still connects.
 
 ## Key decisions
-- PR review scope was the three-dot diff (GitHub refused to serve it — 20k-line
-  cap; generated locally with `git diff origin/main...HEAD`).
-- autoCloseUserPopup: upstream 1.3.0 hardcoded false; we rewired the setting
-  and flipped its default to false so shipped behavior is unchanged.
-- Workflow fan-outs now route mechanical stages (verify/dedup) to sonnet —
-  user preference, saved as memory `workflow-model-routing`.
+- History rewrite done with `git commit-tree` on identical trees (same
+  messages/dates), so content is byte-identical -- only identities changed.
+- Waiting-room detection uses en-locale strings ("waiting", "Scheduled for");
+  safe because the InnerTube context pins hl=en and headers pin en-US.
+- Left the 10-min `YOUTUBE_SESSION_REFRESH_MS` re-validation cadence: with the
+  gate fixed, an in-session zombie end clears within one refresh; the
+  stuck-forever behavior was the bug, not the lag.
+
+## Deliberately NOT fixed (upstream-inherited; forward to Fixlation)
+- CurrentUserBadges dead registry; StreamDatabase intro gated on hardcoded
+  "1.3.2"; CreatePollDialog dead icon fetch; 7TV badge-refresh no-op; anon
+  Helix credential fallback (TwitchAccountManager.cpp:469).
+
+## HELD FOR SIGN-OFF -- local branch `review/keychain-ipc-auth` (NOT pushed)
+- `5f2b0cb` SEC-G4 (IPC queue name + session secret), `efac95c` SEC-02
+  (tokens -> QtKeychain). Needs a rebase onto main and a fresh-login +
+  YouTube round-trip test before push.
 
 ## Current state
-- Build: green (RelWithDebInfo, ninja). Tests: 687/687 via ctest.
-- `main` head rewritten + force-pushed (email scrub); local main in sync.
-  App running from main.
-- CI on main (Build + Test) was IN PROGRESS at wrap; on Build success the
-  rolling `latest` release updates automatically. Check with /release-status.
-- Plan files + `review/` remain UNTRACKED (never committed), per instruction.
-- No orphaned processes; scratch logs cleaned.
+- Build: green (RelWithDebInfo, ninja). Tests: 688 green via ctest (17
+  YouTubeParsing incl. the new waiting-room case; standard 6 network skips).
+- `main` = `352e273`, pushed. App running from it (PID 928604).
+- Branches: only `main` + held `review/keychain-ipc-auth` remain.
+- CI on main re-triggered by the pushes; rolling `latest` release updates on
+  Build success (/release-status to confirm).
+- Plan files + `review/` + scratch logs remain untracked, per instruction.
 
 ## Next session
-1. Confirm main CI went green and the rolling release updated
-   (/release-status).
-2. Decide on `review/keychain-ipc-auth` (SEC-G4 + SEC-02): rebase onto main,
-   fresh-login + YouTube round-trip test, then sign-off + push.
-3. Optionally send Fixlation the second findings list (the upstream-inherited
-   defects catalogued above + in the PR #2 review).
+1. Confirm main CI green + rolling release updated (/release-status).
+2. Decide on `review/keychain-ipc-auth`: rebase, test, sign-off, push.
+3. Watch whether any YouTube channel still latches live on a waiting room
+   (log line to grep: `rejecting non-live videoId`).

@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: 2026 Contributors to Chatterino <https://chatterino.com>
+//
+// SPDX-License-Identifier: MIT
+
 #include "providers/youtube/YouTubeAccountManager.hpp"
 
 #include "common/QLogging.hpp"
@@ -159,10 +163,20 @@ YouTubeAccountManager::AddUserResponse YouTubeAccountManager::addAccount(
 
     auto account = std::make_shared<YouTubeAccount>(data);
     this->accounts.insert(account);
-    this->holder_.managedConnect(account->authUpdated, [account] {
-        qCDebug(chatterinoYouTube)
-            << "YouTube auth updated for" << account->displayName();
-    });
+    // Capture weakly: holder_ keeps this connection for the manager's
+    // lifetime, so a shared_ptr capture would leak removed accounts (and
+    // their tokens) until shutdown.
+    this->holder_.managedConnect(
+        account->authUpdated,
+        [weak = std::weak_ptr<YouTubeAccount>(account)] {
+            auto acc = weak.lock();
+            if (!acc)
+            {
+                return;
+            }
+            qCDebug(chatterinoYouTube)
+                << "YouTube auth updated for" << acc->displayName();
+        });
 
     return AddUserResponse::UserAdded;
 }

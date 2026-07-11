@@ -144,16 +144,25 @@ std::vector<MessagePtr> buildKickRecentMessages(
             getApp()->getKickChatServer()->requestSeventvCosmetics(
                 userID, msg->displayName);
         }
-        channel->updateOwnIdentityFromMessage(*msg);
-
         msg->flags.set(MessageFlag::RecentMessage);
         messages.emplace_back(std::move(msg));
     }
 
-    std::sort(messages.begin(), messages.end(),
-              [](const auto &lhs, const auto &rhs) {
-                  return lhs->serverReceivedTime < rhs->serverReceivedTime;
-              });
+    // messages are still in the endpoint's newest-first order here; walk them
+    // oldest-to-newest so the newest own message's identity wins the cache.
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it)
+    {
+        channel->updateOwnIdentityFromMessage(**it);
+    }
+
+    // Reverse into oldest-first before sorting so a stable_sort preserves the
+    // endpoint's within-second ordering instead of scrambling same-second
+    // messages (serverReceivedTime only has 1-second resolution).
+    std::reverse(messages.begin(), messages.end());
+    std::stable_sort(messages.begin(), messages.end(),
+                      [](const auto &lhs, const auto &rhs) {
+                          return lhs->serverReceivedTime < rhs->serverReceivedTime;
+                      });
 
     return messages;
 }
@@ -340,15 +349,12 @@ EmotePtr KickChannel::subscriberBadgeForMonths(uint64_t months) const
             return badge.emote;
         }
 
-        if (!best || badge.months <= months)
-        {
-            best = &badge;
-        }
-
         if (badge.months > months)
         {
             break;
         }
+
+        best = &badge;
     }
 
     return best ? best->emote : nullptr;
@@ -1007,7 +1013,8 @@ void KickChannel::reloadKickChannelEmotes()
                 qCWarning(chatterinoKick)
                     << *self << "Failed to fetch channel emotes:"
                     << res.error();
-                self->kickChannelEmotes_.set(EMPTY_EMOTE_MAP);
+                // Keep whatever's already cached (a transient failure like a
+                // Cloudflare challenge shouldn't wipe working emotes).
                 return;
             }
 
@@ -1324,10 +1331,13 @@ void KickChannel::loadRecentMessages(std::function<void()> onDone)
 
             auto messages = removeExistingMessages(
                 self.get(), buildKickRecentMessages(self.get(), *res));
+            // Latch on any successful response, even if dedupe left nothing
+            // new, so an empty/duplicate history doesn't re-hit the endpoint
+            // on every getOrCreate.
+            self->loadedRecentMessages_.store(true);
             if (!messages.empty())
             {
                 self->addMessagesAtStart(messages);
-                self->loadedRecentMessages_.store(true);
             }
             self->loadingRecentMessages_.clear();
 

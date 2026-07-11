@@ -8,6 +8,8 @@
 #include "common/Channel.hpp"
 #include "common/Common.hpp"
 #include "common/Literals.hpp"
+#include "common/network/NetworkRequest.hpp"
+#include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/ignores/IgnoreController.hpp"
@@ -260,8 +262,53 @@ MessagePtr parseNoticeMessage(Communi::IrcNoticeMessage *message)
                     return;
                 }
 
-                twitchAccounts.currentUsername = QString{};
-                getSettings()->requestSave();
+                // Re-validate the token before logging the user out - a
+                // transient Twitch-side auth blip must not permanently
+                // switch the client to anonymous.
+                const auto oauthToken{current->getOAuthToken()};
+                NetworkRequest(u"https://id.twitch.tv/oauth2/validate"_s,
+                               NetworkRequestType::Get)
+                    .header("Authorization", u"OAuth " % oauthToken)
+                    .timeout(20000)
+                    .onSuccess([expiredUserName](const auto & /*res*/) {
+                        qCWarning(chatterinoTwitch)
+                            << "Received a login auth NOTICE for"
+                            << expiredUserName
+                            << "but the token still validates - keeping the "
+                               "account";
+                    })
+                    .onError([expiredUserName,
+                              oauthToken](const NetworkResult &res) {
+                        if (res.status() != 401)
+                        {
+                            qCWarning(chatterinoTwitch)
+                                << "Failed to re-validate the token for"
+                                << expiredUserName
+                                << "after a login auth NOTICE:"
+                                << res.formatError() << "- keeping the account";
+                            return;
+                        }
+
+                        auto *app = tryGetApp();
+                        if (!app)
+                        {
+                            return;
+                        }
+
+                        auto &twitchAccounts = app->getAccounts()->twitch;
+                        const auto current = twitchAccounts.getCurrent();
+                        if (current->isAnon() ||
+                            current->getUserName().compare(
+                                expiredUserName, Qt::CaseInsensitive) != 0 ||
+                            current->getOAuthToken() != oauthToken)
+                        {
+                            return;
+                        }
+
+                        twitchAccounts.currentUsername = QString{};
+                        getSettings()->requestSave();
+                    })
+                    .execute();
             });
         }
         const auto expirationText = QString("Login expired for user \"%1\"!")

@@ -4,6 +4,7 @@
 
 #include "providers/ffz/FfzEmotes.hpp"
 
+#include "Application.hpp"
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
@@ -287,7 +288,7 @@ void FfzEmotes::fetchGlobalEmotes(ExponentialBackoff<3> backoff, int attempt)
             auto parsedSet = parseGlobalEmotes(result.parseJson());
             this->setEmotes(std::make_shared<EmoteMap>(std::move(parsedSet)));
         })
-        .onError([this, backoff, attempt](auto result) mutable {
+        .onError([backoff, attempt](auto result) mutable {
             if (isRetryableFetchError(result) &&
                 attempt + 1 < EMOTE_FETCH_MAX_ATTEMPTS)
             {
@@ -296,8 +297,16 @@ void FfzEmotes::fetchGlobalEmotes(ExponentialBackoff<3> backoff, int attempt)
                                 "retrying in"
                              << delay.count() << "ms. "
                              << result.formatError();
-                QTimer::singleShot(delay, [this, backoff, attempt] {
-                    this->fetchGlobalEmotes(backoff, attempt + 1);
+                // Don't capture `this` across the delay: FfzEmotes is
+                // Application-owned and not a QObject, so re-resolve it at
+                // fire time; tryGetApp() is null once the app (and with it
+                // this instance) is being torn down.
+                QTimer::singleShot(delay, [backoff, attempt] {
+                    if (auto *app = tryGetApp())
+                    {
+                        app->getFfzEmotes()->fetchGlobalEmotes(backoff,
+                                                               attempt + 1);
+                    }
                 });
                 return;
             }

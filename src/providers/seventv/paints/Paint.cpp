@@ -75,8 +75,10 @@ QPixmap Paint::getPixmap(const QString &text, const QFont &font,
     }
 
     QPen pen;
-    const QBrush brush =
-        this->asBrush(userColor, QRectF(QPointF{}, nametagBoundingRect.size()));
+    // Anchor the brush to the rect the text is actually drawn in - an
+    // origin-anchored rect would shift gradients/textures by the shadow
+    // padding offset.
+    const QBrush brush = this->asBrush(userColor, nametagBoundingRect);
     pen.setBrush(brush);
     pixmapPainter.setPen(pen);
 

@@ -24,6 +24,7 @@ class QJsonValue;
 
 namespace chatterino {
 
+class NetworkResult;
 class YouTubeAccount;
 
 class YouTubeLiveChat
@@ -145,7 +146,8 @@ private:
     bool moderationToolsDisabledForCurrentAccount() const;
     void reportModerationToolsUnavailable();
     void reportModerationActionFailure(const QString &action,
-                                       const QString &error);
+                                       const QString &error,
+                                       const NetworkResult &result);
     void updateModeratorPrivilegesFromRenderer(const QJsonObject &renderer);
     void updateLiveViewerCount(uint64_t viewerCount);
     void setLive(bool live);
@@ -163,6 +165,8 @@ private:
     static QString extractLiveVideoId(const QString &html,
                                       bool allowPageCanonical);
     static QString extractLiveOwnerChannelId(const QJsonObject &nextResponse);
+    static uint64_t extractLiveViewerCountFromNextResponse(
+        const QJsonObject &nextResponse);
     static uint64_t extractLiveViewerCount(const QJsonValue &value);
     static QDateTime extractLiveStartTime(const QJsonObject &nextResponse);
     static bool rendererHasModeratorBadge(const QJsonObject &renderer);
@@ -218,6 +222,14 @@ private:
     int recentlyFailedStreak_{0};
     static constexpr qint64 recentlyFailedBaseWindowMs = 5LL * 60 * 1000;
     static constexpr qint64 recentlyFailedMaxWindowMs = 60LL * 60 * 1000;
+    // Backoff for verifySourceLiveAfterMissingContinuation's same-videoId
+    // branch: a stream that is live but has no anonymous chat continuation
+    // (chat disabled / members-only) would otherwise re-run the full
+    // resolver chain every 3s forever. Doubles the resolve delay per
+    // consecutive attempt, capped at 60s. Cleared when a continuation is
+    // obtained or keyed off automatically when the videoId changes.
+    int missingContinuationStreak_{0};
+    QString missingContinuationVideoId_;
     uint64_t liveViewerCount_{0};
     QElapsedTimer liveChatSessionRefreshTimer_;
     QElapsedTimer liveChatProgressTimer_;

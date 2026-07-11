@@ -9,6 +9,7 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/highlights/HighlightController.hpp"
 #include "controllers/highlights/HighlightResult.hpp"
+#include "debug/AssertInGuiThread.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
 #include "messages/MessageBuilder.hpp"
@@ -33,6 +34,8 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <deque>
+#include <unordered_set>
 
 namespace {
 
@@ -150,10 +153,14 @@ QUrl youtubeChannelBrowserUrl(QString source)
     }
 
     const auto host = url.host().toLower();
+    // Exact-or-subdomain match; a bare endsWith would also accept hosts
+    // like notyoutube.com.
+    const bool isYouTubeHost =
+        host == "youtube.com" || host.endsWith(".youtube.com");
     const auto path = trimTrailingSlash(url.path());
     const QUrlQuery query(url);
 
-    if (host.endsWith("youtube.com") && path == "/embed/live_stream")
+    if (isYouTubeHost && path == "/embed/live_stream")
     {
         const auto channelId = query.queryItemValue("channel").trimmed();
         if (isLikelyYouTubeChannelId(channelId))
@@ -163,13 +170,13 @@ QUrl youtubeChannelBrowserUrl(QString source)
         }
     }
 
-    if (host.endsWith("youtube.com") && path.startsWith("/@"))
+    if (isYouTubeHost && path.startsWith("/@"))
     {
         return QUrl(QString("https://www.youtube.com/%1")
                         .arg(path.section('/', 1, 1).trimmed()));
     }
 
-    if (host.endsWith("youtube.com") && path.startsWith("/channel/"))
+    if (isYouTubeHost && path.startsWith("/channel/"))
     {
         const auto channelId = path.section('/', 2, 2).trimmed();
         if (isLikelyYouTubeChannelId(channelId))
@@ -179,7 +186,7 @@ QUrl youtubeChannelBrowserUrl(QString source)
         }
     }
 
-    if (host.endsWith("youtube.com"))
+    if (isYouTubeHost)
     {
         const auto firstSegment = path.section('/', 1, 1).trimmed();
         if (firstSegment == "c" || firstSegment == "user")
@@ -288,6 +295,43 @@ void triggerHighlightsAndAddMention(Channel *channel,
         getApp()->getTwitch()->getMentionsChannel()->addMessage(
             message, MessageContext::Original);
     }
+}
+
+// Global highlight side effects (sound, window alert, /mentions entry) must
+// fire only once per source message: every MergedChannel subscribed to the
+// same shared YouTubeLiveChat/TikTokLiveChat mirrors its own copy of each
+// message, so without dedupe two tabs on one stream alert twice. Per-channel
+// message flags are still applied everywhere; only the alerts are deduped.
+// Bounded FIFO so the seen-set can't grow without limit. GUI-thread only,
+// like the rest of MergedChannel.
+constexpr std::size_t MAX_ALERTED_HIGHLIGHT_KEYS = 512;
+
+bool markHighlightAlerted(const QString &sourceKey)
+{
+    assertInGuiThread();
+
+    static std::unordered_set<QString> seen;
+    static std::deque<QString> order;
+
+    if (sourceKey.isEmpty())
+    {
+        // No key to dedupe on; let the alert through.
+        return true;
+    }
+
+    if (seen.contains(sourceKey))
+    {
+        return false;
+    }
+
+    seen.insert(sourceKey);
+    order.push_back(sourceKey);
+    while (order.size() > MAX_ALERTED_HIGHLIGHT_KEYS)
+    {
+        seen.erase(order.front());
+        order.pop_front();
+    }
+    return true;
 }
 
 }  // namespace
@@ -1379,7 +1423,14 @@ void MergedChannel::appendMergedMessage(const MessagePtr &source,
         platform == MessagePlatform::TikTok)
     {
         const auto alert = processMergedPlatformHighlights(*merged);
-        triggerHighlightsAndAddMention(this, merged, alert);
+        // The flags set above stay per channel copy, but the sound/toast
+        // and /mentions entry must fire only once per source message even
+        // when several MergedChannels share this source.
+        if (merged->flags.has(MessageFlag::Highlighted) &&
+            markHighlightAlerted(messageKey(source, platform)))
+        {
+            triggerHighlightsAndAddMention(this, merged, alert);
+        }
     }
 
     this->addMessage(merged, MessageContext::Repost);

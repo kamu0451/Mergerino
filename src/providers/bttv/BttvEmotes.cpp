@@ -4,6 +4,7 @@
 
 #include "providers/bttv/BttvEmotes.hpp"
 
+#include "Application.hpp"
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
 #include "common/Outcome.hpp"
@@ -288,7 +289,7 @@ void BttvEmotes::fetchGlobalEmotes(ExponentialBackoff<3> backoff, int attempt)
                     std::make_shared<EmoteMap>(std::move(pair.second)));
             }
         })
-        .onError([this, backoff, attempt](auto result) mutable {
+        .onError([backoff, attempt](auto result) mutable {
             if (isRetryableFetchError(result) &&
                 attempt + 1 < EMOTE_FETCH_MAX_ATTEMPTS)
             {
@@ -296,8 +297,16 @@ void BttvEmotes::fetchGlobalEmotes(ExponentialBackoff<3> backoff, int attempt)
                 qCDebug(chatterinoBttv)
                     << "Failed to fetch global BTTV emotes, retrying in"
                     << delay.count() << "ms. " << result.formatError();
-                QTimer::singleShot(delay, [this, backoff, attempt] {
-                    this->fetchGlobalEmotes(backoff, attempt + 1);
+                // Don't capture `this` across the delay: BttvEmotes is
+                // Application-owned and not a QObject, so re-resolve it at
+                // fire time; tryGetApp() is null once the app (and with it
+                // this instance) is being torn down.
+                QTimer::singleShot(delay, [backoff, attempt] {
+                    if (auto *app = tryGetApp())
+                    {
+                        app->getBttvEmotes()->fetchGlobalEmotes(backoff,
+                                                                attempt + 1);
+                    }
                 });
                 return;
             }

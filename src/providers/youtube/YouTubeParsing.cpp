@@ -113,7 +113,11 @@ QString normalizeYouTubeTextRunUrl(QString url, bool unwrapRedirect)
         parsed.path() == "/redirect")
     {
         const QUrlQuery query(parsed);
-        const auto target = query.queryItemValue("q").trimmed();
+        // FullyDecoded: YouTube percent-encodes the redirect target, and the
+        // default PrettyDecoded leaves ':' and '/' encoded, which makes the
+        // target unparseable as a URL and silently skips the unwrap.
+        const auto target =
+            query.queryItemValue("q", QUrl::FullyDecoded).trimmed();
         if (!target.isEmpty())
         {
             const auto normalizedTarget =

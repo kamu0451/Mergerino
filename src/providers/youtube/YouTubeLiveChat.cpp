@@ -82,6 +82,40 @@ QString formatGoogleError(const NetworkResult &result)
         .arg(result.formatError());
 }
 
+// Whether a failed moderation call definitively means the current account
+// lacks moderator rights on this live chat. Google reports these as 401/403;
+// insufficient-permission cases occasionally surface as 400 whose error
+// reasons carry a permission/forbidden marker. Timeouts (no HTTP status),
+// 429s and 5xx responses are transient and must not hide the mod tools for
+// the rest of the stream.
+bool isModerationAuthorizationFailure(const NetworkResult &result)
+{
+    const auto status = result.status();
+    if (!status)
+    {
+        return false;
+    }
+
+    if (*status == 401 || *status == 403)
+    {
+        return true;
+    }
+
+    if (*status == 400)
+    {
+        const auto errors =
+            result.parseJson()["error"].toObject()["errors"].toArray();
+        const auto reasons = QString::fromUtf8(
+                                 QJsonDocument(errors).toJson(
+                                     QJsonDocument::Compact))
+                                 .toLower();
+        return reasons.contains(QStringLiteral("permission")) ||
+               reasons.contains(QStringLiteral("forbidden"));
+    }
+
+    return false;
+}
+
 QString liveChatBanCacheKey(const QString &liveChatId, const QString &channelId)
 {
     return liveChatId + QChar(u'\n') + channelId;
@@ -924,7 +958,8 @@ void YouTubeLiveChat::deleteMessage(const QString &messageId)
                         << "Deleting YouTube live chat message failed"
                         << error;
                     this->reportModerationActionFailure(
-                        QStringLiteral("delete YouTube message"), error);
+                        QStringLiteral("delete YouTube message"), error,
+                        result);
                 })
                 .execute();
         });
@@ -2113,6 +2148,11 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
                 return;
             }
 
+            // A continuation was obtained: clear the missing-continuation
+            // backoff so the next outage starts from the short delay again.
+            this->missingContinuationStreak_ = 0;
+            this->missingContinuationVideoId_.clear();
+
             const auto ownerChannelId = extractLiveOwnerChannelId(json);
             if (this->liveOwnerChannelId_ != ownerChannelId)
             {
@@ -2166,7 +2206,8 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
             {
                 this->liveStartedAt_ = {};
             }
-            const auto viewerCount = extractLiveViewerCount(json);
+            const auto viewerCount =
+                extractLiveViewerCountFromNextResponse(json);
             if (viewerCount > 0)
             {
                 this->updateLiveViewerCount(viewerCount);
@@ -2274,7 +2315,8 @@ void YouTubeLiveChat::ensureActiveLiveChatId(
                     this->reportModerationActionFailure(
                         QStringLiteral("prepare YouTube moderation"),
                         QStringLiteral(
-                            "YouTube did not return the current live stream."));
+                            "YouTube did not return the current live stream."),
+                        result);
                     return;
                 }
 
@@ -2296,7 +2338,8 @@ void YouTubeLiveChat::ensureActiveLiveChatId(
                     this->reportModerationActionFailure(
                         QStringLiteral("prepare YouTube moderation"),
                         QStringLiteral("YouTube did not return an active live "
-                                       "chat for this stream."));
+                                       "chat for this stream."),
+                        result);
                     return;
                 }
 
@@ -2324,7 +2367,8 @@ void YouTubeLiveChat::ensureActiveLiveChatId(
             if (isModerationOperation)
             {
                 this->reportModerationActionFailure(
-                    QStringLiteral("prepare YouTube moderation"), error);
+                    QStringLiteral("prepare YouTube moderation"), error,
+                    result);
                 return;
             }
 
@@ -2475,7 +2519,7 @@ void YouTubeLiveChat::postLiveChatBan(
             const auto action =
                 durationSeconds > 0 ? QStringLiteral("timeout YouTube user")
                                     : QStringLiteral("ban YouTube user");
-            this->reportModerationActionFailure(action, error);
+            this->reportModerationActionFailure(action, error, result);
         })
         .execute();
 }
@@ -2548,7 +2592,7 @@ void YouTubeLiveChat::deleteLiveChatBan(
             qCWarning(chatterinoYouTube)
                 << "Removing YouTube live chat ban failed" << error;
             this->reportModerationActionFailure(
-                QStringLiteral("unban YouTube user"), error);
+                QStringLiteral("unban YouTube user"), error, result);
         })
         .execute();
 }
@@ -2586,12 +2630,27 @@ void YouTubeLiveChat::verifySourceLiveAfterMissingContinuation(
                 return;
             }
 
+            if (this->missingContinuationVideoId_ != requestedVideoId)
+            {
+                this->missingContinuationVideoId_ = requestedVideoId;
+                this->missingContinuationStreak_ = 0;
+            }
+
             this->setLive(true);
             this->setStatusText(
                 "YouTube stream is live. Waiting for live chat.");
             this->failureReported_ = true;
-            this->resetInnertubeContext();
-            this->scheduleResolve(YOUTUBE_RECONNECT_DELAY_MS);
+            // Rebuilding the InnerTube context forces an embed bootstrap
+            // re-fetch; refresh it every few attempts instead of every
+            // cycle so a stale context still recovers eventually.
+            if (this->missingContinuationStreak_ % 4 == 3)
+            {
+                this->resetInnertubeContext();
+            }
+            const auto shift = std::min(this->missingContinuationStreak_, 5);
+            this->missingContinuationStreak_++;
+            this->scheduleResolve(
+                std::min(YOUTUBE_RECONNECT_DELAY_MS * (1 << shift), 60'000));
         });
 }
 
@@ -3165,8 +3224,23 @@ void YouTubeLiveChat::reportModerationToolsUnavailable()
 }
 
 void YouTubeLiveChat::reportModerationActionFailure(const QString &action,
-                                                   const QString &error)
+                                                   const QString &error,
+                                                   const NetworkResult &result)
 {
+    if (!isModerationAuthorizationFailure(result))
+    {
+        // Transient failure (timeout, rate limit, 5xx, or an API response
+        // that isn't about permissions): tell the user, but keep the mod
+        // tools available - only a definitive authorization failure may
+        // hide them for the rest of the stream.
+        qCWarning(chatterinoYouTube)
+            << "Transient YouTube moderation failure, keeping mod tools"
+            << action << error;
+        this->systemMessageReceived.invoke(makeSystemStatusMessage(
+            QString("Could not %1. %2").arg(action, error)));
+        return;
+    }
+
     auto *accounts = getApp()->getAccounts();
     QString currentChannelId;
     if (accounts->youtube.isLoggedIn())
@@ -3757,6 +3831,41 @@ QString YouTubeLiveChat::parseText(const QJsonValue &value)
     }
 
     return text.trimmed();
+}
+
+uint64_t YouTubeLiveChat::extractLiveViewerCountFromNextResponse(
+    const QJsonObject &nextResponse)
+{
+    // Scoped to the primary info column on purpose (mirrors
+    // extractIsLiveFromNextResponse): the full /next response also carries
+    // secondaryResults (recommended videos) whose "watching now" figures
+    // belong to unrelated live streams. The authoritative count comes from
+    // updated_metadata anyway, so correctness beats recall here.
+    const auto contents =
+        nextResponse["contents"]
+            .toObject()["twoColumnWatchNextResults"]
+            .toObject()["results"]
+            .toObject()["results"]
+            .toObject()["contents"]
+            .toArray();
+
+    for (const auto &itemValue : contents)
+    {
+        const auto primary =
+            itemValue.toObject()["videoPrimaryInfoRenderer"].toObject();
+        if (primary.isEmpty())
+        {
+            continue;
+        }
+
+        const auto count = extractLiveViewerCount(primary);
+        if (count > 0)
+        {
+            return count;
+        }
+    }
+
+    return 0;
 }
 
 uint64_t YouTubeLiveChat::extractLiveViewerCount(const QJsonValue &value)

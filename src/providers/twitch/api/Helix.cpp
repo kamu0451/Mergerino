@@ -10,22 +10,14 @@
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
-#include "singletons/Paths.hpp"
-#include "util/Clipboard.hpp"
 #include "util/CancellationToken.hpp"
 #include "util/QMagicEnum.hpp"
 
-#ifdef USEWINSDK
-#    include <Windows.h>
-#endif
-
 #include <magic_enum/magic_enum.hpp>
-#include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
-#include <QSaveFile>
 #include <QStringBuilder>
 #include <QUrl>
 #include <QUrlQuery>
@@ -39,34 +31,6 @@ using namespace chatterino;
 constexpr auto NUM_MODERATORS_TO_FETCH_PER_REQUEST = 100;
 
 constexpr auto NUM_CHATTERS_TO_FETCH = 1000;
-
-std::unordered_set<QString> parseChatterGroup(const QJsonObject &chatters,
-                                              const QString &key)
-{
-    std::unordered_set<QString> users;
-
-    const auto values = chatters.value(key).toArray();
-    for (const auto &value : values)
-    {
-        QString user;
-        if (value.isObject())
-        {
-            user = value.toObject().value(QStringLiteral("login")).toString();
-        }
-        else
-        {
-            user = value.toString();
-        }
-
-        user = user.trimmed().toLower();
-        if (!user.isEmpty())
-        {
-            users.insert(user);
-        }
-    }
-
-    return users;
-}
 
 }  // namespace
 
@@ -86,32 +50,6 @@ HelixChatters::HelixChatters(const QJsonObject &jsonObject)
     {
         auto userLogin = chatter.toObject().value("user_login").toString();
         this->chatters.insert(userLogin);
-    }
-}
-
-HelixChatterGroups::HelixChatterGroups(const QJsonObject &jsonObject)
-    : broadcaster(parseChatterGroup(jsonObject.value("chatters").toObject(),
-                                    QStringLiteral("broadcaster")))
-    , vips(parseChatterGroup(jsonObject.value("chatters").toObject(),
-                             QStringLiteral("vips")))
-    , moderators(parseChatterGroup(jsonObject.value("chatters").toObject(),
-                                   QStringLiteral("moderators")))
-    , staff(parseChatterGroup(jsonObject.value("chatters").toObject(),
-                              QStringLiteral("staff")))
-    , admins(parseChatterGroup(jsonObject.value("chatters").toObject(),
-                               QStringLiteral("admins")))
-    , globalMods(parseChatterGroup(jsonObject.value("chatters").toObject(),
-                                   QStringLiteral("global_mods")))
-    , viewers(parseChatterGroup(jsonObject.value("chatters").toObject(),
-                                QStringLiteral("viewers")))
-    , total(jsonObject.value("chatter_count").toInt())
-{
-    const auto chatters = jsonObject.value("chatters").toObject();
-    this->broadcaster.merge(parseChatterGroup(chatters,
-                                             QStringLiteral("broadcasters")));
-    if (this->total == 0)
-    {
-        this->total = chatters.value(QStringLiteral("count")).toInt();
     }
 }
 

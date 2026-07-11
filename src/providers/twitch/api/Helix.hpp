@@ -344,21 +344,6 @@ struct HelixChatters {
     explicit HelixChatters(const QJsonObject &jsonObject);
 };
 
-struct HelixChatterGroups {
-    std::unordered_set<QString> broadcaster;
-    std::unordered_set<QString> vips;
-    std::unordered_set<QString> moderators;
-    std::unordered_set<QString> staff;
-    std::unordered_set<QString> admins;
-    std::unordered_set<QString> globalMods;
-    std::unordered_set<QString> viewers;
-    int total{};
-
-    HelixChatterGroups() = default;
-
-    explicit HelixChatterGroups(const QJsonObject &jsonObject);
-};
-
 using HelixModerator = HelixVip;
 
 struct HelixModerators {

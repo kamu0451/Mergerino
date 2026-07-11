@@ -6,7 +6,8 @@ deep-review it, fix everything worth fixing, merge to main, and run the
 deployed app from main.
 
 ## Completed
-- [x] **PR #2 created and merged** as `446887a` — the whole drive (upstream
+- [x] **PR #2 created and merged** as `0fecf40` (history rewritten from the
+  original `446887a` to scrub a personal author email) — the whole drive (upstream
   1.2.6->1.3.2 merge, Helix ToS rework, P0-P6 remediation; 299 files).
 - [x] **Multi-agent review of the full PR diff** (10 subsystem reviewers +
   adversarial verification of all 65 findings): 55 confirmed, 9 refuted,
@@ -32,7 +33,7 @@ deployed app from main.
   - `072c2af` tests — 663 -> 687 green; the new redirect test EXPOSED the
     PrettyDecoded production bug (fixed in `a9631be`).
 - [x] **Deployed from main**: .dev-cycle.bat rebuilt + relaunched
-  `C:\Program Files\Mergerino\mergerino.exe` (v1.5.234, main @ 446887a).
+  `C:\Program Files\Mergerino\mergerino.exe` (v1.5.234, main @ merge commit).
 
 ## Deliberately NOT fixed (upstream-inherited; forward to Fixlation)
 - CurrentUserBadges.hpp ~700-line dead registry (currentUserHasBadge() never
@@ -61,7 +62,8 @@ deployed app from main.
 
 ## Current state
 - Build: green (RelWithDebInfo, ninja). Tests: 687/687 via ctest.
-- `main` = `446887a`, pushed; local main in sync. App running from main.
+- `main` head rewritten + force-pushed (email scrub); local main in sync.
+  App running from main.
 - CI on main (Build + Test) was IN PROGRESS at wrap; on Build success the
   rolling `latest` release updates automatically. Check with /release-status.
 - Plan files + `review/` remain UNTRACKED (never committed), per instruction.

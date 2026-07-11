@@ -5,26 +5,34 @@
 #include "widgets/AccountSwitchPopup.hpp"
 
 #include "Application.hpp"
+#include "common/Common.hpp"
 #include "common/Literals.hpp"
 #include "common/ProviderId.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "providers/kick/KickAccount.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
+#include "providers/youtube/YouTubeAccount.hpp"
+#include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
 #include "singletons/WindowManager.hpp"
 #include "widgets/AccountSwitchWidget.hpp"
 #include "widgets/dialogs/KickLoginPage.hpp"
-#include "widgets/dialogs/LoginDialog.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
+#include "widgets/dialogs/TwitchLoginPage.hpp"
+#include "widgets/dialogs/YouTubeLoginPage.hpp"
 #include "widgets/helper/KickAccountSwitchWidget.hpp"
 
 #include <QIcon>
 #include <QLabel>
 #include <QLayout>
+#include <QListWidget>
+#include <QListWidgetItem>
 #include <QPainter>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QStyle>
+#include <QVBoxLayout>
 
 namespace chatterino {
 
@@ -32,12 +40,17 @@ using namespace literals;
 
 namespace {
 
+constexpr QSize PROVIDER_BUTTON_SIZE{32, 24};
+constexpr QSize PROVIDER_BUTTON_ICON_SIZE{16, 16};
+
 QString providerName(ProviderId provider)
 {
     switch (provider)
     {
         case ProviderId::Kick:
             return "Kick";
+        case ProviderId::YouTube:
+            return "YouTube";
         case ProviderId::Twitch:
         default:
             return "Twitch";
@@ -50,9 +63,52 @@ QString providerIconPath(ProviderId provider)
     {
         case ProviderId::Kick:
             return u":/platforms/kick.svg"_s;
+        case ProviderId::YouTube:
+            return u":/platforms/youtube.svg"_s;
         case ProviderId::Twitch:
         default:
             return u":/platforms/twitch.svg"_s;
+    }
+}
+
+QString youtubeAccountLabel(const std::shared_ptr<YouTubeAccount> &account)
+{
+    if (account->displayName().isEmpty())
+    {
+        return account->channelID();
+    }
+    return account->displayName();
+}
+
+void refreshYouTubeAccountSwitcher(QListWidget *list)
+{
+    QSignalBlocker blocker(list);
+    list->clear();
+
+    auto *anonymous = new QListWidgetItem(ANONYMOUS_USERNAME_LABEL, list);
+    anonymous->setData(Qt::UserRole, QString());
+
+    const auto current = getApp()->getAccounts()->youtube.current();
+    for (const auto &account : getApp()->getAccounts()->youtube.accounts.raw())
+    {
+        auto *item = new QListWidgetItem(youtubeAccountLabel(account), list);
+        item->setData(Qt::UserRole, account->channelID());
+    }
+
+    if (current->isAnonymous())
+    {
+        list->setCurrentRow(0);
+        return;
+    }
+
+    const auto channelID = current->channelID();
+    for (int i = 0; i < list->count(); ++i)
+    {
+        if (list->item(i)->data(Qt::UserRole).toString() == channelID)
+        {
+            list->setCurrentRow(i);
+            return;
+        }
     }
 }
 
@@ -84,21 +140,31 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
     this->ui_.twitchProviderButton->setObjectName("providerButton");
     this->ui_.twitchProviderButton->setIcon(
         QIcon(providerIconPath(ProviderId::Twitch)));
-    this->ui_.twitchProviderButton->setIconSize(QSize{16, 16});
+    this->ui_.twitchProviderButton->setIconSize(PROVIDER_BUTTON_ICON_SIZE);
     this->ui_.twitchProviderButton->setCheckable(true);
     this->ui_.twitchProviderButton->setFocusPolicy(Qt::NoFocus);
-    this->ui_.twitchProviderButton->setFixedSize(32, 24);
+    this->ui_.twitchProviderButton->setFixedSize(PROVIDER_BUTTON_SIZE);
     providerHbox->addWidget(this->ui_.twitchProviderButton);
 
     this->ui_.kickProviderButton = new QPushButton(this);
     this->ui_.kickProviderButton->setObjectName("providerButton");
     this->ui_.kickProviderButton->setIcon(
         QIcon(providerIconPath(ProviderId::Kick)));
-    this->ui_.kickProviderButton->setIconSize(QSize{16, 16});
+    this->ui_.kickProviderButton->setIconSize(PROVIDER_BUTTON_ICON_SIZE);
     this->ui_.kickProviderButton->setCheckable(true);
     this->ui_.kickProviderButton->setFocusPolicy(Qt::NoFocus);
-    this->ui_.kickProviderButton->setFixedSize(32, 24);
+    this->ui_.kickProviderButton->setFixedSize(PROVIDER_BUTTON_SIZE);
     providerHbox->addWidget(this->ui_.kickProviderButton);
+
+    this->ui_.youtubeProviderButton = new QPushButton(this);
+    this->ui_.youtubeProviderButton->setObjectName("providerButton");
+    this->ui_.youtubeProviderButton->setIcon(
+        QIcon(providerIconPath(ProviderId::YouTube)));
+    this->ui_.youtubeProviderButton->setIconSize(PROVIDER_BUTTON_ICON_SIZE);
+    this->ui_.youtubeProviderButton->setCheckable(true);
+    this->ui_.youtubeProviderButton->setFocusPolicy(Qt::NoFocus);
+    this->ui_.youtubeProviderButton->setFixedSize(PROVIDER_BUTTON_SIZE);
+    providerHbox->addWidget(this->ui_.youtubeProviderButton);
     providerHbox->addStretch(1);
     vbox->addLayout(providerHbox);
 
@@ -109,8 +175,24 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
     this->ui_.accountSwitchWidget->setFocusPolicy(Qt::NoFocus);
     this->ui_.kickAccountSwitcher = new KickAccountSwitchWidget(this);
     this->ui_.kickAccountSwitcher->setFocusPolicy(Qt::NoFocus);
+
+    this->ui_.youtubeAccountPage = new QWidget(this);
+    auto *youtubeAccountLayout =
+        new QVBoxLayout(this->ui_.youtubeAccountPage);
+    youtubeAccountLayout->setContentsMargins(0, 0, 0, 0);
+    youtubeAccountLayout->setSpacing(0);
+    this->ui_.youtubeReviewNotice =
+        YouTubeLoginPage::createReviewNotice(this->ui_.youtubeAccountPage);
+    youtubeAccountLayout->addWidget(this->ui_.youtubeReviewNotice, 1);
+
+    this->ui_.youtubeAccountSwitcher =
+        new QListWidget(this->ui_.youtubeAccountPage);
+    this->ui_.youtubeAccountSwitcher->setFocusPolicy(Qt::NoFocus);
+    youtubeAccountLayout->addWidget(this->ui_.youtubeAccountSwitcher, 1);
+
     this->ui_.accountStack->addWidget(this->ui_.accountSwitchWidget);
     this->ui_.accountStack->addWidget(this->ui_.kickAccountSwitcher);
+    this->ui_.accountStack->addWidget(this->ui_.youtubeAccountPage);
 
     this->ui_.statusLabel = new QLabel(this);
     this->ui_.statusLabel->setWordWrap(true);
@@ -131,13 +213,43 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
                      [this]() {
                          const auto provider =
                              getApp()->getWindows()->activeAccountProvider();
+                         if (provider == ProviderId::YouTube)
+                         {
+                             auto current =
+                                 getApp()->getAccounts()->youtube.current();
+                             if (!current->isAnonymous())
+                             {
+                                 auto &youtubeAccounts =
+                                     getApp()->getAccounts()->youtube;
+                                 youtubeAccounts.accounts.removeFirstMatching(
+                                     [&](const auto &account) {
+                                         return account == current;
+                                     });
+                                 youtubeAccounts.currentChannelID = "";
+                                 getSettings()->requestSave();
+                                 this->refresh();
+                                 return;
+                             }
+
+                             YouTubeLoginPage::startLoginFlow(
+                                 this->parentWidget(),
+                                 [this]() { this->refresh(); });
+                             this->hide();
+                             return;
+                         }
                          if (provider == ProviderId::Kick)
                          {
                              auto current = getApp()->getAccounts()->kick.current();
                              if (!current->isAnonymous())
                              {
-                                 getApp()->getAccounts()->kick.currentUsername =
-                                     "";
+                                 auto &kickAccounts =
+                                     getApp()->getAccounts()->kick;
+                                 kickAccounts.accounts.removeFirstMatching(
+                                     [&](const auto &account) {
+                                         return account == current;
+                                     });
+                                 kickAccounts.currentUsername = "";
+                                 getSettings()->requestSave();
                                  this->refresh();
                                  return;
                              }
@@ -152,15 +264,22 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
                          auto current = getApp()->getAccounts()->twitch.getCurrent();
                          if (!current->isAnon())
                          {
-                             getApp()->getAccounts()->twitch.currentUsername =
-                                 "";
+                             auto &twitchAccounts =
+                                 getApp()->getAccounts()->twitch;
+                             twitchAccounts.accounts.removeFirstMatching(
+                                 [&](const auto &account) {
+                                     return account == current;
+                                 });
+                             twitchAccounts.currentUsername = "";
+                             getSettings()->requestSave();
                              this->refresh();
                              return;
                          }
 
-                         LoginDialog dialog(this, provider);
-                         dialog.exec();
-                         this->refresh();
+                         TwitchLoginPage::startLoginFlow(
+                             this->parentWidget(),
+                             [this]() { this->refresh(); });
+                         this->hide();
                      });
     QObject::connect(this->ui_.twitchProviderButton, &QPushButton::clicked,
                      this, [this]() {
@@ -173,6 +292,28 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
                          getApp()->getWindows()->setActiveAccountProvider(
                              ProviderId::Kick);
                          this->refresh();
+                     });
+    QObject::connect(this->ui_.youtubeProviderButton, &QPushButton::clicked,
+                     this, [this]() {
+                         getApp()->getWindows()->setActiveAccountProvider(
+                             ProviderId::YouTube);
+                         this->refresh();
+                     });
+    QObject::connect(this->ui_.youtubeAccountSwitcher, &QListWidget::clicked,
+                     this, [this] {
+                         if (this->ui_.youtubeAccountSwitcher->selectedItems()
+                                 .isEmpty())
+                         {
+                             return;
+                         }
+
+                         const auto channelID =
+                             this->ui_.youtubeAccountSwitcher->currentItem()
+                                 ->data(Qt::UserRole)
+                                 .toString();
+                         getApp()->getAccounts()->youtube.currentChannelID =
+                             channelID;
+                         std::ignore = getSettings()->requestSave();
                      });
     QObject::connect(this->ui_.manageAccountsButton, &QPushButton::clicked,
                      [this]() {
@@ -189,6 +330,12 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
         getApp()->getAccounts()->kick.currentUserChanged,
         [this]() { this->refresh(); });
     this->signalHolder_.managedConnect(
+        getApp()->getAccounts()->youtube.userListUpdated,
+        [this]() { this->refresh(); });
+    this->signalHolder_.managedConnect(
+        getApp()->getAccounts()->youtube.currentUserChanged,
+        [this]() { this->refresh(); });
+    this->signalHolder_.managedConnect(
         getApp()->getWindows()->activeAccountProviderChanged,
         [this](ProviderId) { this->refresh(); });
     this->bSignals_.emplace_back(
@@ -199,7 +346,7 @@ AccountSwitchPopup::AccountSwitchPopup(QWidget *parent)
         getApp()->getAccounts()->twitch.userListUpdated,
         [this]() { this->refresh(); });
 
-    this->setScaleIndependentSize(260, 260);
+    this->setScaleIndependentSize(300, 300);
     this->refresh();
     this->themeChangedEvent();
 }
@@ -255,6 +402,10 @@ void AccountSwitchPopup::themeChangedEvent()
         QPushButton#providerButton {
             background: transparent;
             border: 1px solid #12555555;
+            min-width: 32px;
+            max-width: 32px;
+            min-height: 24px;
+            max-height: 24px;
             padding: 0;
         }
         QPushButton#providerButton[selectedProvider="true"] {
@@ -288,6 +439,13 @@ void AccountSwitchPopup::refresh()
 {
     this->ui_.accountSwitchWidget->refresh();
     this->ui_.kickAccountSwitcher->refresh();
+    refreshYouTubeAccountSwitcher(this->ui_.youtubeAccountSwitcher);
+
+    const auto hasYouTubeAccounts =
+        !getApp()->getAccounts()->youtube.accounts.raw().empty();
+    this->ui_.youtubeReviewNotice->setVisible(!hasYouTubeAccounts);
+    this->ui_.youtubeAccountSwitcher->setVisible(hasYouTubeAccounts);
+
     this->updateCurrentPage();
     this->updateStatusText();
 }
@@ -303,10 +461,19 @@ void AccountSwitchPopup::paintEvent(QPaintEvent *)
 void AccountSwitchPopup::updateCurrentPage()
 {
     const auto provider = getApp()->getWindows()->activeAccountProvider();
-    this->ui_.accountStack->setCurrentWidget(
-        provider == ProviderId::Kick
-            ? static_cast<QWidget *>(this->ui_.kickAccountSwitcher)
-            : static_cast<QWidget *>(this->ui_.accountSwitchWidget));
+    QWidget *accountWidget = this->ui_.accountSwitchWidget;
+    switch (provider)
+    {
+        case ProviderId::Kick:
+            accountWidget = this->ui_.kickAccountSwitcher;
+            break;
+        case ProviderId::YouTube:
+            accountWidget = this->ui_.youtubeAccountPage;
+            break;
+        case ProviderId::Twitch:
+            break;
+    }
+    this->ui_.accountStack->setCurrentWidget(accountWidget);
     auto setProviderButtonSelected = [](QPushButton *button, bool selected) {
         button->setChecked(selected);
         button->setProperty("selectedProvider", selected);
@@ -318,11 +485,23 @@ void AccountSwitchPopup::updateCurrentPage()
                               provider == ProviderId::Twitch);
     setProviderButtonSelected(this->ui_.kickProviderButton,
                               provider == ProviderId::Kick);
+    setProviderButtonSelected(this->ui_.youtubeProviderButton,
+                              provider == ProviderId::YouTube);
 
-    const bool loggedIn =
-        provider == ProviderId::Kick
-            ? !getApp()->getAccounts()->kick.current()->isAnonymous()
-            : !getApp()->getAccounts()->twitch.getCurrent()->isAnon();
+    bool loggedIn = false;
+    switch (provider)
+    {
+        case ProviderId::Kick:
+            loggedIn = !getApp()->getAccounts()->kick.current()->isAnonymous();
+            break;
+        case ProviderId::YouTube:
+            loggedIn =
+                !getApp()->getAccounts()->youtube.current()->isAnonymous();
+            break;
+        case ProviderId::Twitch:
+            loggedIn = !getApp()->getAccounts()->twitch.getCurrent()->isAnon();
+            break;
+    }
     this->ui_.loginButton->setText(
         QString("%1 %2")
             .arg(loggedIn ? "Log out of" : "Log in to")
@@ -352,6 +531,30 @@ void AccountSwitchPopup::updateStatusText()
 
         this->ui_.statusLabel->setText(
             "No Kick account added yet. Click below to log in.");
+        return;
+    }
+
+    if (provider == ProviderId::YouTube)
+    {
+        const auto &accounts = getApp()->getAccounts()->youtube.accounts.raw();
+        const auto current = getApp()->getAccounts()->youtube.current();
+        if (!current->isAnonymous())
+        {
+            this->ui_.statusLabel->setText(
+                QString("Current YouTube account: %1")
+                    .arg(youtubeAccountLabel(current)));
+            return;
+        }
+        if (!accounts.empty())
+        {
+            this->ui_.statusLabel->setText(
+                "YouTube is currently set to anonymous. Manage accounts to "
+                "switch accounts or log in.");
+            return;
+        }
+
+        this->ui_.statusLabel->setText(
+            "No YouTube account added yet. Click below to log in.");
         return;
     }
 

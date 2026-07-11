@@ -15,6 +15,7 @@
 
 #include <QFile>
 #include <QNetworkReply>
+#include <QSaveFile>
 #include <QtConcurrent>
 
 #ifndef signals
@@ -222,12 +223,21 @@ void NetworkTask::writeToCache(const QByteArray &bytes) const
             return;
         }
 
-        QFile cachedFile(app->getPaths().cacheDirectory() + "/" +
-                         data->getHash());
+        // Write atomically: QSaveFile writes to a temporary file and only
+        // renames it into place on commit(). A crash or interruption mid-write
+        // then leaves the previous cache entry (or nothing) intact instead of a
+        // truncated / 0-byte file. If the commit fails, just skip caching.
+        QSaveFile cachedFile(app->getPaths().cacheDirectory() + "/" +
+                             data->getHash());
 
         if (cachedFile.open(QIODevice::WriteOnly))
         {
             cachedFile.write(bytes);
+            if (!cachedFile.commit())
+            {
+                qCDebug(chatterinoHTTP)
+                    << "Failed to commit cache write for" << data->request.url();
+            }
         }
     });
 }

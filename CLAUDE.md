@@ -23,7 +23,9 @@ vcpkg alternative: `vcpkg install` then configure with `-DCMAKE_TOOLCHAIN_FILE="
 
 Run: `build-conan\bin\mergerino.exe`. To produce a standalone bundle: `windeployqt build-conan\bin\mergerino.exe --release --no-compiler-runtime --no-translations --no-opengl-sw --dir build-conan\bin`.
 
-Key CMake options (from `CMakeLists.txt`): `BUILD_TESTS`, `BUILD_BENCHMARKS`, `CHATTERINO_PLUGINS` (Lua/Sol2, on by default), `CHATTERINO_SPELLCHECK` (requires Hunspell — CI turns this on), `BUILD_WITH_CRASHPAD` (off by default, and off in the release workflow), `CHATTERINO_LTO`, `USE_PRECOMPILED_HEADERS`. `CMAKE_EXPORT_COMPILE_COMMANDS` is forced ON so every Ninja build drops a `compile_commands.json` for clangd / VS Code.
+Key CMake options (from `CMakeLists.txt`): `BUILD_TESTS`, `BUILD_BENCHMARKS`, `CHATTERINO_PLUGINS` (Lua/Sol2, on by default), `CHATTERINO_SPELLCHECK` (requires Hunspell — CI turns this on), `CHATTERINO_LTO`, `USE_PRECOMPILED_HEADERS`. `CMAKE_EXPORT_COMPILE_COMMANDS` is forced ON so every Ninja build drops a `compile_commands.json` for clangd / VS Code.
+
+**Build caching (sccache)**: `CMakeLists.txt` unconditionally `find_program`s `sccache` (falling back to `ccache`) and, if one is found on `PATH`, wires it in as `CMAKE_CXX_COMPILER_LAUNCHER` — this is not CI-only or behind an env var, so a local install is picked up automatically on the next configure. To use it: install the `sccache` binary (prebuilt Windows release from the mozilla/sccache releases page on GitHub, or `cargo install sccache --locked` / `scoop install sccache` if you have those toolchains), put it on `PATH`, then reconfigure — a fresh `build-conan` picks it up on first `cmake -S . -B build-conan ...`; an existing build dir needs its cache entry regenerated (delete `build-conan\CMakeCache.txt` or the whole directory) since `CMAKE_CXX_COMPILER_LAUNCHER` is a cache variable that won't be overwritten once set. Confirm it took via the `-- Using <path>\sccache.exe for speeding up build` CMake status line. Warm/incremental rebuilds that recompile TUs already built once (e.g. after a `build-conan` wipe, or switching branches) hit the cache instead of re-running the MSVC front end, so those TUs finish near-instantly instead of paying full compile cost again. To opt out even with `sccache` on `PATH`, pass `-DCMAKE_CXX_COMPILER_LAUNCHER=` on the first configure.
 
 ## Logging
 
@@ -42,6 +44,8 @@ ctest --repeat until-pass:4 --output-on-failure
 To run the binary directly: `./bin/chatterino-test` (test target name is unchanged from upstream). To run a single test, use GoogleTest filters: `./bin/chatterino-test --gtest_filter=TwitchAccount.*`.
 
 **Snapshot tests**: message-building changes frequently break snapshots. To refresh them, flip `UPDATE_SNAPSHOTS` to `true` at the top of `tests/src/IrcMessageHandler.cpp`, rerun tests, flip it back, rerun, then review the resulting JSON diffs in `tests/snapshots/`.
+
+There is a second, independent snapshot suite for EventSub messages in `tests/src/EventSubMessages.cpp`, refreshed the same way via its own `UPDATE_SNAPSHOTS` constant at the top of that file, with fixtures also under `tests/snapshots/`.
 
 Benchmarks live in `benchmarks/` and are gated behind `-DBUILD_BENCHMARKS=On` (Google Benchmark).
 
@@ -72,3 +76,10 @@ This is Chatterino2's architecture with Mergerino-specific additions. The big pi
 - `.git-blame-ignore-revs` lists bulk-reformat commits — use `git blame --ignore-revs-file=.git-blame-ignore-revs` when chasing history.
 - Licensing: REUSE-compliant. New C++ files should carry `SPDX-FileCopyrightText` + `SPDX-License-Identifier: MIT` headers (see existing files; Mergerino-new files use year 2026).
 - Keep new code inside the `chatterino` namespace — the fork has not renamed it.
+
+## Claude Code setup
+
+- `.claudeignore` at repo root excludes `build/`, `lib/` submodule trees, all binaries/debug artifacts, windeployqt plugin dirs, and CMake/Conan/FetchContent intermediate trees. Edit it if a new vendored submodule lands in `lib/`.
+- `/build` — slash command wrapping `.dev-cycle.bat` (kill + build + relaunch) and `.local-build.bat` (build only).
+- `/release-status` — slash command for `gh run` / `gh release view` against this repo's three workflows.
+- `settings.local.json` in `.claude/` grants `gh run *` and a temp deploy path; it is gitignored.

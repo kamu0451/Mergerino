@@ -31,6 +31,7 @@
 #include <unordered_set>
 
 namespace chatterino {
+enum class ActivityTimeDisplayMode : std::uint8_t;
 enum class HighlightState;
 enum class PlatformIndicatorMode : std::uint8_t;
 
@@ -44,6 +45,9 @@ using MessagePtr = std::shared_ptr<const Message>;
 
 class MessageLayout;
 using MessageLayoutPtr = std::shared_ptr<MessageLayout>;
+
+class Image;
+using ImagePtr = std::shared_ptr<Image>;
 
 enum class MessageElementFlag : int64_t;
 using MessageElementFlags = FlagsEnum<MessageElementFlag>;
@@ -123,6 +127,9 @@ public:
 
     void setEnableScrollingToBottom(bool);
     bool getEnableScrollingToBottom() const;
+    /// Enables/disables the decorative background floating emotes for this view.
+    /// On by default; turned off for non-chat views like the emote popup.
+    void setFloatingEmotesEnabled(bool);
     void setOverrideFlags(std::optional<MessageElementFlags> value);
     const std::optional<MessageElementFlags> &getOverrideFlags() const;
     void updateLastReadMessage();
@@ -218,6 +225,7 @@ public:
 
     void updateColorTheme();
     void refreshPlatformIndicatorMode();
+    void refreshActivityTimeDisplayMode();
 
     /// @brief Adjusts the colors this view uses
     ///
@@ -302,6 +310,13 @@ private:
                          bool causedByScrollbar, bool causedByShow);
 
     void drawMessages(QPainter &painter, const QRect &area);
+    /// Paints the decorative floating emotes behind the message list.
+    void drawFloatingEmotes(QPainter &painter);
+    /// Spawns floating emotes from an emote-only message (no-op if the feature
+    /// is off or the message isn't emote-only).
+    void spawnFloatingEmotes(const MessagePtr &message);
+    /// Drops floating emotes that have outlived their lifetime.
+    void pruneFloatingEmotes();
     void setSelection(const SelectionItem &start, const SelectionItem &end);
     void setSelection(const Selection &newSelection);
     void selectWholeMessage(MessageLayout *layout, int &messageIndex);
@@ -341,15 +356,21 @@ private:
     void updateID();
     void refreshMessageColors();
     bool isActivityPaneView() const;
+    bool shouldRefreshActivityTime() const;
+    void updateActivityTimeRefreshTimer();
     const MessageColors &effectiveMessageColors() const;
     float activityMessageScale() const;
     float activityMessageImageScale() const;
     PlatformIndicatorMode resolvedPlatformIndicatorMode() const;
+    ActivityTimeDisplayMode resolvedActivityTimeDisplayMode() const;
     ScrollbarHighlight scrollbarHighlightForMessage(
         const MessagePtr &message) const;
     std::optional<MessagePtr> transformActivityMessage(
         const MessagePtr &message, int &pendingGiftRecipients,
         bool &suppressNextAnnouncementMessage) const;
+    bool shouldDecorateStreamDatabaseMessage() const;
+    MessagePtr decorateStreamDatabaseMessage(const MessagePtr &message) const;
+    bool tryMergeActivityGiftMessage(const MessagePtr &message);
     void rebuildActivityMessages();
     void enqueueOrAddProxyMessage(
         const MessagePtr &message,
@@ -407,9 +428,26 @@ private:
         SteadyClock::time_point startedAt;
     };
 
+    /// One emote drifting across the chat background. Spawned from emote-only
+    /// messages when floatEmotesOnBackground is on; see drawFloatingEmotes().
+    struct FloatingEmote {
+        ImagePtr image;
+        SteadyClock::time_point spawnedAt;
+        int lifetimeMs = 0;
+        // Start position as a fraction of the view, [0, 1].
+        double startX = 0.0;
+        double startY = 0.0;
+        // Velocity in view-fractions per second (Bounce style only).
+        double velX = 0.0;
+        double velY = 0.0;
+    };
+    std::vector<FloatingEmote> floatingEmotes_;
+    bool floatingEmotesEnabled_ = true;
+
     bool pausable_ = false;
     QTimer pauseTimer_;
     QTimer slowChatTimer_;
+    QTimer activityTimeRefreshTimer_;
     QTimer messageLayoutShiftAnimationTimer_;
     QTimer messageArrivalAnimationTimer_;
     std::unordered_map<PauseReason, std::optional<SteadyClock::time_point>>
@@ -518,7 +556,7 @@ private:
     // channelConnections_ will be cleared when the underlying channel of the channelview changes
     pajlada::Signals::SignalHolder channelConnections_;
 
-    std::unordered_set<std::shared_ptr<MessageLayout>> messagesOnScreen_;
+    std::unordered_set<std::shared_ptr<MessageLayout>> messagesWithBuffers_;
 
     MessageColors messageColors_;
     MessageColors activityMessageColors_;

@@ -17,6 +17,7 @@
 #    include <QUrl>
 #    include <semver/semver.hpp>
 #    include <sol/forward.hpp>
+#    include <sol/protected_function.hpp>
 
 #    include <memory>
 #    include <optional>

@@ -66,6 +66,10 @@ public:
     // Returns true if the value has changed, otherwise false
     bool setOAuthToken(const QString &newOAuthToken);
 
+    // Attempts to update the users user ID
+    // Returns true if the value has changed, otherwise false
+    bool setUserId(const QString &newUserID);
+
     // Attempts to update the users username
     // Returns true if the value has changed, otherwise false
     bool setUserName(const QString &newUserName);
@@ -140,6 +144,14 @@ private:
     QString seventvUserID_;
 
     void tryLoadBlocks();
+
+    /// Backs reloadEmotes: performs one Helix pagination pass over the account's
+    /// owned emotes into @a emoteMap / @a sets, retrying the whole load on
+    /// failure up to a bounded number of times (tracked by @a attempt) before
+    /// committing whatever pages were fetched (STAB-06).
+    void tryReloadEmotes(void *caller, std::shared_ptr<EmoteMap> emoteMap,
+                         std::shared_ptr<TwitchEmoteSetMap> sets,
+                         std::shared_ptr<size_t> attempt);
 };
 
 }  // namespace chatterino

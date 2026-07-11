@@ -17,6 +17,7 @@
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/youtube/YouTubeAccount.hpp"
 #include "singletons/Resources.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/StreamerMode.hpp"
@@ -72,6 +73,8 @@ QString providerName(ProviderId provider)
     {
         case ProviderId::Kick:
             return "Kick";
+        case ProviderId::YouTube:
+            return "YouTube";
         case ProviderId::Twitch:
         default:
             return "Twitch";
@@ -84,10 +87,28 @@ QString providerIconPath(ProviderId provider)
     {
         case ProviderId::Kick:
             return ":/platforms/kick.svg";
+        case ProviderId::YouTube:
+            return ":/platforms/youtube.svg";
         case ProviderId::Twitch:
         default:
             return ":/platforms/twitch.svg";
     }
+}
+
+SvgButton::Src topMostDisabledSource()
+{
+    return {
+        .dark = ":/buttons/pinDisabled-darkMode.svg",
+        .light = ":/buttons/pinDisabled-lightMode.svg",
+    };
+}
+
+SvgButton::Src topMostEnabledSource()
+{
+    return {
+        .dark = ":/buttons/pinEnabled.svg",
+        .light = ":/buttons/pinEnabled.svg",
+    };
 }
 
 QString providerAccountLabel(ProviderId provider)
@@ -103,6 +124,18 @@ QString providerAccountLabel(ProviderId provider)
         return usernames.empty() ? "Log In" : "Anonymous";
     }
 
+    if (provider == ProviderId::YouTube)
+    {
+        const auto &accounts = getApp()->getAccounts()->youtube.accounts.raw();
+        const auto current = getApp()->getAccounts()->youtube.current();
+        if (!current->isAnonymous())
+        {
+            return current->displayName().isEmpty() ? current->channelID()
+                                                    : current->displayName();
+        }
+        return accounts.empty() ? "Log In" : "Anonymous";
+    }
+
     const auto usernames = getApp()->getAccounts()->twitch.getUsernames();
     const auto current = getApp()->getAccounts()->twitch.getCurrent();
     if (!current->isAnon())
@@ -113,85 +146,6 @@ QString providerAccountLabel(ProviderId provider)
 }
 
 }  // namespace
-
-class AccountTitlebarButton final : public Button
-{
-public:
-    explicit AccountTitlebarButton(ProviderId provider)
-        : provider_(provider)
-    {
-        this->setScaleIndependentHeight(30);
-        this->loadIcon();
-    }
-
-    void setProvider(ProviderId provider)
-    {
-        if (this->provider_ == provider)
-        {
-            return;
-        }
-
-        this->provider_ = provider;
-        this->loadIcon();
-        this->invalidateContent();
-    }
-
-    void setAccountText(const QString &text)
-    {
-        if (this->text_ == text)
-        {
-            return;
-        }
-
-        this->text_ = text;
-        this->refreshWidth();
-        this->invalidateContent();
-    }
-
-protected:
-    void paintContent(QPainter &painter) override
-    {
-        const auto scale = this->scale();
-        const int iconSize = int(16 * scale);
-        const int leftPadding = int(5 * scale);
-        const int gap = int(5 * scale);
-        const int textX = leftPadding + iconSize + gap;
-
-        QRectF iconRect{
-            QPointF(leftPadding, (this->height() - iconSize) / 2.0),
-            QSizeF(iconSize, iconSize)};
-        this->icon_.render(&painter, iconRect);
-
-        painter.setPen(this->theme->window.text);
-        painter.drawText(QRect{textX, 0, this->width() - textX - leftPadding,
-                               this->height()},
-                         Qt::AlignVCenter | Qt::AlignLeft, this->text_);
-    }
-
-    void scaleChangedEvent(float) override
-    {
-        this->refreshWidth();
-        this->invalidateContent();
-    }
-
-private:
-    void loadIcon()
-    {
-        this->icon_.load(providerIconPath(this->provider_));
-    }
-
-    void refreshWidth()
-    {
-        const QFontMetrics metrics(this->font());
-        const int width = int(32 * this->scale()) +
-                          metrics.horizontalAdvance(this->text_);
-        this->setFixedWidth(std::max(width, int(44 * this->scale())));
-    }
-
-    ProviderId provider_;
-    QString text_;
-    QSvgRenderer icon_;
-};
 
 Window::Window(WindowType type, QWidget *parent)
     : BaseWindow(
@@ -214,6 +168,10 @@ Window::Window(WindowType type, QWidget *parent)
         }));
     this->signalHolder_.managedConnect(
         getApp()->getAccounts()->kick.currentUserChanged, [this] {
+            this->onAccountSelected();
+        });
+    this->signalHolder_.managedConnect(
+        getApp()->getAccounts()->youtube.currentUserChanged, [this] {
             this->onAccountSelected();
         });
     this->signalHolder_.managedConnect(
@@ -359,6 +317,53 @@ void Window::addCustomTitlebarButtons()
         return;
     }
 
+    this->bulkClearTitlebarButton_ = this->addTitleBarButton<SvgButton>(
+        [this] {
+            this->notebook_->clearBulkSelectedTabs();
+        },
+        SvgButton::Src{
+            .dark = ":/buttons/x-darkMode.svg",
+            .light = ":/buttons/x-lightMode.svg",
+        },
+        this);
+    this->bulkClearTitlebarButton_->setPadding({0, 0});
+    this->bulkClearTitlebarButton_->setContentSize(QSize{16, 16});
+    this->bulkClearTitlebarButton_->setHidden(true);
+    this->bulkClearTitlebarButton_->setToolTip("Deselect selected tabs");
+
+    this->bulkDeleteTitlebarButton_ = this->addTitleBarButton<SvgButton>(
+        [this] {
+            this->notebook_->removeBulkSelectedTabs();
+        },
+        SvgButton::Src{
+            .dark = ":/buttons/trash-darkMode.svg",
+            .light = ":/buttons/trash-lightMode.svg",
+        },
+        this);
+    this->bulkDeleteTitlebarButton_->setPadding({0, 0});
+    this->bulkDeleteTitlebarButton_->setContentSize(QSize{16, 16});
+    this->bulkDeleteTitlebarButton_->setHidden(true);
+    this->bulkDeleteTitlebarButton_->setToolTip("Delete selected tabs");
+    this->signalHolder_.managedConnect(
+        this->notebook_->bulkSelectionChanged, [this] {
+            this->updateBulkSelectionTitlebarButton();
+        });
+    this->updateBulkSelectionTitlebarButton();
+
+    this->topMostTitlebarButton_ = this->addTitleBarButton<SvgButton>(
+        [this] {
+            this->setTopMost(!this->isTopMost());
+        },
+        topMostDisabledSource(), this);
+    this->topMostTitlebarButton_->setPadding({0, 0});
+    this->topMostTitlebarButton_->setContentSize(QSize{14, 14});
+    this->topMostTitlebarButton_->setToolTip("Pin Application");
+    QObject::connect(this, &BaseWindow::topMostChanged, this,
+                     [this](bool) {
+                         this->updateTopMostTitlebarButton();
+                     });
+    this->updateTopMostTitlebarButton();
+
     // settings
     this->addTitleBarButton<TitleBarButton>(
         [this] {
@@ -468,40 +473,37 @@ void Window::addCustomTitlebarButtons()
     this->updateStreamerModeIcon();
 }
 
-void Window::showUpdateDialog()
+void Window::updateTopMostTitlebarButton()
 {
-    if (this->updateTitlebarButton_ == nullptr ||
-        getApp()->getUpdates().getStatus() != Updates::UpdateAvailable)
+    if (!this->topMostTitlebarButton_)
     {
         return;
     }
 
-    auto *dialog = new UpdateDialog();
-    auto globalPoint = this->updateTitlebarButton_->mapToGlobal(
-        QPoint(int(-100 * this->scale()),
-               this->updateTitlebarButton_->height()));
-
-    if (globalPoint.x() < 0)
-    {
-        globalPoint.setX(0);
-    }
-
-    dialog->moveTo(globalPoint, widgets::BoundsChecking::DesiredPosition);
-    dialog->show();
-    dialog->raise();
+    this->topMostTitlebarButton_->setSource(
+        this->isTopMost() ? topMostEnabledSource() : topMostDisabledSource());
 }
 
-void Window::updateTitlebarUpdateButton()
+void Window::updateBulkSelectionTitlebarButton()
 {
-    if (this->updateTitlebarButton_ == nullptr)
+    if (this->bulkClearTitlebarButton_ == nullptr ||
+        this->bulkDeleteTitlebarButton_ == nullptr)
     {
         return;
     }
 
-    const auto shouldShow = getApp()->getUpdates().shouldShowUpdateButton();
-    this->updateTitlebarButton_->setVisible(shouldShow);
-    this->updateTitlebarButton_->setToolTip(
-        shouldShow ? "Install Mergerino update" : QString());
+    const auto selectedCount = this->notebook_->bulkSelectedTabCount();
+    const auto shouldShow = selectedCount > 0;
+    this->bulkClearTitlebarButton_->setHidden(!shouldShow);
+    this->bulkDeleteTitlebarButton_->setHidden(!shouldShow);
+    this->bulkClearTitlebarButton_->setToolTip(
+        shouldShow ? QStringLiteral("Deselect selected tabs") : QString());
+    this->bulkDeleteTitlebarButton_->setToolTip(
+        shouldShow ? QStringLiteral("Delete %1 selected tab%2")
+                         .arg(selectedCount)
+                         .arg(selectedCount == 1 ? QString()
+                                                 : QStringLiteral("s"))
+                   : QString());
 }
 
 void Window::updateStreamerModeIcon()
@@ -1090,14 +1092,6 @@ void Window::onAccountSelected()
             });
         this->userPlatformButton_->setToolTip(
             QString("Switch %1 account").arg(providerName(provider)));
-    }
-
-    if (this->accountTitlebarButton_)
-    {
-        this->accountTitlebarButton_->setProvider(provider);
-        this->accountTitlebarButton_->setAccountText(accountLabel);
-        this->accountTitlebarButton_->setToolTip(
-            QString("%1 account").arg(providerName(provider)));
     }
 }
 

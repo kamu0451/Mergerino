@@ -4,6 +4,7 @@
 
 #include <QBrush>
 #include <QFont>
+#include <QMarginsF>
 
 #include <vector>
 
@@ -18,6 +19,7 @@ public:
 
     QPixmap getPixmap(const QString &text, const QFont &font, QColor userColor,
                       QSizeF size, float scale, float dpr) const;
+    QMarginsF pixmapPadding(float scale, float dpr) const;
 
     Paint(QString id)
         : id(std::move(id)) {};

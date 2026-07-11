@@ -113,6 +113,12 @@ struct Message {
         NotReplyableDueToThread,
     };
     ReplyStatus isReplyable() const;
+
+    /// Returns true if the visible body of this message consists solely of
+    /// emotes/emoji (Twitch/7TV/BTTV/FFZ/Unicode -- all flagged uniformly),
+    /// with no text/mentions/links and at least one emote present.
+    bool isEmoteOnly() const;
+
     uint32_t count = 1;
 
     /// Can this message be modified?
@@ -135,6 +141,7 @@ struct Message {
     std::shared_ptr<ChannelPointReward> reward = nullptr;
 
     uint32_t bits{0};
+    uint32_t giftedSubscriptionRecipientCount{0};
     uint64_t kickGiftKicks{0};
 
     /// Diamond value of a TikTok gift attached to this message. Zero for

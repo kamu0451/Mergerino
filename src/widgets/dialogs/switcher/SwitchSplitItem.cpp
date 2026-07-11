@@ -48,12 +48,14 @@ void SwitchSplitItem::paint(QPainter *painter, const QRect &rect) const
     QRect iconRect(rect.topLeft(), ICON_SIZE);
     this->icon_.paint(painter, iconRect, Qt::AlignLeft | Qt::AlignVCenter);
 
+    constexpr int iconTextSpacing = 2;
     if (this->split_)
     {
         // Draw channel name and name of the containing tab
-        const auto availableTextWidth = rect.width() - iconRect.width();
+        const auto availableTextWidth =
+            rect.width() - iconRect.width() - iconTextSpacing;
         QRect leftTextRect =
-            QRect(iconRect.topRight(),
+            QRect(iconRect.topRight() + QPoint(iconTextSpacing, 0),
                   QSize(0.3 * availableTextWidth, iconRect.height()));
 
         painter->drawText(leftTextRect, Qt::AlignLeft | Qt::AlignVCenter,
@@ -72,8 +74,9 @@ void SwitchSplitItem::paint(QPainter *painter, const QRect &rect) const
     {
         // Only draw name of tab
         QRect textRect =
-            QRect(iconRect.topRight(),
-                  QSize(rect.width() - iconRect.width(), iconRect.height()));
+            QRect(iconRect.topRight() + QPoint(iconTextSpacing, 0),
+                  QSize(rect.width() - iconRect.width() - iconTextSpacing,
+                        iconRect.height()));
 
         painter->drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter,
                           this->container_->getTab()->getTitle());

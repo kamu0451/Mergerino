@@ -990,6 +990,7 @@ TEST_F(PluginTest, MessageElementFlag)
                          "BadgeChatterino=0x40000,"
                          "BadgeFfz=0x80000,"
                          "BadgeGlobalAuthority=0x2000,"
+                         "BadgeKickLevel=0x80,"
                          "BadgePredictions=0x4000,"
                          "BadgeSevenTV=0x1000000000,"
                          "BadgeSharedChannel=0x2000000000,"

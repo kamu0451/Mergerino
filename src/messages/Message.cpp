@@ -6,6 +6,7 @@
 
 #include "Application.hpp"
 #include "common/Literals.hpp"
+#include "messages/MessageElement.hpp"
 #include "messages/MessageThread.hpp"
 #include "providers/colors/ColorProvider.hpp"
 #include "providers/twitch/TwitchBadge.hpp"
@@ -62,6 +63,8 @@ std::shared_ptr<QColor> platformHighlightColor(const Message &message,
                                                    platformIndicatorMode,
                                                bool useActivityPlatformHighlightColors)
 {
+    auto base = ColorProvider::instance().color(colorType);
+
     if (useActivityPlatformHighlightColors)
     {
         if (!mergedPlatformIndicatorShowsLineColor(platformIndicatorMode))
@@ -72,7 +75,6 @@ std::shared_ptr<QColor> platformHighlightColor(const Message &message,
         return std::make_shared<QColor>(activityPlatformHighlightColor(message));
     }
 
-    auto base = ColorProvider::instance().color(colorType);
     if (!base || !base->isValid())
     {
         return base;
@@ -93,7 +95,9 @@ std::shared_ptr<QColor> platformHighlightColor(const Message &message,
         }
     }
 
-    if (colorType == ColorType::FirstMessageHighlight)
+    if (message.platform == MessagePlatform::AnyOrTwitch &&
+        (colorType == ColorType::FirstMessageHighlight ||
+         colorType == ColorType::Subscription))
     {
         return std::make_shared<QColor>(*base);
     }
@@ -327,6 +331,8 @@ std::shared_ptr<Message> Message::clone() const
     cloned->reward = this->reward;
     cloned->platform = this->platform;
     cloned->bits = this->bits;
+    cloned->giftedSubscriptionRecipientCount =
+        this->giftedSubscriptionRecipientCount;
     cloned->kickGiftKicks = this->kickGiftKicks;
     cloned->tiktokGiftDiamondCount = this->tiktokGiftDiamondCount;
     cloned->tiktokActivityKind = this->tiktokActivityKind;
@@ -402,6 +408,11 @@ QJsonObject Message::toJson() const
     {
         msg["bits"_L1] = static_cast<qint64>(this->bits);
     }
+    if (this->giftedSubscriptionRecipientCount > 0)
+    {
+        msg["giftedSubscriptionRecipientCount"_L1] =
+            static_cast<qint64>(this->giftedSubscriptionRecipientCount);
+    }
     if (this->kickGiftKicks > 0)
     {
         msg["kickGiftKicks"_L1] =
@@ -432,6 +443,41 @@ QJsonObject Message::toJson() const
     }
 
     return msg;
+}
+
+bool Message::isEmoteOnly() const
+{
+    // A cheer's visible body is its cheermote(s) plus any emotes, so it would
+    // otherwise satisfy the emote-only check below and get hidden by "hide
+    // emote-only messages" -- but it's a paid bits message, not emote spam.
+    if (this->flags.has(MessageFlag::CheerMessage) || this->bits > 0)
+    {
+        return false;
+    }
+
+    bool hasEmote = false;
+    for (const auto &element : this->elements)
+    {
+        const auto flags = element->getFlags();
+
+        // Any real text -- words, @mentions, links -- disqualifies the message.
+        // Chrome elements (username, timestamp, badges, ...) carry no Text flag
+        // so they're ignored. Note: emoji use the distinct EmojiText bit, not
+        // this Text bit, so they aren't caught here.
+        if (flags.has(MessageElementFlag::Text))
+        {
+            return false;
+        }
+
+        // Every emote provider (Twitch/7TV/BTTV/FFZ) is flagged Emote; Unicode
+        // emoji are flagged EmojiAll. Either counts as emote content.
+        if (flags.hasAny(MessageElementFlag::Emote) ||
+            flags.hasAny(MessageElementFlag::EmojiAll))
+        {
+            hasEmote = true;
+        }
+    }
+    return hasEmote;
 }
 
 Message::ReplyStatus Message::isReplyable() const

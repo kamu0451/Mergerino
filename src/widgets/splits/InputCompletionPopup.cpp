@@ -4,14 +4,20 @@
 
 #include "widgets/splits/InputCompletionPopup.hpp"
 
+#include "controllers/completion/sources/CommandSource.hpp"
 #include "controllers/completion/sources/UserSource.hpp"
 #include "controllers/completion/strategies/ClassicEmoteStrategy.hpp"
 #include "controllers/completion/strategies/ClassicUserStrategy.hpp"
+#include "controllers/completion/strategies/CommandStrategy.hpp"
 #include "controllers/completion/strategies/SmartEmoteStrategy.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
 #include "util/LayoutCreator.hpp"
 #include "widgets/splits/InputCompletionItem.hpp"
+
+#include <QApplication>
+#include <QMouseEvent>
+#include <QWidget>
 
 namespace chatterino {
 
@@ -33,14 +39,16 @@ InputCompletionPopup::InputCompletionPopup(QWidget *parent)
     this->redrawTimer_.setInterval(33);
 }
 
-void InputCompletionPopup::updateCompletion(const QString &text,
-                                            CompletionKind kind,
-                                            ChannelPtr channel)
+void InputCompletionPopup::updateCompletion(
+    const QString &text, CompletionKind kind, ChannelPtr channel,
+    std::vector<MessagePlatform> platformFilter)
 {
-    if (this->currentKind_ != kind || this->currentChannel_ != channel)
+    if (this->currentKind_ != kind || this->currentChannel_ != channel ||
+        this->currentPlatformFilter_ != platformFilter)
     {
         // New completion context
-        this->beginCompletion(kind, std::move(channel));
+        this->beginCompletion(kind, std::move(channel),
+                              std::move(platformFilter));
     }
 
     assert(this->model_.hasSource());
@@ -65,18 +73,22 @@ std::unique_ptr<completion::Source> InputCompletionPopup::getSource() const
     // Currently, strategies are hard coded.
     switch (*this->currentKind_)
     {
+        case CompletionKind::Command:
+            return std::make_unique<completion::CommandSource>(
+                std::make_unique<completion::CommandStrategy>(true),
+                this->callback_, this->currentChannel_.get(), true);
         case CompletionKind::Emote:
             if (getSettings()->useSmartEmoteCompletion)
             {
                 return std::make_unique<completion::EmoteSource>(
                     this->currentChannel_.get(),
                     std::make_unique<completion::SmartEmoteStrategy>(),
-                    this->callback_);
+                    this->callback_, this->currentPlatformFilter_);
             }
             return std::make_unique<completion::EmoteSource>(
                 this->currentChannel_.get(),
                 std::make_unique<completion::ClassicEmoteStrategy>(),
-                this->callback_);
+                this->callback_, this->currentPlatformFilter_);
         case CompletionKind::User:
             return std::make_unique<completion::UserSource>(
                 this->currentChannel_.get(),
@@ -87,11 +99,13 @@ std::unique_ptr<completion::Source> InputCompletionPopup::getSource() const
     }
 }
 
-void InputCompletionPopup::beginCompletion(CompletionKind kind,
-                                           ChannelPtr channel)
+void InputCompletionPopup::beginCompletion(
+    CompletionKind kind, ChannelPtr channel,
+    std::vector<MessagePlatform> platformFilter)
 {
     this->currentKind_ = kind;
     this->currentChannel_ = std::move(channel);
+    this->currentPlatformFilter_ = std::move(platformFilter);
     this->model_.setSource(this->getSource());
 }
 
@@ -99,6 +113,7 @@ void InputCompletionPopup::endCompletion()
 {
     this->currentKind_ = std::nullopt;
     this->currentChannel_ = nullptr;
+    this->currentPlatformFilter_.clear();
     this->model_.setSource(nullptr);
 }
 
@@ -109,16 +124,34 @@ void InputCompletionPopup::setInputAction(ActionCallback callback)
 
 bool InputCompletionPopup::eventFilter(QObject *watched, QEvent *event)
 {
+    if (this->isVisible() && event->type() == QEvent::MouseButtonPress)
+    {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::LeftButton)
+        {
+            auto *widget = qobject_cast<QWidget *>(watched);
+            if (widget == nullptr ||
+                (widget != this && !this->isAncestorOf(widget)))
+            {
+                this->hide();
+            }
+
+            return false;
+        }
+    }
+
     return this->ui_.listView->eventFilter(watched, event);
 }
 
 void InputCompletionPopup::showEvent(QShowEvent * /*event*/)
 {
+    QApplication::instance()->installEventFilter(this);
     this->redrawTimer_.start();
 }
 
 void InputCompletionPopup::hideEvent(QHideEvent * /*event*/)
 {
+    QApplication::instance()->removeEventFilter(this);
     this->redrawTimer_.stop();
     this->endCompletion();
 }

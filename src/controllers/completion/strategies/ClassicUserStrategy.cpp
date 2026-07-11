@@ -4,6 +4,8 @@
 
 #include "controllers/completion/strategies/ClassicUserStrategy.hpp"
 
+#include <algorithm>
+
 namespace chatterino::completion {
 
 void ClassicUserStrategy::apply(const std::vector<UserItem> &items,
@@ -23,5 +25,16 @@ void ClassicUserStrategy::apply(const std::vector<UserItem> &items,
             output.push_back(item);
         }
     }
+
+    std::ranges::sort(output, [](const UserItem &lhs, const UserItem &rhs) {
+        const auto displayCompare =
+            QString::compare(lhs.second, rhs.second, Qt::CaseInsensitive);
+        if (displayCompare != 0)
+        {
+            return displayCompare < 0;
+        }
+
+        return QString::compare(lhs.first, rhs.first, Qt::CaseInsensitive) < 0;
+    });
 }
 }  // namespace chatterino::completion

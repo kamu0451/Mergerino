@@ -25,6 +25,18 @@ namespace chatterino::tiktok {
 // on string payloads.
 constexpr std::wstring_view kInjectScript = LR"JS(
 (function () {
+    // Origin gate: this script is injected into every document
+    // (AddScriptToExecuteOnDocumentCreated runs on all frames and on
+    // whatever origin the webview lands on). Only wire the postMessage
+    // bridge + socket/fetch hooks when we are actually on TikTok. If a
+    // redirect or embedded frame puts us on another origin, bail out with
+    // no listeners so an attacker page can never reach the native host.
+    let host = '';
+    try {
+        host = String((location && location.hostname) || '').toLowerCase();
+    } catch (e) { return; }
+    if (host !== 'tiktok.com' && !host.endsWith('.tiktok.com')) { return; }
+
     const Native = window.WebSocket;
     if (!Native || Native.__mergerinoPatched) { return; }
 

@@ -24,6 +24,7 @@
 #include <QThreadPool>
 #include <QTimer>
 #include <QtConcurrent>
+#include <QUrl>
 
 #include <algorithm>
 #include <atomic>
@@ -174,6 +175,28 @@ QString fromWide(const wchar_t *data)
         return {};
     }
     return QString::fromWCharArray(data);
+}
+
+// Navigation pinning: the hidden host must never leave TikTok. A
+// TikTok-controlled redirect (ad, compromised embed) could otherwise steer
+// the bridge-injected webview to an attacker page that then talks to our
+// native host. Allow only https URLs whose host is tiktok.com or a subdomain
+// of it; login flows legitimately traverse *.tiktok.com (accounts / www).
+bool isAllowedTikTokUrl(const QString &url)
+{
+    const QUrl parsed(url, QUrl::StrictMode);
+    if (!parsed.isValid())
+    {
+        return false;
+    }
+    if (parsed.scheme().compare(QStringLiteral("https"),
+                                Qt::CaseInsensitive) != 0)
+    {
+        return false;
+    }
+    const QString host = parsed.host().toLower();
+    return host == QStringLiteral("tiktok.com") ||
+           host.endsWith(QStringLiteral(".tiktok.com"));
 }
 
 // One ICoreWebView2Environment is reusable across many controllers; sharing
@@ -387,6 +410,8 @@ struct TikTokLiveChat::Impl {
     ComPtr<ICoreWebView2Controller> controller;
     ComPtr<ICoreWebView2> webview;
     EventRegistrationToken navToken{};
+    EventRegistrationToken navStartToken{};
+    EventRegistrationToken newWindowToken{};
     EventRegistrationToken msgToken{};
     EventRegistrationToken resReqToken{};
     // Number of times CreateCoreWebView2Controller has come back with
@@ -476,6 +501,14 @@ struct TikTokLiveChat::Impl {
             if (navToken.value != 0)
             {
                 webview->remove_NavigationCompleted(navToken);
+            }
+            if (navStartToken.value != 0)
+            {
+                webview->remove_NavigationStarting(navStartToken);
+            }
+            if (newWindowToken.value != 0)
+            {
+                webview->remove_NewWindowRequested(newWindowToken);
             }
             if (msgToken.value != 0)
             {
@@ -752,14 +785,30 @@ void TikTokLiveChat::start()
                          // this user - i.e. they aren't live. Otherwise we
                          // have a roomId_ but no chat/check_alive activity,
                          // which is the actual "stuck" case.
-                         const QString msg =
-                             this->roomId_.isEmpty()
-                                 ? QStringLiteral("TikTok: %1 is not live")
-                                       .arg(this->username_)
-                                 : QStringLiteral(
-                                       "TikTok live chat unavailable "
-                                       "(no response from room)");
-                         this->setStatusText(msg, true);
+                         if (this->roomId_.isEmpty())
+                         {
+                             this->setStatusText(
+                                 QStringLiteral("TikTok: %1 is not live")
+                                     .arg(this->username_),
+                                 true);
+                         }
+                         else
+                         {
+                             // A room was pinned (room/enter or room/info
+                             // succeeded) but no chat/check_alive activity
+                             // ever confirmed liveness - the room-info
+                             // fetch/poll stopped producing evidence, so
+                             // this source can no longer receive chat.
+                             qCWarning(chatterinoTikTok).nospace()
+                                 << "[" << this->username_
+                                 << "] room-info watchdog fired: no "
+                                    "response from room";
+                             this->setStatusText(
+                                 QStringLiteral(
+                                     "TikTok live chat unavailable "
+                                     "(no response from room)"),
+                                 true);
+                         }
                          this->setLive(false);
                          this->armOfflineRecheck();
                      });
@@ -1069,15 +1118,33 @@ void TikTokLiveChat::launchControllerCreate()
                                             srcStr = fromWide(src);
                                             CoTaskMemFree(src);
                                         }
-                                        qCDebug(chatterinoTikTok).nospace()
-                                            << "[" << this->username_
-                                            << "] NavigationCompleted ok="
-                                            << static_cast<bool>(ok)
-                                            << " webErrorStatus="
-                                            << static_cast<int>(errorStatus)
-                                            << " source=" << srcStr;
-                                        if (!ok)
+                                        if (ok)
                                         {
+                                            qCDebug(chatterinoTikTok).nospace()
+                                                << "[" << this->username_
+                                                << "] NavigationCompleted ok="
+                                                << static_cast<bool>(ok)
+                                                << " webErrorStatus="
+                                                << static_cast<int>(
+                                                       errorStatus)
+                                                << " source=" << srcStr;
+                                        }
+                                        else
+                                        {
+                                            // Navigation failing means the
+                                            // hidden host never loaded
+                                            // TikTok's page, so this source
+                                            // cannot receive chat - warn so
+                                            // it shows up in a Release
+                                            // --log-file capture.
+                                            qCWarning(chatterinoTikTok)
+                                                    .nospace()
+                                                << "[" << this->username_
+                                                << "] navigation failed, "
+                                                << "webErrorStatus="
+                                                << static_cast<int>(
+                                                       errorStatus)
+                                                << " source=" << srcStr;
                                             this->setStatusText(
                                                 QStringLiteral(
                                                     "TikTok: navigation failed"),
@@ -1087,6 +1154,78 @@ void TikTokLiveChat::launchControllerCreate()
                                     })
                                     .Get(),
                                 &this->impl_->navToken);
+
+                            // NavigationStarting: pin the hidden host to
+                            // TikTok. Cancel any top-level navigation that
+                            // isn't https on tiktok.com / *.tiktok.com (login
+                            // legitimately traverses accounts / www
+                            // subdomains). A TikTok-controlled redirect could
+                            // otherwise land the bridge-injected webview on an
+                            // attacker page.
+                            this->impl_->webview->add_NavigationStarting(
+                                Callback<
+                                    ICoreWebView2NavigationStartingEventHandler>(
+                                    [this, guard](
+                                        ICoreWebView2 *,
+                                        ICoreWebView2NavigationStartingEventArgs
+                                            *args) -> HRESULT {
+                                        if (guard.expired())
+                                        {
+                                            return S_OK;
+                                        }
+                                        LPWSTR uri = nullptr;
+                                        QString uriStr;
+                                        if (args != nullptr &&
+                                            SUCCEEDED(args->get_Uri(&uri)) &&
+                                            uri != nullptr)
+                                        {
+                                            uriStr = fromWide(uri);
+                                            CoTaskMemFree(uri);
+                                        }
+                                        if (!isAllowedTikTokUrl(uriStr))
+                                        {
+                                            qCWarning(chatterinoTikTok).nospace()
+                                                << "[" << this->username_
+                                                << "] blocked navigation off "
+                                                   "TikTok: "
+                                                << uriStr;
+                                            if (args != nullptr)
+                                            {
+                                                args->put_Cancel(TRUE);
+                                            }
+                                        }
+                                        return S_OK;
+                                    })
+                                    .Get(),
+                                &this->impl_->navStartToken);
+
+                            // NewWindowRequested: the hidden host never opens
+                            // popups. Handle the request without creating a
+                            // window so a TikTok-triggered window.open /
+                            // target=_blank can't spawn an unpinned webview.
+                            this->impl_->webview->add_NewWindowRequested(
+                                Callback<
+                                    ICoreWebView2NewWindowRequestedEventHandler>(
+                                    [this, guard](
+                                        ICoreWebView2 *,
+                                        ICoreWebView2NewWindowRequestedEventArgs
+                                            *args) -> HRESULT {
+                                        if (guard.expired())
+                                        {
+                                            return S_OK;
+                                        }
+                                        if (args != nullptr)
+                                        {
+                                            args->put_Handled(TRUE);
+                                        }
+                                        qCWarning(chatterinoTikTok).nospace()
+                                            << "[" << this->username_
+                                            << "] blocked TikTok popup "
+                                               "(NewWindowRequested)";
+                                        return S_OK;
+                                    })
+                                    .Get(),
+                                &this->impl_->newWindowToken);
 
                             // WebMessageReceived: payloads from the JS hook
                             this->impl_->webview->add_WebMessageReceived(
@@ -1773,8 +1912,13 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
     }
     if (kind == QStringLiteral("ws-close"))
     {
-        qCDebug(chatterinoTikTok)
-            << "ws-close code=" << obj.value(QStringLiteral("code")).toInt();
+        // The webcast WebSocket closing is the primary signal that this
+        // TikTok source stopped receiving chat - surface it at warning so
+        // it shows up in a Release --log-file capture, not just debug
+        // builds.
+        qCWarning(chatterinoTikTok).nospace()
+            << "[" << this->username_ << "] websocket closed unexpectedly, "
+            << "code=" << obj.value(QStringLiteral("code")).toInt();
         if (this->impl_)
         {
             this->impl_->stuckConnectionTimer.stop();
@@ -1787,7 +1931,10 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
     }
     if (kind == QStringLiteral("ws-error"))
     {
-        qCDebug(chatterinoTikTok) << "ws-error";
+        // Same reasoning as ws-close: a websocket error means this source
+        // can no longer receive chat, so it belongs at warning level.
+        qCWarning(chatterinoTikTok)
+            << "[" << this->username_ << "] websocket error";
         if (this->impl_)
         {
             this->impl_->stuckConnectionTimer.stop();

@@ -30,6 +30,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
+    void closeFromEscapeShortcut();
 
     /// Creates a pin button that is scoped to this window.
     /// When clicked, the user can toggle whether the window is pinned.

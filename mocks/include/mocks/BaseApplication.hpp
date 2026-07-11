@@ -10,6 +10,7 @@
 #include "singletons/Theme.hpp"
 
 #include <QString>
+#include <QTemporaryDir>
 
 namespace chatterino::mock {
 
@@ -25,6 +26,10 @@ public:
         , theme(this->paths_)
         , fonts(this->settings)
     {
+        // Paths::cacheDirectory() falls back to this setting before the
+        // real per-machine cache directory, so redirect it into a temp dir
+        // to keep cache-related tests out of the user's real profile.
+        this->settings.cachePath = this->cacheDir.path();
     }
 
     explicit BaseApplication(const QString &settingsData)
@@ -34,6 +39,7 @@ public:
         , theme(this->paths_)
         , fonts(this->settings)
     {
+        this->settings.cachePath = this->cacheDir.path();
     }
 
     Updates &getUpdates() override
@@ -78,6 +84,7 @@ public:
     Theme theme;
     Fonts fonts;
     TwitchUsers twitchUsers;
+    QTemporaryDir cacheDir;
 };
 
 }  // namespace chatterino::mock

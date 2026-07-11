@@ -1,15 +1,88 @@
 Patch Notes
 
+26/06/2026
+- Added StreamDatabase live badge feed feature
+- Added Mergerino Discord links
+- Added Folders to tab options
+- Added Twitch chat identity menu
+- Added Kick level badges setting
+- Added chat mode indicator
+- Fixed a bug causing F5 to not refresh Twitch and Kick chat
+- Improved Anonymous mode behaviour
+- Improved Kick chat performance
+- Improved platform swap in chatbox behaviour
+- QoL and general app improvements
+
+07/06/2026
+- Added global message animation setting
+- Added command autocomplete to the chatbox
+- Added informational pictures to Kick sign in onboard process
+- Added manual check for update setting
+- Added Moderator and VIP categories to viewer list
+- Added poll button to chatbox
+- Added prediction button to chatbox
+- Fixed a bug causing activity tab toggle to reconnect YouTube chat
+- Fixed a bug causing YouTube chat to not display new messages
+
+05/06/2026
+- Added improved viewer count setting
+- Added improved prediction command
+- Added improved poll command
+- Updated YouTube chat from 'Top' to 'All' displayed messages
+- Fixed a bug where truncated links showed incomplete in YouTube chat
+- Improved Chatterino import functionality
+- Improved UI menu behaviour
+- Improved YouTube chat connectivity when channels go live
+
+22/05/2026
+- Added membership badges and colours to YouTube chat
+- Added relative time display option to activity tabs
+- Fixed a bug causing logos to not appear on activity tab
+- Fixed a bug causing mention menu to not appear
+- Fixed a bug causing split tab settings not showing
+
+17/05/2026
+- Added custom channel subscriber badges to Kick
+- Added 'None' to platform style options
+- Added pin application option
+- Improved platform swap chatbox hotkey behaviour
+- Disabled message animations when searching
+- Fixed a bug causing messages to not live-update in user cards
+
+11/05/2026
+- Added YouTube OAuth sign in
+- Added YouTube chatting support and moderation tools
+- Added Chatterino import for settings, tabs, accounts etc
+- Added open stream in browser to tabs
+- Added multi-platform selector menu when 3+ platforms are live
+- Added hotkey to swap platforms within chat (Ctrl + D)
+- Added local Twitch login flow
+- Added default platform selection from the quick account menu
+- Added bulk tab selection to drag or delete (Ctrl/Shift)
+- Improved UI elements and error messages
+- Updated default platform highlight to logos
+- Fixed a bug causing logout to swap the user to anonymous
+
+07/05/2026
+- Added Export Chat setting
+- Added patch notes popup after updating
+- Added log user setting
+- Added viewerlist for Moderators
+- Added Twitch predictions and polls (read only)
+- Added multi-search function to logs and viewerlist
+- Fixed a bug causing YouTube streams to show as live after ending
+- Improved YouTube chat performance
+
 29/04/2026
 - Added recent message history
 - Added uptime to stream info preview
 - Added usercards for all platforms
-- Added mod actions for Kick
+- Added mod tools for Kick
 - Added reply to message function
 - Added multi-platform chat mode
 - Added emoji rendering to YouTube chat
 - Improved YouTube livestream fetching
-- Improved emote tab
+- Improved emote menu
 
 27/04/2026
 - Added auto update

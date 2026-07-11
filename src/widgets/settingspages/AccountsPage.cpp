@@ -12,9 +12,17 @@
 #include "widgets/dialogs/LoginDialog.hpp"
 #include "widgets/helper/EditableModelView.hpp"
 
+#include <QDesktopServices>
 #include <QDialogButtonBox>
+#include <QFrame>
 #include <QHeaderView>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QPointer>
+#include <QPushButton>
 #include <QTableView>
+#include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 
 #include <algorithm>

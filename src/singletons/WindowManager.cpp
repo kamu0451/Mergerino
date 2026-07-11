@@ -23,11 +23,13 @@
 #include "widgets/AccountSwitchPopup.hpp"
 #include "widgets/dialogs/SettingsDialog.hpp"
 #include "widgets/FramelessEmbedWindow.hpp"
+#include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/NotebookTab.hpp"
 #include "widgets/Notebook.hpp"
 #include "widgets/OverlayWindow.hpp"
 #include "widgets/splits/Split.hpp"
 #include "widgets/splits/SplitContainer.hpp"
+#include "widgets/splits/SplitInput.hpp"
 #include "widgets/Window.hpp"
 
 #include <pajlada/settings/backup.hpp>
@@ -41,6 +43,7 @@
 
 #include <chrono>
 #include <optional>
+#include <vector>
 
 namespace {
 
@@ -76,6 +79,53 @@ const QString WindowManager::WINDOW_LAYOUT_FILENAME(
     QStringLiteral("window-layout.json"));
 
 using SplitNode = SplitContainer::Node;
+
+namespace {
+
+QString platformIndicatorModeName(PlatformIndicatorMode mode)
+{
+    switch (mode)
+    {
+        case PlatformIndicatorMode::None:
+            return QStringLiteral("none");
+        case PlatformIndicatorMode::LineColor:
+            return QStringLiteral("linecolor");
+        case PlatformIndicatorMode::Badge:
+            return QStringLiteral("badge");
+        case PlatformIndicatorMode::Both:
+            return QStringLiteral("both");
+    }
+
+    return QStringLiteral("linecolor");
+}
+
+QString messagePlatformName(MessagePlatform platform)
+{
+    switch (platform)
+    {
+        case MessagePlatform::Kick:
+            return QStringLiteral("kick");
+        case MessagePlatform::YouTube:
+            return QStringLiteral("youtube");
+        case MessagePlatform::TikTok:
+            return QStringLiteral("tiktok");
+        case MessagePlatform::AnyOrTwitch:
+        default:
+            return QStringLiteral("twitch");
+    }
+}
+
+QJsonArray messagePlatformArray(const std::vector<MessagePlatform> &platforms)
+{
+    QJsonArray array;
+    for (const auto platform : platforms)
+    {
+        array.append(messagePlatformName(platform));
+    }
+    return array;
+}
+
+}  // namespace
 
 void WindowManager::showSettingsDialog(QWidget *parent,
                                        SettingsDialogPreference preference)
@@ -169,6 +219,7 @@ WindowManager::WindowManager(const Args &appArgs_, const Paths &paths,
     this->updateWordTypeMaskListener.add(settings.showBadgesFfz);
     this->updateWordTypeMaskListener.add(settings.showBadgesBttv);
     this->updateWordTypeMaskListener.add(settings.showBadgesSevenTV);
+    this->updateWordTypeMaskListener.add(settings.showKickLevelBadges);
     this->updateWordTypeMaskListener.add(settings.enableEmoteImages);
     this->updateWordTypeMaskListener.add(settings.lowercaseDomains);
     this->updateWordTypeMaskListener.add(settings.showReplyButton);
@@ -202,6 +253,12 @@ WindowManager::WindowManager(const Args &appArgs_, const Paths &paths,
     this->forceLayoutChannelViewsListener.add(
         settings.showBlockedTermAutomodMessages);
     this->forceLayoutChannelViewsListener.add(settings.hideModerated);
+    this->forceLayoutChannelViewsListener.add(settings.hideChatBotMessages);
+    this->forceLayoutChannelViewsListener.add(settings.hideCommandMessages);
+    this->forceLayoutChannelViewsListener.add(settings.hideEmoteOnlyMessages);
+    this->forceLayoutChannelViewsListener.add(settings.hideDeletionActions);
+    this->forceLayoutChannelViewsListener.add(
+        settings.blockedUsers.delayedItemsChanged);
     this->forceLayoutChannelViewsListener.add(
         settings.streamerModeHideModActions);
     this->forceLayoutChannelViewsListener.add(
@@ -219,6 +276,17 @@ WindowManager::WindowManager(const Args &appArgs_, const Paths &paths,
     this->reloadChannelViewsListener.add(settings.platformEventHighlightStyle);
     this->reloadChannelViewsListener.add(
         settings.platformEventHighlightCustomColor);
+
+    settings.messageAnimations.connect(
+        [this] {
+            for (auto *window : this->windows_)
+            {
+                window->getNotebook().forEachSplit([](Split *split) {
+                    split->getChannelView().refreshSlowerChatSettings();
+                });
+            }
+        },
+        false);
 
     this->repaintVisibleChatWidgetsListener.add(
         this->themes.repaintVisibleChatWidgets_);
@@ -283,6 +351,7 @@ void WindowManager::updateWordTypeMask()
     flags.set(settings->showBadgesFfz ? MEF::BadgeFfz : MEF::None);
     flags.set(settings->showBadgesBttv ? MEF::BadgeBttv : MEF::None);
     flags.set(settings->showBadgesSevenTV ? MEF::BadgeSevenTV : MEF::None);
+    flags.set(settings->showKickLevelBadges ? MEF::BadgeKickLevel : MEF::None);
 
     // username
     flags.set(MEF::Username);
@@ -512,6 +581,7 @@ void WindowManager::initialize()
             this->mainWindow_->hide();
         }
     }
+
 }
 
 void WindowManager::save()
@@ -583,19 +653,39 @@ void WindowManager::save()
             {"height", this->emotePopupBounds_.height()},
         };
 
+        auto &notebook = window->getNotebook();
+
+        QJsonArray tabFoldersArr;
+        for (const auto &folder : notebook.getTabFolderStates())
+        {
+            QJsonObject folderObj;
+            folderObj.insert("id", folder.id);
+            folderObj.insert("title", folder.title);
+            folderObj.insert("expanded", folder.expanded);
+            tabFoldersArr.append(folderObj);
+        }
+        if (!tabFoldersArr.isEmpty())
+        {
+            windowObj.insert("tabFolders", tabFoldersArr);
+        }
+
         // window tabs
         QJsonArray tabsArr;
 
-        for (int tabIndex = 0; tabIndex < window->getNotebook().getPageCount();
-             tabIndex++)
+        for (int tabIndex = 0; tabIndex < notebook.getPageCount(); tabIndex++)
         {
             QJsonObject tabObj;
             SplitContainer *tab = dynamic_cast<SplitContainer *>(
-                window->getNotebook().getPageAt(tabIndex));
+                notebook.getPageAt(tabIndex));
             assert(tab != nullptr);
 
-            bool isSelected = window->getNotebook().getSelectedPage() == tab;
+            bool isSelected = notebook.getSelectedPage() == tab;
             WindowManager::encodeTab(tab, isSelected, tabObj);
+            const auto folderId = notebook.folderIdOfPage(tab);
+            if (!folderId.isEmpty())
+            {
+                tabObj.insert("folderId", folderId);
+            }
             tabsArr.append(tabObj);
         }
 
@@ -698,7 +788,16 @@ std::set<QString> WindowManager::getVisibleChannelNames() const
 
         for (auto *split : page->getSplits())
         {
-            visible.emplace(split->getChannel()->getName());
+            auto channel = split->getChannel();
+            visible.emplace(channel->getName());
+
+            if (auto *merged = dynamic_cast<MergedChannel *>(channel.get()))
+            {
+                if (auto twitchChannel = merged->twitchChannel())
+                {
+                    visible.emplace(twitchChannel->getName());
+                }
+            }
         }
     }
 
@@ -738,18 +837,34 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
         case SplitNode::Type::Split: {
             obj.insert("type", "split");
             obj.insert("moderationMode", node->getSplit()->getModerationMode());
+            obj.insert("activityPane", node->getSplit()->isActivityPane());
             obj.insert("inputEnabled", node->getSplit()->inputEnabled());
             obj.insert("filterActivity", node->getSplit()->filterActivity());
             obj.insert("filterActivityExplicit",
                        node->getSplit()->filterActivityExplicit());
             obj.insert("activityMessageScale",
                        node->getSplit()->activityMessageScale());
+            obj.insert("activityTimeDisplayMode",
+                       qmagicenum::enumNameString(
+                           node->getSplit()->activityTimeDisplayMode())
+                           .toLower());
             obj.insert("slowerChatEnabled",
                        node->getSplit()->slowerChatEnabled());
             obj.insert("slowerChatMessagesPerSecond",
                        node->getSplit()->slowerChatMessagesPerSecond());
             obj.insert("slowerChatMessageAnimations",
                        node->getSplit()->slowerChatMessageAnimations());
+            obj.insert("streamDatabaseBadgeFeedVisible",
+                       node->getSplit()->streamDatabaseBadgeFeedVisible());
+            obj.insert("titleSettingsButtonVisible",
+                       node->getSplit()->titleSettingsButtonVisible());
+            obj.insert("chatModeIndicatorVisible",
+                       node->getSplit()->chatModeIndicatorVisible());
+            if (const auto viewerCountEnabled =
+                    node->getSplit()->viewerCountEnabledOverride())
+            {
+                obj.insert("viewerCountEnabled", *viewerCountEnabled);
+            }
             obj.insert("twitchActivityMinimumBits",
                        static_cast<qint64>(
                            node->getSplit()->twitchActivityMinimumBits()));
@@ -768,9 +883,21 @@ void WindowManager::encodeNodeRecursively(SplitNode *node, QJsonObject &obj)
             obj.insert("tiktokActivityShowShares",
                        node->getSplit()->tiktokActivityShowShares());
             obj.insert("platformIndicatorMode",
-                       qmagicenum::enumNameString(
-                           node->getSplit()->platformIndicatorMode())
-                           .toLower());
+                       platformIndicatorModeName(
+                           node->getSplit()->platformIndicatorMode()));
+            const auto sendPlatformSelection =
+                node->getSplit()->getInput().sendPlatformSelection();
+            obj.insert("selectedSendPlatform",
+                       messagePlatformName(
+                           sendPlatformSelection.selectedPlatform));
+            obj.insert("selectedSendAllPlatforms",
+                       sendPlatformSelection.allPlatforms);
+            obj.insert("customSelectedSendPlatforms",
+                       messagePlatformArray(
+                           sendPlatformSelection.customPlatforms));
+            obj.insert("enabledSendPlatforms",
+                       messagePlatformArray(
+                           sendPlatformSelection.enabledPlatforms));
 
             QJsonObject split;
             WindowManager::encodeChannel(node->getSplit()->getIndirectChannel(),
@@ -1066,6 +1193,12 @@ void WindowManager::applyWindowLayout(const WindowLayout &layout)
             }
         }
 
+        for (const auto &folder : windowData.tabFolders_)
+        {
+            window.getNotebook().restoreTabFolder(folder.id_, folder.title_,
+                                                  folder.expanded_);
+        }
+
         // open tabs
         for (const auto &tab : windowData.tabs_)
         {
@@ -1075,6 +1208,11 @@ void WindowManager::applyWindowLayout(const WindowLayout &layout)
             if (!tab.customTitle_.isEmpty())
             {
                 page->getTab()->setCustomTitle(tab.customTitle_);
+            }
+
+            if (!tab.folderId_.isEmpty())
+            {
+                window.getNotebook().setPageFolder(page, tab.folderId_, false);
             }
 
             // selected

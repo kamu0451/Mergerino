@@ -5,6 +5,8 @@
 
 #include <QFrame>
 
+#include <algorithm>
+
 namespace {
 
 using namespace chatterino;
@@ -27,11 +29,23 @@ QWidget *makeVLine()
     return makeLine(false);
 }
 
+QSize widgetSizeHint(const QWidget *widget, bool minimum)
+{
+    if (widget == nullptr)
+    {
+        return {};
+    }
+
+    auto size = minimum ? widget->minimumSizeHint() : widget->sizeHint();
+    size = size.expandedTo(widget->minimumSize());
+    return size;
+}
+
 class MicroNotebookButton : public LabelButton
 {
 public:
     MicroNotebookButton(const QString &text)
-        : LabelButton(text, nullptr, {6, 3})
+        : LabelButton(text, nullptr, {5, 2})
     {
     }
 
@@ -88,11 +102,66 @@ MicroNotebook::MicroNotebook(QWidget *parent)
 
     auto *pageWidget = new QWidget;
     pageWidget->setLayout(&this->layout);
-    rootLayout->addWidget(pageWidget, 1);
+    rootLayout->addWidget(pageWidget);
 
     rootLayout->setContentsMargins({});
     this->layout.setContentsMargins({});
-    this->topBar.setContentsMargins({10, 10, 10, 0});
+    this->topBar.setContentsMargins({6, 6, 6, 0});
+
+    QObject::connect(&this->layout, &QStackedLayout::currentChanged, this,
+                     [this] {
+                         this->updateGeometry();
+                     });
+}
+
+QSize MicroNotebook::sizeHint() const
+{
+    auto size = widgetSizeHint(this->layout.currentWidget(), false);
+    for (int i = 0; i < this->layout.count(); ++i)
+    {
+        size.setWidth(
+            std::max(size.width(),
+                     widgetSizeHint(this->layout.widget(i), false).width()));
+    }
+
+    const auto topSize = this->topWidget->isHidden()
+                             ? QSize{}
+                             : widgetSizeHint(this->topWidget, false);
+    const auto separatorSize = this->horizontalSeparator->isHidden()
+                                   ? QSize{}
+                                   : widgetSizeHint(this->horizontalSeparator,
+                                                    false);
+
+    size.setWidth(std::max({size.width(), topSize.width(),
+                            separatorSize.width()}));
+    size.setHeight(size.height() + topSize.height() + separatorSize.height());
+
+    return size;
+}
+
+QSize MicroNotebook::minimumSizeHint() const
+{
+    auto size = widgetSizeHint(this->layout.currentWidget(), true);
+    for (int i = 0; i < this->layout.count(); ++i)
+    {
+        size.setWidth(
+            std::max(size.width(),
+                     widgetSizeHint(this->layout.widget(i), true).width()));
+    }
+
+    const auto topSize = this->topWidget->isHidden()
+                             ? QSize{}
+                             : widgetSizeHint(this->topWidget, true);
+    const auto separatorSize = this->horizontalSeparator->isHidden()
+                                   ? QSize{}
+                                   : widgetSizeHint(this->horizontalSeparator,
+                                                    true);
+
+    size.setWidth(std::max({size.width(), topSize.width(),
+                            separatorSize.width()}));
+    size.setHeight(size.height() + topSize.height() + separatorSize.height());
+
+    return size;
 }
 
 int MicroNotebook::addPage(QWidget *page, QString name)
@@ -134,6 +203,15 @@ void MicroNotebook::setShowHeader(bool showHeader)
 {
     this->topWidget->setVisible(showHeader);
     this->horizontalSeparator->setVisible(showHeader);
+}
+
+void MicroNotebook::onCurrentChanged(QObject *receiver,
+                                     std::function<void()> callback)
+{
+    QObject::connect(&this->layout, &QStackedLayout::currentChanged, receiver,
+                     [callback = std::move(callback)](int) {
+                         callback();
+                     });
 }
 
 }  // namespace chatterino

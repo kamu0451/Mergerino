@@ -7,9 +7,13 @@
 #include "ForwardDecl.hpp"
 #include "widgets/BasePopup.hpp"
 
+#include <QStringList>
+
 #include <memory>
 
 class QLineEdit;
+class QVBoxLayout;
+class QWidget;
 
 namespace chatterino {
 
@@ -40,6 +44,10 @@ protected:
 private:
     void initLayout();
     void search();
+    void addSearchTerm();
+    void removeSearchTerm(int index);
+    void rebuildSearchTerms();
+    QStringList activeSearchQueries() const;
     void addShortcuts() override;
     std::vector<MessagePtr> buildSnapshot();
 
@@ -57,6 +65,9 @@ private:
      */
     static ChannelPtr filter(const QString &text, const QString &channelName,
                              const std::vector<MessagePtr> &snapshot);
+    static ChannelPtr filter(const QStringList &queries,
+                             const QString &channelName,
+                             const std::vector<MessagePtr> &snapshot);
 
     /**
      * @brief Checks the input for tags and registers their corresponding
@@ -70,6 +81,9 @@ private:
 
     std::vector<MessagePtr> snapshot_;
     QLineEdit *searchInput_{};
+    QWidget *searchTerms_{};
+    QVBoxLayout *searchTermsLayout_{};
+    QStringList searchQueries_;
     ChannelView *channelView_{};
     QString channelName_{};
     Split *split_ = nullptr;

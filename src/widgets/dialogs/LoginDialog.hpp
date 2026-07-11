@@ -7,6 +7,7 @@
 #include "common/ProviderId.hpp"
 #include "widgets/BaseWidget.hpp"
 #include "widgets/dialogs/KickLoginPage.hpp"
+#include "widgets/dialogs/YouTubeLoginPage.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -37,6 +38,7 @@ public:
         QLabel flowLabel;
         QHBoxLayout horizontalLayout;
         QPushButton loginButton;
+        QPushButton chatterinoLoginButton;
         QPushButton pasteCodeButton;
         QLabel unableToOpenBrowserHelper;
     } ui_;
@@ -90,6 +92,8 @@ private:
         AdvancedLoginWidget advanced;
 
         KickLoginPage kick;
+
+        YouTubeLoginPage youtube;
     } ui_;
 };
 

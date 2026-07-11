@@ -12,7 +12,6 @@
 #include "providers/NetworkConfigurationProvider.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "RunGui.hpp"
-#include "singletons/CrashHandler.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Updates.hpp"
@@ -44,7 +43,15 @@ using namespace chatterino;
 
 namespace {
 
+// Hard cap on the --log-file size. Once a write would push the file past
+// this, we roll over to a single "<path>.1" backup and start a fresh file,
+// bounding on-disk usage at roughly 2x this value. 32 MiB is large enough to
+// keep a full chatty session for post-mortem review but small enough that an
+// unbounded run cannot fill the disk.
+constexpr qint64 MAX_LOG_FILE_BYTES = 32 * 1024 * 1024;
+
 QFile *g_logFile = nullptr;
+QString g_logFilePath;
 QtMessageHandler g_prevMessageHandler = nullptr;
 QMutex g_logFileMutex;
 
@@ -89,8 +96,62 @@ void fileLogMessageHandler(QtMsgType type, const QMessageLogContext &ctx,
                                                              : "default"),
                  msg);
 
+    const QByteArray lineBytes = line.toUtf8();
+
     QMutexLocker lock(&g_logFileMutex);
-    g_logFile->write(line.toUtf8());
+
+    // Re-check under the lock: rotation below may have torn the file down and
+    // failed to reopen it, in which case file logging is permanently off.
+    if (g_logFile == nullptr)
+    {
+        return;
+    }
+
+    // Roll over before this write would exceed the cap. We keep a single ".1"
+    // backup: flush+close the current file, replace any existing "<path>.1"
+    // with it via rename, then open a fresh truncated "<path>" as the new
+    // sink. If the rename fails (e.g. the backup is held open elsewhere), the
+    // original file is left in place, so reopen it in Append mode instead of
+    // Truncate - we'd rather temporarily exceed the size cap than destroy the
+    // log. On reopen failure we stop file logging (g_logFile = nullptr)
+    // rather than crash; we must NOT emit a qC* log here or we would recurse
+    // straight back into this handler.
+    if (!g_logFilePath.isEmpty() &&
+        g_logFile->size() + static_cast<qint64>(lineBytes.size()) >
+            MAX_LOG_FILE_BYTES)
+    {
+        g_logFile->flush();
+        g_logFile->close();
+        delete g_logFile;
+        g_logFile = nullptr;
+
+        const QString backupPath = g_logFilePath + QStringLiteral(".1");
+        QFile::remove(backupPath);
+        const bool renamed = QFile::rename(g_logFilePath, backupPath);
+
+        auto *rolled = new QFile(g_logFilePath);
+        const QIODevice::OpenMode openMode =
+            renamed ? (QIODevice::WriteOnly | QIODevice::Truncate |
+                      QIODevice::Text)
+                    : (QIODevice::WriteOnly | QIODevice::Append |
+                      QIODevice::Text);
+        if (rolled->open(openMode))
+        {
+            g_logFile = rolled;
+        }
+        else
+        {
+            std::cerr << "Failed to reopen --log-file after rotation at "
+                      << g_logFilePath.toLocal8Bit().constData() << ": "
+                      << rolled->errorString().toLocal8Bit().constData()
+                      << '\n';
+            delete rolled;
+            g_logFile = nullptr;
+            return;
+        }
+    }
+
+    g_logFile->write(lineBytes);
     g_logFile->flush();
 }
 
@@ -147,6 +208,7 @@ int main(int argc, char **argv)
                        QIODevice::Text))
         {
             g_logFile = file;
+            g_logFilePath = *args.logFile;
             g_prevMessageHandler = qInstallMessageHandler(fileLogMessageHandler);
             qCInfo(chatterinoApp).noquote()
                 << "Logging to file:" << *args.logFile;
@@ -159,10 +221,6 @@ int main(int argc, char **argv)
             delete file;
         }
     }
-
-#ifdef CHATTERINO_WITH_CRASHPAD
-    const auto crashpadHandler = installCrashHandler(args, *paths);
-#endif
 
     // run in gui mode or browser extension host mode
     if (args.shouldRunBrowserExtensionHost)
@@ -209,46 +267,15 @@ int main(int argc, char **argv)
         qCInfo(chatterinoApp) << "Mergerino Qt SSL active backend protocols:"
                               << QSslSocket::supportedProtocols();
 
-        // First-run import: if this Mergerino install has no settings yet but
-        // Chatterino2 has data in %APPDATA%, offer to copy it over before
-        // Settings reads from disk.
-        if (chatterinoImport::isFreshInstall(paths->rootAppDataDirectory) &&
-            chatterinoImport::chatterino2HasSettings())
+        if (chatterino_import::hasPendingImport(*paths))
         {
-            QMessageBox box;
-            box.setIcon(QMessageBox::Question);
-            box.setWindowTitle(QStringLiteral("Import Chatterino settings?"));
-            box.setText(QStringLiteral(
-                "An existing Chatterino2 installation was detected.\n\n"
-                "Would you like to import its settings into Mergerino?"));
-            box.setInformativeText(QStringLiteral(
-                "This copies your settings, themes, plugins, chat logs, "
-                "highlights, ignores, and nicknames from "
-                "%APPDATA%\\Chatterino2.\n\n"
-                "You will need to re-link your Twitch account afterwards "
-                "(authentication tokens are stored separately and cannot be "
-                "migrated)."));
-            box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
-            box.setDefaultButton(QMessageBox::Yes);
-
-            if (box.exec() == QMessageBox::Yes)
+            auto result = chatterino_import::applyPendingImport(*paths);
+            if (!result)
             {
-                auto result = chatterinoImport::importFromChatterino2(
-                    paths->rootAppDataDirectory);
-                if (result.ok)
-                {
-                    qCInfo(chatterinoApp).noquote()
-                        << "Imported" << result.filesCopied
-                        << "files from Chatterino2.";
-                }
-                else
-                {
-                    QMessageBox::warning(
-                        nullptr, QStringLiteral("Import failed"),
-                        QStringLiteral("Could not import Chatterino2 "
-                                       "settings:\n\n") +
-                            result.error);
-                }
+                QMessageBox::warning(
+                    nullptr, "Chatterino import failed",
+                    "Mergerino could not import Chatterino settings:\n\n" +
+                        result.error());
             }
         }
 

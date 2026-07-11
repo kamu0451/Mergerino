@@ -9,15 +9,22 @@
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/commands/CommandContext.hpp"
 #include "controllers/commands/common/ChannelAction.hpp"
+#include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "util/Helpers.hpp"
+#include "widgets/dialogs/CreatePredictionDialog.hpp"
+#include "widgets/dialogs/ManagePredictionDialog.hpp"
+#include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 
 #include <QCommandLineParser>
 #include <QProcess>
 
+#include <algorithm>
 #include <chrono>
+#include <memory>
+#include <numeric>
 
 namespace {
 
@@ -26,12 +33,139 @@ using namespace chatterino;
 constexpr auto MIN_PREDICT_DURATION = std::chrono::seconds(30);
 constexpr auto MAX_PREDICT_DURATION = std::chrono::seconds(1800);
 
+std::shared_ptr<TwitchChannel> resolveTwitchChannel(const ChannelPtr &channel)
+{
+    if (channel == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (auto twitch = std::dynamic_pointer_cast<TwitchChannel>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto merged = std::dynamic_pointer_cast<MergedChannel>(channel))
+    {
+        return std::dynamic_pointer_cast<TwitchChannel>(
+            merged->twitchChannel());
+    }
+
+    return nullptr;
+}
+
+void notifyPollsAndPredictionsChanged(const ChannelPtr &channel)
+{
+    if (auto twitch = resolveTwitchChannel(channel))
+    {
+        twitch->streamStatusChanged.invoke();
+    }
+}
+
+bool hasBroadcasterPredictionToken(const TwitchChannel *channel)
+{
+    if (channel == nullptr)
+    {
+        return false;
+    }
+
+    auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+    if (currentUser == nullptr || currentUser->isAnon())
+    {
+        return false;
+    }
+
+    const auto roomId = channel->roomId();
+    if (!roomId.isEmpty())
+    {
+        return roomId == currentUser->getUserId();
+    }
+
+    return channel->isBroadcaster();
+}
+
 }  // namespace
 
 namespace chatterino::commands {
 
 QString createPrediction(const CommandContext &ctx)
 {
+    if (ctx.words.size() <= 1)
+    {
+        if (ctx.twitchChannel == nullptr)
+        {
+            const auto err = QStringLiteral(
+                "The /prediction command only works in Twitch channels");
+            if (ctx.channel != nullptr)
+            {
+                ctx.channel->addSystemMessage(err);
+            }
+            else
+            {
+                qCWarning(chatterinoCommands)
+                    << "Invalid command context:" << err;
+            }
+            return "";
+        }
+
+        auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
+        if (currentUser->isAnon())
+        {
+            ctx.channel->addSystemMessage("You must be logged in to create or "
+                                          "manage a prediction!");
+            return "";
+        }
+
+        const auto roomId = ctx.twitchChannel->roomId();
+        const auto channelLogin = ctx.twitchChannel->getName();
+        if (!hasBroadcasterPredictionToken(ctx.twitchChannel))
+        {
+            ctx.channel->addSystemMessage(
+                "Only the broadcaster can manage predictions in Mergerino.");
+            return "";
+        }
+
+        getHelix()->getPredictions(
+            roomId, {}, 20, {},
+            [channel = ctx.channel, roomId,
+             channelLogin](const auto &result) {
+                const auto openPrediction = std::find_if(
+                    result.predictions.begin(), result.predictions.end(),
+                    [](const HelixPrediction &prediction) {
+                        return prediction.status == "ACTIVE" ||
+                               prediction.status == "LOCKED";
+                    });
+
+                if (openPrediction != result.predictions.end())
+                {
+                    ManagePredictionDialog::showDialog(
+                        channel, roomId, channelLogin, *openPrediction);
+                    return;
+                }
+
+                if (auto twitch = resolveTwitchChannel(channel))
+                {
+                    CreatePredictionDialog::showDialog(channel, *twitch);
+                    return;
+                }
+
+                if (channel != nullptr)
+                {
+                    channel->addSystemMessage(
+                        "The /prediction command only works in Twitch "
+                        "channels");
+                }
+            },
+            [channel = ctx.channel](const auto &error) {
+                if (channel != nullptr)
+                {
+                    channel->addSystemMessage("Failed to query predictions - " +
+                                              error);
+                }
+            });
+        return "";
+    }
+
     const auto command = QStringLiteral("/prediction");
     const auto usage = QStringLiteral(
         R"(Usage: "/prediction --title "<title>" --choice "<choice1>" --choice "<choice2>" --duration <duration>[time unit]" - Creates a prediction for users to guess among the defined options. Title may not exceed 45 characters. There must be between two and ten choices. Duration must be a positive integer; time unit (optional, default=s) must be one of s, m; maximum duration is 30 minutes.)");
@@ -53,7 +187,7 @@ QString createPrediction(const CommandContext &ctx)
     }
 
     auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
-    if (currentUser->isAnon())
+    if (currentUser == nullptr || currentUser->isAnon())
     {
         ctx.channel->addSystemMessage(
             "You must be logged in to create a prediction!");
@@ -61,16 +195,24 @@ QString createPrediction(const CommandContext &ctx)
     }
 
     const auto &data = action.value();
-    getHelix()->createPrediction(
-        data.broadcasterID, data.title, data.choices, data.duration,
-        [channel = ctx.channel, data] {
-            channel->addSystemMessage(
-                QString("Created prediction: '%1'").arg(data.title));
-        },
-        [channel = ctx.channel](const auto &error) {
-            channel->addSystemMessage("Failed to create prediction - " + error);
-        });
+    if (hasBroadcasterPredictionToken(ctx.twitchChannel))
+    {
+        getHelix()->createPrediction(
+            data.broadcasterID, data.title, data.choices, data.duration,
+            [channel = ctx.channel, data] {
+                channel->addSystemMessage(
+                    QString("Created prediction: '%1'").arg(data.title));
+                notifyPollsAndPredictionsChanged(channel);
+            },
+            [channel = ctx.channel](const auto &error) {
+                channel->addSystemMessage("Failed to create prediction - " +
+                                          error);
+            });
+        return "";
+    }
 
+    ctx.channel->addSystemMessage(
+        "Only the broadcaster can manage predictions in Mergerino.");
     return "";
 }
 
@@ -128,6 +270,8 @@ QString lockPrediction(const CommandContext &ctx)
             getHelix()->endPrediction(
                 roomId, prediction.id, false, {},
                 [channel](const HelixPrediction &data) {
+                    notifyPollsAndPredictionsChanged(channel);
+
                     int totalPoints = 0;
                     int numUsers = 0;
                     for (const auto &outcome : data.outcomes)
@@ -199,6 +343,8 @@ QString cancelPrediction(const CommandContext &ctx)
             getHelix()->endPrediction(
                 roomId, prediction.id, true, {},
                 [channel](const HelixPrediction &data) {
+                    notifyPollsAndPredictionsChanged(channel);
+
                     int totalPoints = 0;
                     int numUsers = 0;
                     for (const auto &outcome : data.outcomes)
@@ -367,6 +513,8 @@ QString completePrediction(const CommandContext &ctx)
             getHelix()->endPrediction(
                 roomId, prediction.id, false, winnerId,
                 [channel](const HelixPrediction &result) {
+                    notifyPollsAndPredictionsChanged(channel);
+
                     int totalPoints = 0;
                     HelixPredictionOutcome winner = result.outcomes.front();
                     for (const auto &outcome : result.outcomes)

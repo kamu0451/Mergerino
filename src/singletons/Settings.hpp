@@ -81,6 +81,15 @@ enum class ShowModerationState : int {
     Never = 1,
 };
 
+/// How emotes drift across the chat background when floatEmotesOnBackground is
+/// enabled.
+enum class BackgroundEmoteAnimation : int {
+    // Drift with a velocity and reflect off the window edges.
+    Bounce = 0,
+    // Arc from the bottom-left up through the top-middle and out bottom-right.
+    FlyBy = 1,
+};
+
 enum class StreamLinkPreferredQuality : std::uint8_t {
     Choose,
     Source,
@@ -121,7 +130,36 @@ enum class PlatformIndicatorMode : std::uint8_t {
     Badge,
     LineColor,
     Both,
+    None,
 };
+
+enum class ActivityTimeDisplayMode : std::uint8_t {
+    Relative,
+    Timestamp,
+};
+
+enum class SplitHeaderViewerCountMode : std::uint8_t {
+    Total,
+    Twitch,
+    Kick,
+    YouTube,
+};
+
+constexpr std::optional<std::string_view> qmagicenumDisplayName(
+    SplitHeaderViewerCountMode value) noexcept
+{
+    switch (value)
+    {
+        case SplitHeaderViewerCountMode::Total:
+            return "Total (default)";
+        case SplitHeaderViewerCountMode::Twitch:
+            return "Twitch only";
+        case SplitHeaderViewerCountMode::Kick:
+            return "Kick only";
+        case SplitHeaderViewerCountMode::YouTube:
+            return "YouTube only";
+    }
+}
 
 constexpr std::optional<std::string_view> qmagicenumDisplayName(
     PlatformIndicatorMode value) noexcept
@@ -129,11 +167,13 @@ constexpr std::optional<std::string_view> qmagicenumDisplayName(
     switch (value)
     {
         case PlatformIndicatorMode::Badge:
-            return "Platform badge";
+            return "Platform logos";
         case PlatformIndicatorMode::LineColor:
-            return "Platform line color (default)";
+            return "Platform highlights (default)";
         case PlatformIndicatorMode::Both:
-            return "Platform line color + badge";
+            return "Platform highlights + logos";
+        case PlatformIndicatorMode::None:
+            return "None";
     }
 }
 
@@ -237,6 +277,19 @@ public:
     BoolSetting fadeMessageHistory = {"/appearance/messages/fadeMessageHistory",
                                       true};
     BoolSetting hideModerated = {"/appearance/messages/hideModerated", false};
+    BoolSetting hideChatBotMessages = {
+        "/appearance/messages/hideChatBotMessages", false};
+    BoolSetting hideCommandMessages = {
+        "/appearance/messages/hideCommandMessages", false};
+    BoolSetting hideEmoteOnlyMessages = {
+        "/appearance/messages/hideEmoteOnlyMessages", false};
+    BoolSetting floatEmotesOnBackground = {
+        "/appearance/messages/floatEmotesOnBackground", false};
+    EnumSetting<BackgroundEmoteAnimation> backgroundEmoteAnimation = {
+        "/appearance/messages/backgroundEmoteAnimation",
+        BackgroundEmoteAnimation::Bounce};
+    IntSetting backgroundEmoteAnimationDuration = {
+        "/appearance/messages/backgroundEmoteAnimationDuration", 8};
     BoolSetting hideModerationActions = {
         "/appearance/messages/hideModerationActions", false};
     BoolSetting hideDeletionActions = {
@@ -254,8 +307,6 @@ public:
         NotebookTabVisibility::AllTabs,
     };
 
-    //    BoolSetting collapseLongMessages =
-    //    {"/appearance/messages/collapseLongMessages", false};
     QStringSetting chatFontFamily{
         "/appearance/currentFontFamily",
         DEFAULT_FONT_FAMILY,
@@ -328,9 +379,6 @@ public:
         "/appearance/splitheader/viewerDeltaWindowMinutes", 5};
     FloatSetting customThemeMultiplier = {"/appearance/customThemeMultiplier",
                                           -0.5f};
-    // BoolSetting useCustomWindowFrame = {"/appearance/useCustomWindowFrame",
-    // false};
-
     FloatSetting overlayScaleFactor = {"/appearance/overlay/scaleFactor", 1};
     IntSetting overlayBackgroundOpacity = {
         "/appearance/overlay/backgroundOpacity", 50};
@@ -365,6 +413,7 @@ public:
         "/appearance/badges/useCustomFfzVipBadges", true};
     BoolSetting showBadgesBttv = {"/appearance/badges/bttv", true};
     BoolSetting showBadgesSevenTV = {"/appearance/badges/seventv", true};
+    BoolSetting showKickLevelBadges = {"/appearance/badges/kickLevel", true};
     BoolSetting animateSevenTVBadges = {"/appearance/badges/animateSeventv",
                                         true};
     QSizeSetting lastPopupSize = {
@@ -395,7 +444,7 @@ public:
     BoolSetting showParts = {"/behaviour/showParts", false};
     FloatSetting mouseScrollMultiplier = {"/behaviour/mouseScrollMultiplier",
                                           1.0};
-    BoolSetting autoCloseUserPopup = {"/behaviour/autoCloseUserPopup", true};
+    BoolSetting autoCloseUserPopup = {"/behaviour/autoCloseUserPopup", false};
     BoolSetting autoCloseThreadPopup = {"/behaviour/autoCloseThreadPopup",
                                         false};
 
@@ -507,7 +556,7 @@ public:
         EmoteTooltipScale::Medium,
     };
     BoolSetting showUnlistedSevenTVEmotes = {
-        "/emotes/showUnlistedSevenTVEmotes", false};
+        "/emotes/showUnlistedSevenTVEmotes", true};
     /**
      * This setting is kept for backwards compatibility.
      */
@@ -595,8 +644,6 @@ public:
     };
 
     /// Highlighting
-    //    BoolSetting enableHighlights = {"/highlighting/enabled", true};
-
     BoolSetting enableSelfHighlight = {
         "/highlighting/selfHighlight/nameIsHighlightKeyword", true};
     BoolSetting showSelfHighlightInMentions = {
@@ -630,12 +677,6 @@ public:
 
     BoolSetting enableRedeemedHighlight = {
         "/highlighting/redeemedHighlight/highlighted", true};
-    //    BoolSetting enableRedeemedHighlightSound = {
-    //        "/highlighting/redeemedHighlight/enableSound", false};
-    //    BoolSetting enableRedeemedHighlightTaskbar = {
-    //        "/highlighting/redeemedHighlight/enableTaskbarFlashing", false};
-    //    QStringSetting redeemedHighlightSoundUrl = {
-    //        "/highlighting/redeemedHighlightSoundUrl", ""};
     QStringSetting redeemedHighlightColor = {
         "/highlighting/redeemedHighlightColor", ""};
 
@@ -643,23 +684,11 @@ public:
         "/highlighting/firstMessageHighlight/highlighted", true};
     BoolSetting enableFirstMessageSessionHighlight = {
         "/highlighting/firstMessageSessionHighlight/enabled", false};
-    //    BoolSetting enableFirstMessageHighlightSound = {
-    //        "/highlighting/firstMessageHighlight/enableSound", false};
-    //    BoolSetting enableFirstMessageHighlightTaskbar = {
-    //        "/highlighting/firstMessageHighlight/enableTaskbarFlashing", false};
-    //    QStringSetting firstMessageHighlightSoundUrl = {
-    //        "/highlighting/firstMessageHighlightSoundUrl", ""};
     QStringSetting firstMessageHighlightColor = {
         "/highlighting/firstMessageHighlightColor", ""};
 
     BoolSetting enableElevatedMessageHighlight = {
         "/highlighting/elevatedMessageHighlight/highlighted", true};
-    //    BoolSetting enableElevatedMessageHighlightSound = {
-    //        "/highlighting/elevatedMessageHighlight/enableSound", false};
-    //    BoolSetting enableElevatedMessageHighlightTaskbar = {
-    //        "/highlighting/elevatedMessageHighlight/enableTaskbarFlashing", false};
-    //    QStringSetting elevatedMessageHighlightSoundUrl = {
-    //        "/highlighting/elevatedMessageHighlight/soundUrl", ""};
     QStringSetting elevatedMessageHighlightColor = {
         "/highlighting/elevatedMessageHighlight/color", ""};
 
@@ -740,6 +769,8 @@ public:
         false,
     };
     QStringSetting logPath = {"/logging/path", ""};
+    ChatterinoSetting<std::vector<ChannelLog>> loggedUsersSetting = {
+        "/logging/userLogs"};
 
     QStringSetting pathHighlightSound = {"/highlighting/highlightSoundPath",
                                          ""};
@@ -809,6 +840,27 @@ public:
 
     IntSetting startUpNotification = {"/misc/startUpNotification", 0};
     QStringSetting currentVersion = {"/misc/currentVersion", ""};
+    QStringSetting pendingPostUpdateVersion = {
+        "/misc/pendingPostUpdateVersion",
+        "",
+    };
+    // Fingerprint of the patch-notes section last shown in the post-update
+    // dialog. The version bumps on every commit (PATCH = git commit count), so
+    // gating the dialog on the version alone re-shows the same notes on every
+    // dev/local build; keying on the notes content instead only shows them when
+    // patchnotes.txt actually gained a newer section.
+    QStringSetting lastShownPatchNotesFingerprint = {
+        "/misc/lastShownPatchNotesFingerprint",
+        "",
+    };
+    BoolSetting streamDatabaseIntroShown = {
+        "/misc/streamDatabaseIntroShown",
+        false,
+    };
+    QStringSetting streamDatabaseIntroShownVersion = {
+        "/misc/streamDatabaseIntroShownVersion",
+        "",
+    };
     IntSetting overlayKnowledgeLevel = {"/misc/overlayKnowledgeLevel", 0};
 
     BoolSetting loadTwitchMessageHistoryOnConnect = {
@@ -819,7 +871,7 @@ public:
     };
     IntSetting scrollbackSplitLimit = {
         "/misc/scrollback/splitLimit",
-        1000,
+        100000,
     };
     IntSetting scrollbackUsercardLimit = {
         "/misc/scrollback/usercardLimit",
@@ -844,7 +896,6 @@ public:
     BoolSetting informOnTabVisibilityToggle = {"/misc/askOnTabVisibilityToggle",
                                                true};
     BoolSetting lockNotebookLayout = {"/misc/lockNotebookLayout", false};
-    BoolSetting showPronouns = {"/misc/showPronouns", false};
     BoolSetting showTitleInLiveMessage = {
         "/extraChannels/live/showTitle",
         false,
@@ -916,6 +967,8 @@ public:
     QStringSetting additionalExtensionIDs{"/misc/additionalExtensionIDs", ""};
 
     BoolSetting xChatterino7NoHttp2{"/x-chatterino7/no-http2", false};
+    BoolSetting messageAnimations = {"/appearance/messages/messageAnimations",
+                                     true};
 
 private:
     ChatterinoSetting<std::vector<HighlightPhrase>> highlightedMessagesSetting =
@@ -930,6 +983,8 @@ private:
         "/ignore/phrases"};
     ChatterinoSetting<std::vector<QString>> mutedChannelsSetting = {
         "/pings/muted"};
+    ChatterinoSetting<std::vector<QString>> blockedUsersSetting = {
+        "/ignore/blockedUsers"};
     ChatterinoSetting<std::vector<FilterRecordPtr>> filterRecordsSetting = {
         "/filtering/filters"};
     ChatterinoSetting<std::vector<Nickname>> nicknamesSetting = {"/nicknames"};
@@ -945,10 +1000,15 @@ public:
     SignalVector<HighlightBadge> highlightedBadges;
     SignalVector<HighlightBlacklistUser> blacklistedUsers;
     SignalVector<IgnorePhrase> ignoredMessages;
+    /// Usernames blocked locally on this client only (case-insensitive). Unlike
+    /// the Twitch-Helix block, this hides messages on every platform
+    /// (Twitch/Kick/YouTube/TikTok) -- see Settings::isLocallyBlocked.
+    SignalVector<QString> blockedUsers;
     SignalVector<FilterRecordPtr> filterRecords;
     SignalVector<Nickname> nicknames;
     SignalVector<ModerationAction> moderationActions;
     SignalVector<ChannelLog> loggedChannels;
+    SignalVector<ChannelLog> loggedUsers;
 
     bool isHighlightedUser(const QString &username);
     bool isBlacklistedUser(const QString &username);
@@ -957,6 +1017,19 @@ public:
     std::optional<QString> matchNickname(const QString &username);
     void mute(const QString &channelName);
     void unmute(const QString &channelName);
+
+    /// Local (client-only) cross-platform user blocking. Keyed on the login
+    /// name, matched case-insensitively.
+    bool isLocallyBlocked(const QString &userName);
+    void blockUserLocally(const QString &userName);
+    void unblockUserLocally(const QString &userName);
+    /// Returns true if the user is now blocked, false if now unblocked.
+    bool toggleLocallyBlocked(const QString &userName);
+
+    BoolSetting headerChatModeIndicator = {
+        "/appearance/splitheader/showChatModeIndicator",
+        true,
+    };
 
 private:
     void updateModerationActions();
@@ -967,6 +1040,7 @@ private:
 };
 
 Settings *getSettings();
+EnumStringSetting<SplitHeaderViewerCountMode> &headerViewerCountModeSetting();
 
 }  // namespace chatterino
 

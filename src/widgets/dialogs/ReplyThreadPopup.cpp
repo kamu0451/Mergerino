@@ -195,15 +195,18 @@ ReplyThreadPopup::ReplyThreadPopup(bool closeAutomatically, Split *split)
 void ReplyThreadPopup::setThread(std::shared_ptr<MessageThread> thread)
 {
     this->thread_ = std::move(thread);
+    if (!this->thread_ || !this->thread_->root())
+    {
+        this->ui_.replyInput->setReply(nullptr);
+        this->ui_.threadView->clearMessages();
+        this->replySubscriptionSignal_ = boost::signals2::scoped_connection{};
+        this->updateInputUI();
+        return;
+    }
+
     this->ui_.replyInput->setReply(this->thread_->root());
     this->addMessagesFromThread();
     this->updateInputUI();
-
-    if (!this->thread_) [[unlikely]]
-    {
-        this->replySubscriptionSignal_ = boost::signals2::scoped_connection{};
-        return;
-    }
 
     auto updateCheckbox = [this]() {
         if (this->ui_.notificationCheckbox)
@@ -221,12 +224,16 @@ void ReplyThreadPopup::setThread(std::shared_ptr<MessageThread> thread)
 void ReplyThreadPopup::addMessagesFromThread()
 {
     this->ui_.threadView->clearMessages();
-    if (!this->thread_)
+    if (!this->thread_ || !this->thread_->root())
     {
         return;
     }
 
     const auto &sourceChannel = this->split_->getChannel();
+    if (!sourceChannel)
+    {
+        return;
+    }
     this->setWindowTitle(TEXT_TITLE.arg(this->thread_->root()->loginName,
                                         sourceChannel->getName()));
 

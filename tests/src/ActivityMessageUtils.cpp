@@ -66,6 +66,50 @@ TEST(ActivityMessageUtils, RejectsPlainChatMessages)
     EXPECT_FALSE(shouldShowMessageInActivityPane(message));
 }
 
+TEST(ActivityMessageUtils, FiltersTwitchBitsByMinimum)
+{
+    Message message;
+    message.platform = MessagePlatform::AnyOrTwitch;
+    message.flags.set(MessageFlag::CheerMessage);
+    message.bits = 5;
+
+    EXPECT_TRUE(isActivityTwitchBitsMessage(message));
+    EXPECT_FALSE(shouldShowMessageInActivityPane(message, 100));
+    EXPECT_TRUE(shouldShowMessageInActivityPane(message, 5));
+}
+
+TEST(ActivityMessageUtils, RejectsTwitchCheerWithoutParsedBits)
+{
+    Message message;
+    message.platform = MessagePlatform::AnyOrTwitch;
+    message.flags.set(MessageFlag::CheerMessage);
+
+    EXPECT_FALSE(isActivityTwitchBitsMessage(message));
+    EXPECT_FALSE(shouldShowMessageInActivityPane(message, 100));
+}
+
+TEST(ActivityMessageUtils, FiltersKickKicksByMinimum)
+{
+    Message message;
+    message.platform = MessagePlatform::Kick;
+    message.flags.set(MessageFlag::CheerMessage);
+    message.kickGiftKicks = 5;
+
+    EXPECT_TRUE(isActivityKickKicksGiftMessage(message));
+    EXPECT_FALSE(shouldShowMessageInActivityPane(message, 100, 100));
+    EXPECT_TRUE(shouldShowMessageInActivityPane(message, 100, 5));
+}
+
+TEST(ActivityMessageUtils, RejectsKickCheerWithoutParsedKicks)
+{
+    Message message;
+    message.platform = MessagePlatform::Kick;
+    message.flags.set(MessageFlag::CheerMessage);
+
+    EXPECT_FALSE(isActivityKickKicksGiftMessage(message));
+    EXPECT_FALSE(shouldShowMessageInActivityPane(message, 100, 100));
+}
+
 TEST(ActivityMessageUtils, CompactsGiftBombMembershipsToSubs)
 {
     Message message;
@@ -75,6 +119,16 @@ TEST(ActivityMessageUtils, CompactsGiftBombMembershipsToSubs)
     ASSERT_EQ(getActivityGiftBombRecipientCount(message), 5);
     EXPECT_EQ(compactActivityGiftBombText(message),
               "GiftLord gifted 5 memberships");
+}
+
+TEST(ActivityMessageUtils, CompactsTwitchCommunityGiftBombs)
+{
+    Message message;
+    message.flags.set(MessageFlag::Subscription);
+    message.messageText = "GiftLord is gifting 10 Tier 1 Subs to the community!";
+
+    ASSERT_EQ(getActivityGiftBombRecipientCount(message), 10);
+    EXPECT_EQ(compactActivityGiftBombText(message), "GiftLord gifted 10 subs");
 }
 
 TEST(ActivityMessageUtils, CompactsYouTubeGiftPurchaseAnnouncements)
@@ -89,6 +143,50 @@ TEST(ActivityMessageUtils, CompactsYouTubeGiftPurchaseAnnouncements)
               "Halfman gifted 20 memberships");
 }
 
+TEST(ActivityMessageUtils, CompactsKickGiftedSubscriptionLists)
+{
+    Message message;
+    message.platform = MessagePlatform::Kick;
+    message.flags.set(MessageFlag::Subscription);
+    message.flags.set(MessageFlag::Collapsed);
+    message.messageText =
+        "GiftLord gifted 3 subscriptions to ViewerA, ViewerB, and ViewerC. "
+        "They gifted 99 subs in total. ";
+
+    ASSERT_EQ(getActivityGiftBombRecipientCount(message), 3);
+    EXPECT_EQ(compactActivityGiftBombText(message), "GiftLord gifted 3 subs");
+    EXPECT_TRUE(shouldShowMessageInActivityPane(message));
+}
+
+TEST(ActivityMessageUtils, CompactsStructuredKickGiftedSubscriptionLists)
+{
+    Message message;
+    message.platform = MessagePlatform::Kick;
+    message.flags.set(MessageFlag::Subscription);
+    message.flags.set(MessageFlag::Collapsed);
+    message.loginName = "GiftLord";
+    message.giftedSubscriptionRecipientCount = 10;
+    message.messageText = "GiftLord gifted subscriptions to a list of viewers";
+
+    ASSERT_EQ(getActivityGiftBombRecipientCount(message), 10);
+    EXPECT_EQ(compactActivityGiftBombText(message), "GiftLord gifted 10 subs");
+    EXPECT_TRUE(shouldShowMessageInActivityPane(message));
+}
+
+TEST(ActivityMessageUtils, CompactsSingleCountedGiftWithoutRecipientName)
+{
+    Message message;
+    message.platform = MessagePlatform::Kick;
+    message.flags.set(MessageFlag::Subscription);
+    message.messageText =
+        "GiftLord gifted 1 subscription to ViewerA. They gifted 99 subs in "
+        "total.";
+
+    ASSERT_EQ(getActivityGiftBombRecipientCount(message), 1);
+    EXPECT_EQ(compactActivityGiftBombText(message), "GiftLord gifted 1 sub");
+    EXPECT_TRUE(shouldShowMessageInActivityPane(message));
+}
+
 TEST(ActivityMessageUtils, DetectsTwitchAndYouTubeGiftRecipients)
 {
     Message twitchRecipient;
@@ -97,6 +195,37 @@ TEST(ActivityMessageUtils, DetectsTwitchAndYouTubeGiftRecipients)
     twitchRecipient.messageText = "GiftLord gifted a Tier 1 sub to Viewer!";
 
     EXPECT_TRUE(isActivityGiftRecipientMessage(twitchRecipient));
+
+    Message twitchMultiMonthRecipient;
+    twitchMultiMonthRecipient.flags.set(MessageFlag::Subscription);
+    twitchMultiMonthRecipient.flags.set(MessageFlag::System);
+    twitchMultiMonthRecipient.messageText =
+        "GiftLord gifted 6 months of Tier 1 to Viewer. They've gifted 334 months in the channel!";
+
+    EXPECT_TRUE(isActivityGiftRecipientMessage(twitchMultiMonthRecipient));
+    const auto twitchMultiMonthCount =
+        getActivityGiftBombRecipientCount(twitchMultiMonthRecipient);
+    EXPECT_FALSE(twitchMultiMonthCount.has_value());
+
+    Message twitchMultiMonthRecipientWithSub;
+    twitchMultiMonthRecipientWithSub.flags.set(MessageFlag::Subscription);
+    twitchMultiMonthRecipientWithSub.flags.set(MessageFlag::System);
+    twitchMultiMonthRecipientWithSub.messageText =
+        "An anonymous user gifted 6 months of a Tier 1 sub to Viewer!";
+
+    EXPECT_TRUE(isActivityGiftRecipientMessage(twitchMultiMonthRecipientWithSub));
+    const auto twitchMultiMonthWithSubCount =
+        getActivityGiftBombRecipientCount(twitchMultiMonthRecipientWithSub);
+    EXPECT_FALSE(twitchMultiMonthWithSubCount.has_value());
+
+    Message twitchFirstGiftRecipient;
+    twitchFirstGiftRecipient.flags.set(MessageFlag::Subscription);
+    twitchFirstGiftRecipient.flags.set(MessageFlag::System);
+    twitchFirstGiftRecipient.messageText =
+        "GiftLord gifted a Tier 1 sub to Viewer! This is their first Gift Sub "
+        "in the channel!";
+
+    EXPECT_TRUE(isActivityGiftRecipientMessage(twitchFirstGiftRecipient));
 
     Message youtubeRecipient;
     youtubeRecipient.flags.set(MessageFlag::Subscription);
@@ -111,6 +240,12 @@ TEST(ActivityMessageUtils, DetectsTwitchAndYouTubeGiftRecipients)
         "Viewer received a gift membership by GiftLord";
 
     EXPECT_TRUE(isActivityGiftRecipientMessage(youtubeRecipientBy));
+
+    Message giftedByRecipient;
+    giftedByRecipient.flags.set(MessageFlag::Subscription);
+    giftedByRecipient.messageText = "Viewer was gifted a membership by GiftLord";
+
+    EXPECT_TRUE(isActivityGiftRecipientMessage(giftedByRecipient));
 }
 
 TEST(ActivityMessageUtils, RejectsKickRewardRedemptions)
@@ -230,7 +365,11 @@ TEST(ActivityMessageUtils, KickRewardFilterIsPlatformScoped)
     // dropped by the Kick-specific filter.
     Message youtubeWithRewardFlag;
     youtubeWithRewardFlag.platform = MessagePlatform::YouTube;
-    youtubeWithRewardFlag.flags.set(MessageFlag::CheerMessage);
+    // Use an alert flag the activity pane actually surfaces (matching the
+    // sibling platform-scoping tests). CheerMessage is deliberately dropped
+    // for non-Twitch platforms, which is unrelated to the Kick reward filter
+    // this test exercises.
+    youtubeWithRewardFlag.flags.set(MessageFlag::Subscription);
     youtubeWithRewardFlag.flags.set(MessageFlag::RedeemedChannelPointReward);
     youtubeWithRewardFlag.messageText = "Viewer redeemed something";
 

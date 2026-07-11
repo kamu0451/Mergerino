@@ -5,30 +5,42 @@
 #include "widgets/splits/SplitInput.hpp"
 
 #include "Application.hpp"
+#include "common/ChannelChatters.hpp"
 #include "common/enums/MessageOverflow.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/commands/CommandController.hpp"
+#include "controllers/completion/TabCompletionModel.hpp"
 #include "controllers/hotkeys/HotkeyController.hpp"
 #include "controllers/spellcheck/SpellChecker.hpp"
+#include "messages/Emote.hpp"
+#include "messages/Image.hpp"
 #include "messages/Link.hpp"
 #include "messages/Message.hpp"
 #include "providers/kick/KickAccount.hpp"
 #include "providers/kick/KickChannel.hpp"
 #include "providers/merged/MergedChannel.hpp"
+#include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/twitch/TwitchCommon.hpp"
+#include "providers/twitch/TwitchBadges.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
+#include "providers/youtube/YouTubeAccount.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
+#include "singletons/WindowManager.hpp"
 #include "util/Helpers.hpp"
 #include "util/LayoutCreator.hpp"
 #include "widgets/buttons/Button.hpp"
 #include "widgets/buttons/LabelButton.hpp"
 #include "widgets/buttons/SvgButton.hpp"
+#include "widgets/dialogs/CreatePollDialog.hpp"
+#include "widgets/dialogs/CreatePredictionDialog.hpp"
 #include "widgets/dialogs/EmotePopup.hpp"
+#include "widgets/dialogs/ManagePredictionDialog.hpp"
 #include "widgets/helper/ChannelView.hpp"
 #include "widgets/helper/CmdDeleteKeyFilter.hpp"
 #include "widgets/helper/MessageView.hpp"
@@ -39,19 +51,59 @@
 #include "widgets/splits/InputHighlighter.hpp"
 #include "widgets/splits/Split.hpp"
 #include "widgets/splits/SplitContainer.hpp"
+#include "widgets/splits/StreamDatabaseBadgeBar.hpp"
+#include "widgets/splits/TwitchPollsAndPredictionsBar.hpp"
 
 #include <QCompleter>
+#include <QCheckBox>
+#include <QDesktopServices>
+#include <QDialog>
+#include <QElapsedTimer>
+#include <QEnterEvent>
+#include <QFrame>
+#include <QFontMetrics>
+#include <QGridLayout>
+#include <QGuiApplication>
+#include <QGraphicsOpacityEffect>
+#include <QHash>
+#include <QHideEvent>
+#include <QHBoxLayout>
+#include <QIcon>
 #include <QImage>
+#include <QLabel>
+#include <QMenu>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPen>
+#include <QPixmap>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QScreen>
 #include <QSignalBlocker>
 #include <QSvgRenderer>
+#include <QSet>
+#include <QSizePolicy>
+#include <QTimer>
+#include <QToolButton>
+#include <QUrl>
 #include <QVariantAnimation>
+#include <QVBoxLayout>
+#include <QVector>
+#include <QWidgetAction>
 
+#include <QtCore/qscopeguard.h>
+
+#include <array>
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <ranges>
+#include <utility>
 
 using namespace Qt::Literals;
 
@@ -75,9 +127,39 @@ QString platformDisplayName(MessagePlatform platform)
     {
         case MessagePlatform::Kick:
             return u"Kick"_s;
+        case MessagePlatform::YouTube:
+            return u"YouTube"_s;
         case MessagePlatform::AnyOrTwitch:
         default:
             return u"Twitch"_s;
+    }
+}
+
+QString platformIconPath(MessagePlatform platform)
+{
+    switch (platform)
+    {
+        case MessagePlatform::Kick:
+            return u":/platforms/kick.svg"_s;
+        case MessagePlatform::YouTube:
+            return u":/platforms/youtube.svg"_s;
+        case MessagePlatform::AnyOrTwitch:
+        default:
+            return u":/platforms/twitch.svg"_s;
+    }
+}
+
+MessagePlatform messagePlatformForProvider(ProviderId provider)
+{
+    switch (provider)
+    {
+        case ProviderId::Kick:
+            return MessagePlatform::Kick;
+        case ProviderId::YouTube:
+            return MessagePlatform::YouTube;
+        case ProviderId::Twitch:
+        default:
+            return MessagePlatform::AnyOrTwitch;
     }
 }
 
@@ -89,6 +171,92 @@ QString platformDisplayName(const std::vector<MessagePlatform> &platforms)
         names.append(platformDisplayName(platform));
     }
     return names.join(u" + "_s);
+}
+
+bool containsPlatform(const std::vector<MessagePlatform> &platforms,
+                      MessagePlatform platform)
+{
+    return std::ranges::find(platforms, platform) != platforms.end();
+}
+
+std::shared_ptr<TwitchChannel> twitchChannelForPollPrediction(
+    const ChannelPtr &channel)
+{
+    if (channel == nullptr)
+    {
+        return nullptr;
+    }
+
+    if (auto twitch = std::dynamic_pointer_cast<TwitchChannel>(channel))
+    {
+        return twitch;
+    }
+
+    if (auto merged = std::dynamic_pointer_cast<MergedChannel>(channel))
+    {
+        return std::dynamic_pointer_cast<TwitchChannel>(
+            merged->twitchChannel());
+    }
+
+    return nullptr;
+}
+
+bool canManagePollPredictions(const std::shared_ptr<TwitchChannel> &channel)
+{
+    return channel != nullptr &&
+           (channel->isMod() || channel->isBroadcaster());
+}
+
+bool hasBroadcasterPollPredictionToken(
+    const std::shared_ptr<TwitchChannel> &channel)
+{
+    if (channel == nullptr)
+    {
+        return false;
+    }
+
+    auto account = getApp()->getAccounts()->twitch.getCurrent();
+    if (account == nullptr || account->isAnon())
+    {
+        return false;
+    }
+
+    const auto roomId = channel->roomId();
+    if (!roomId.isEmpty())
+    {
+        return roomId == account->getUserId();
+    }
+
+    return channel->isBroadcaster();
+}
+
+QUrl twitchPollPopoutUrl(const TwitchChannel &channel)
+{
+    return QUrl(QStringLiteral("https://www.twitch.tv/popout/%1/poll")
+                    .arg(channel.getName()));
+}
+
+QUrl twitchPredictionSummaryUrl(const TwitchChannel &channel)
+{
+    return QUrl(QStringLiteral(
+                    "https://www.twitch.tv/popout/%1/predictions/summary")
+                    .arg(channel.getName()));
+}
+
+std::vector<MessagePlatform> platformSelectionIntersection(
+    const std::vector<MessagePlatform> &availablePlatforms,
+    const std::vector<MessagePlatform> &selectedPlatforms)
+{
+    std::vector<MessagePlatform> result;
+    for (const auto platform : selectedPlatforms)
+    {
+        if (containsPlatform(availablePlatforms, platform) &&
+            !containsPlatform(result, platform))
+        {
+            result.push_back(platform);
+        }
+    }
+    return result;
 }
 
 int platformButtonWidthForCount(int platformCount, float scale)
@@ -111,6 +279,7 @@ public:
         : Button(parent)
         , twitchRenderer_(u":/platforms/twitch.svg"_s, this)
         , kickRenderer_(u":/platforms/kick.svg"_s, this)
+        , youtubeRenderer_(u":/platforms/youtube.svg"_s, this)
         , animation_(this)
     {
         this->setContentCacheEnabled(false);
@@ -210,8 +379,16 @@ protected:
 private:
     QSvgRenderer &rendererFor(MessagePlatform platform)
     {
-        return platform == MessagePlatform::Kick ? this->kickRenderer_
-                                                 : this->twitchRenderer_;
+        switch (platform)
+        {
+            case MessagePlatform::Kick:
+                return this->kickRenderer_;
+            case MessagePlatform::YouTube:
+                return this->youtubeRenderer_;
+            case MessagePlatform::AnyOrTwitch:
+            default:
+                return this->twitchRenderer_;
+        }
     }
 
     void renderPlatform(QPainter &painter, MessagePlatform platform,
@@ -320,6 +497,7 @@ private:
         MessagePlatform::AnyOrTwitch};
     QSvgRenderer twitchRenderer_;
     QSvgRenderer kickRenderer_;
+    QSvgRenderer youtubeRenderer_;
     QVariantAnimation animation_;
     QPoint contentOffset_;
     qreal animationProgress_ = 1.0;
@@ -342,9 +520,8 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
     this->installEventFilter(this);
     this->initLayout();
 
-    auto *completer =
-        new QCompleter(this->split_->getChannel()->completionModel);
-    this->ui_.textEdit->setCompleter(completer);
+    this->ui_.textEdit->setCompleter(
+        this->createCompleter(this->split_->getChannel()));
 
     // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer)
     auto *spellChecker = getApp()->getSpellChecker();
@@ -353,10 +530,17 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
 
     this->signalHolder_.managedConnect(this->split_->channelChanged, [this] {
         auto channel = this->split_->getChannel();
-        auto *completer = new QCompleter(channel->completionModel);
-        this->ui_.textEdit->setCompleter(completer);
+        this->ui_.textEdit->setCompleter(this->createCompleter(channel));
         this->inputHighlighter->setChannel(this->split_->getChannel());
         this->updatePlatformSelector();
+        this->updatePollPredictionButtons();
+        this->updateEmotePopupChannel();
+    });
+    this->signalHolder_.managedConnect(this->sendPlatformChanged, [this] {
+        this->ui_.textEdit->resetCompletion();
+        this->updateEmotePopupChannel();
+        this->updatePollPredictionButtons();
+        this->updateCompletionPopup();
     });
 
     getSettings()->enableSpellChecking.connect(
@@ -375,6 +559,7 @@ SplitInput::SplitInput(QWidget *parent, Split *_chatWidget,
     });
     this->scaleChangedEvent(this->scale());
     this->updatePlatformSelector();
+    this->updatePollPredictionButtons();
     this->signalHolder_.managedConnect(getApp()->getHotkeys()->onItemsUpdated,
                                        [this]() {
                                            this->clearShortcuts();
@@ -444,6 +629,7 @@ void SplitInput::initLayout()
     auto hboxLayout =
         inputWrapper.setLayoutType<QHBoxLayout>().withoutMargin().assign(
             &this->ui_.inputHbox);
+    this->ui_.inputHbox->setSpacing(0);
 
     // input
     auto textEdit =
@@ -501,7 +687,33 @@ void SplitInput::initLayout()
         buttonHbox->setSpacing(0);
 
         this->ui_.platformButton = new PlatformSwitchButton();
+        this->ui_.platformButton->setPaintOffset(QPoint{0, 0});
         buttonHbox->addWidget(this->ui_.platformButton);
+
+        this->ui_.predictionButton = new SvgButton(
+            {
+                .dark = ":/buttons/startPrediction.svg",
+                .light = ":/buttons/startPrediction.svg",
+            },
+            nullptr, QSize{4, 1});
+        this->ui_.predictionButton->setContentSize(QSize{18, 18});
+        this->ui_.predictionButton->setPaintOffset(QPoint{0, 0});
+        this->ui_.predictionButton->setToolTip(
+            QStringLiteral("Start prediction"));
+        this->ui_.predictionButton->installEventFilter(this);
+        buttonHbox->addWidget(this->ui_.predictionButton);
+
+        this->ui_.pollButton = new SvgButton(
+            {
+                .dark = ":/buttons/startPoll.svg",
+                .light = ":/buttons/startPoll.svg",
+            },
+            nullptr, QSize{4, 1});
+        this->ui_.pollButton->setContentSize(QSize{22, 22});
+        this->ui_.pollButton->setPaintOffset(QPoint{0, 0});
+        this->ui_.pollButton->setToolTip(QStringLiteral("Start poll"));
+        this->ui_.pollButton->installEventFilter(this);
+        buttonHbox->addWidget(this->ui_.pollButton);
 
         this->ui_.emoteButton = new SvgButton(
             {
@@ -510,6 +722,7 @@ void SplitInput::initLayout()
             },
             nullptr, QSize{4, 1});
         this->ui_.emoteButton->setContentSize(QSize{16, 16});
+        this->ui_.emoteButton->setPaintOffset(QPoint{0, 0});
         buttonHbox->addWidget(this->ui_.emoteButton);
         buttonHbox->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     }
@@ -533,9 +746,24 @@ void SplitInput::initLayout()
     QObject::connect(this->ui_.emoteButton, &Button::leftClicked, [this] {
         this->openEmotePopup();
     });
+    QObject::connect(this->ui_.predictionButton, &Button::leftClicked, [this] {
+        this->updatePollPredictionButtons();
+        this->openPredictionDialog();
+    });
+    QObject::connect(this->ui_.pollButton, &Button::leftClicked, [this] {
+        this->updatePollPredictionButtons();
+        this->openPollDialog();
+    });
 
     QObject::connect(this->ui_.platformButton, &Button::leftClicked, [this] {
-        this->cycleSendPlatform();
+        const auto platforms = this->availableSendPlatforms();
+        if (platforms.size() >= 3)
+        {
+            this->showPlatformSelectionMenu();
+            return;
+        }
+
+        this->tryCycleSendPlatform();
     });
 
     // clear input and remove reply thread
@@ -569,6 +797,27 @@ void SplitInput::initLayout()
             }
         },
         this->managedConnections_);
+}
+
+QCompleter *SplitInput::createCompleter(ChannelPtr channel)
+{
+    if (channel == nullptr)
+    {
+        return nullptr;
+    }
+
+    auto *completer = new QCompleter(this);
+    auto *model = new TabCompletionModel(
+        *channel, completer, [guard = QPointer<SplitInput>(this)] {
+            if (guard == nullptr)
+            {
+                return std::vector<MessagePlatform>{};
+            }
+
+            return guard->selectedSendPlatforms();
+        });
+    completer->setModel(model);
+    return completer;
 }
 
 void SplitInput::triggerSelfMessageReceived()
@@ -641,18 +890,34 @@ void SplitInput::updateEmoteButton()
 {
     auto scale = this->scale();
 
-    this->ui_.emoteButton->setFixedHeight(int(26 * scale));
-    // Make button slightly wider so it's easier to click
-    this->ui_.emoteButton->setFixedWidth(int(24 * scale));
+    for (auto *button :
+         {this->ui_.predictionButton, this->ui_.pollButton,
+          this->ui_.emoteButton})
+    {
+        if (button == nullptr)
+        {
+            continue;
+        }
+
+        button->setFixedHeight(int(26 * scale));
+        // Make button slightly wider so it's easier to click
+        button->setFixedWidth(int(24 * scale));
+    }
 }
 
 void SplitInput::updatePlatformButtonLayout(int platformCount)
 {
     auto scale = this->scale();
 
+    constexpr int TOP_TRIM_PX = 2;
+    constexpr int BOTTOM_TRIM_PX = 3;
+    constexpr int TEXT_RAISE_PX = 1;
+
     const auto height = int(18 * scale);
     const auto width = platformButtonWidthForCount(platformCount, scale);
-    const auto minimumHeight = height * 2 + int(4 * scale);
+    const auto minimumHeight =
+        height * 2 + int(4 * scale) -
+        int((TOP_TRIM_PX + BOTTOM_TRIM_PX) * scale);
 
     if (this->ui_.inputWrapper)
     {
@@ -661,7 +926,8 @@ void SplitInput::updatePlatformButtonLayout(int platformCount)
 
     if (this->ui_.textEdit)
     {
-        this->ui_.textEdit->setVerticalPadding(int(5 * scale), 0);
+        this->ui_.textEdit->setVerticalPadding(
+            std::max(0, int((5 - TOP_TRIM_PX - TEXT_RAISE_PX) * scale)), 0);
     }
 
     if (this->ui_.platformButton)
@@ -692,6 +958,10 @@ std::vector<MessagePlatform> SplitInput::availableSendPlatforms() const
         {
             platforms.push_back(MessagePlatform::Kick);
         }
+        if (this->canSendToPlatform(MessagePlatform::YouTube))
+        {
+            platforms.push_back(MessagePlatform::YouTube);
+        }
         return platforms;
     }
 
@@ -709,6 +979,19 @@ std::vector<MessagePlatform> SplitInput::availableSendPlatforms() const
     return platforms;
 }
 
+std::vector<MessagePlatform> SplitInput::cycleSendPlatforms(
+    const std::vector<MessagePlatform> &availablePlatforms) const
+{
+    if (this->enabledSendPlatforms_.empty())
+    {
+        return availablePlatforms;
+    }
+
+    const auto enabledPlatforms = platformSelectionIntersection(
+        availablePlatforms, this->enabledSendPlatforms_);
+    return enabledPlatforms.empty() ? availablePlatforms : enabledPlatforms;
+}
+
 std::optional<MessagePlatform> SplitInput::replySendPlatform() const
 {
     if (!this->replyTarget_)
@@ -720,11 +1003,47 @@ std::optional<MessagePlatform> SplitInput::replySendPlatform() const
     {
         case MessagePlatform::Kick:
             return MessagePlatform::Kick;
+        case MessagePlatform::YouTube:
+            return MessagePlatform::YouTube;
         case MessagePlatform::AnyOrTwitch:
             return MessagePlatform::AnyOrTwitch;
         default:
             return std::nullopt;
     }
+}
+
+std::vector<MessagePlatform> SplitInput::storedSelectedSendPlatforms(
+    const std::vector<MessagePlatform> &availablePlatforms) const
+{
+    if (availablePlatforms.empty())
+    {
+        return {};
+    }
+
+    const auto cyclePlatforms = this->cycleSendPlatforms(availablePlatforms);
+
+    if (!this->customSelectedSendPlatforms_.empty())
+    {
+        auto selectedPlatforms = platformSelectionIntersection(
+            cyclePlatforms, this->customSelectedSendPlatforms_);
+        if (!selectedPlatforms.empty())
+        {
+            return selectedPlatforms;
+        }
+    }
+
+    if (this->selectedSendAllPlatforms_ && cyclePlatforms.size() > 1)
+    {
+        return cyclePlatforms;
+    }
+
+    if (std::ranges::find(cyclePlatforms, this->selectedSendPlatform_) ==
+        cyclePlatforms.end())
+    {
+        return {cyclePlatforms.front()};
+    }
+
+    return {this->selectedSendPlatform_};
 }
 
 std::vector<MessagePlatform> SplitInput::selectedSendPlatforms() const
@@ -744,18 +1063,7 @@ std::vector<MessagePlatform> SplitInput::selectedSendPlatforms() const
         return {};
     }
 
-    if (this->selectedSendAllPlatforms_ && platforms.size() > 1)
-    {
-        return platforms;
-    }
-
-    if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
-        platforms.end())
-    {
-        return {platforms.front()};
-    }
-
-    return {this->selectedSendPlatform_};
+    return this->storedSelectedSendPlatforms(platforms);
 }
 
 ChannelPtr SplitInput::channelForSendPlatform(MessagePlatform platform) const
@@ -771,6 +1079,8 @@ ChannelPtr SplitInput::channelForSendPlatform(MessagePlatform platform) const
     {
         case MessagePlatform::Kick:
             return merged->kickChannel();
+        case MessagePlatform::YouTube:
+            return nullptr;
         case MessagePlatform::AnyOrTwitch:
         default:
             return merged->twitchChannel();
@@ -779,6 +1089,16 @@ ChannelPtr SplitInput::channelForSendPlatform(MessagePlatform platform) const
 
 bool SplitInput::canSendToPlatform(MessagePlatform platform) const
 {
+    auto splitChannel = this->split_->getChannel();
+    auto *merged = dynamic_cast<MergedChannel *>(splitChannel.get());
+    if (platform == MessagePlatform::YouTube)
+    {
+        auto *youtube = merged ? merged->youtubeLiveChat() : nullptr;
+        return merged && merged->config().youtubeEnabled && youtube != nullptr &&
+               youtube->isLive() &&
+               getApp()->getAccounts()->youtube.isLoggedIn();
+    }
+
     auto channel = this->channelForSendPlatform(platform);
     if (!channel)
     {
@@ -807,17 +1127,13 @@ void SplitInput::updatePlatformSelector(bool animate)
         return;
     }
 
-    if (this->selectedSendAllPlatforms_ && platforms.size() < 2)
-    {
-        this->selectedSendAllPlatforms_ = false;
-    }
+    const auto previousSelectedPlatforms =
+        this->emotePopup_ ? this->selectedSendPlatforms()
+                          : std::vector<MessagePlatform>{};
 
-    if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
-        platforms.end())
-    {
-        this->selectedSendPlatform_ = platforms.front();
-    }
+    this->normalizeSelectedSendPlatforms(platforms);
 
+    const bool replyLocked = this->replySendPlatform().has_value();
     const auto selectedPlatforms = this->selectedSendPlatforms();
     if (selectedPlatforms.empty())
     {
@@ -825,68 +1141,217 @@ void SplitInput::updatePlatformSelector(bool animate)
         return;
     }
 
-    const bool replyLocked = this->replySendPlatform().has_value();
+    const auto cyclePlatforms = this->cycleSendPlatforms(platforms);
     const auto targetCount =
-        replyLocked ? selectedPlatforms.size()
-                    : platforms.size() + (platforms.size() > 1 ? 1 : 0);
+        replyLocked
+            ? selectedPlatforms.size()
+            : cyclePlatforms.size() +
+                          (cyclePlatforms.size() > 1 ? 1 : 0);
+    const bool canChoosePlatforms = !replyLocked && platforms.size() >= 3;
 
     this->updatePlatformButtonLayout(static_cast<int>(selectedPlatforms.size()));
     this->ui_.platformButton->show();
-    this->ui_.platformButton->setEnabled(!replyLocked && targetCount > 1);
+    this->ui_.platformButton->setEnabled(
+        !replyLocked && (canChoosePlatforms || targetCount > 1));
     this->ui_.platformButton->setPlatforms(selectedPlatforms,
                                            animate && targetCount > 1);
 
     auto tooltip =
         QString(replyLocked ? u"Replying on %1"_s : u"Sending to %1"_s)
             .arg(platformDisplayName(selectedPlatforms));
-    if (!replyLocked && targetCount > 1)
+    if (canChoosePlatforms)
+    {
+        tooltip += u". Click to choose platforms"_s;
+        if (targetCount > 1)
+        {
+            tooltip += u". Press Ctrl+D to cycle targets"_s;
+        }
+    }
+    else if (!replyLocked && targetCount > 1)
     {
         QString nextTarget;
         if (this->selectedSendAllPlatforms_)
         {
-            nextTarget = platformDisplayName(platforms.front());
+            nextTarget = platformDisplayName(cyclePlatforms.front());
         }
         else
         {
-            auto it = std::ranges::find(platforms, this->selectedSendPlatform_);
-            if (it != platforms.end() && ++it != platforms.end())
+            auto it =
+                std::ranges::find(cyclePlatforms, this->selectedSendPlatform_);
+            if (it != cyclePlatforms.end() && ++it != cyclePlatforms.end())
             {
                 nextTarget = platformDisplayName(*it);
             }
             else
             {
-                nextTarget = platformDisplayName(platforms);
+                nextTarget = platformDisplayName(cyclePlatforms);
             }
         }
-        tooltip += QString(u". Click to switch to %1"_s).arg(nextTarget);
+        tooltip += QString(u". Click or press Ctrl+D to switch to %1"_s)
+                       .arg(nextTarget);
     }
     this->ui_.platformButton->setToolTip(tooltip);
-    this->updateEmotePopupChannel();
+
+    if (this->emotePopup_ && previousSelectedPlatforms != selectedPlatforms)
+    {
+        this->updateEmotePopupChannel();
+    }
+
+    this->updatePollPredictionButtons();
+}
+
+void SplitInput::updatePollPredictionButtons()
+{
+    if (this->split_ == nullptr || this->ui_.predictionButton == nullptr ||
+        this->ui_.pollButton == nullptr)
+    {
+        return;
+    }
+
+    const auto channel = this->split_->getChannel();
+    const auto twitchChannel = twitchChannelForPollPrediction(channel);
+
+    // The poll/prediction bar's contents can change without emitting a
+    // signal (e.g. a countdown), so we poll it on a timer -- but only while
+    // this split is actually visible and eligible, instead of forever.
+    const bool timerEligible = !this->isHidden() && twitchChannel != nullptr;
+    if (timerEligible)
+    {
+        if (this->pollPredictionButtonTimer_ == nullptr)
+        {
+            this->pollPredictionButtonTimer_ = new QTimer(this);
+            this->pollPredictionButtonTimer_->setInterval(1000);
+            QObject::connect(this->pollPredictionButtonTimer_,
+                             &QTimer::timeout, this, [this] {
+                                 this->updatePollPredictionButtons();
+                             });
+        }
+        if (!this->pollPredictionButtonTimer_->isActive())
+        {
+            this->pollPredictionButtonTimer_->start();
+        }
+    }
+    else if (this->pollPredictionButtonTimer_ != nullptr)
+    {
+        this->pollPredictionButtonTimer_->stop();
+    }
+
+    auto *pollPredictionBar = this->split_->twitchPollsAndPredictionsBar_;
+    if (pollPredictionBar == nullptr)
+    {
+        this->ui_.predictionButton->setVisible(false);
+        this->ui_.predictionButton->setEnabled(false);
+        this->ui_.pollButton->setVisible(false);
+        this->ui_.pollButton->setEnabled(false);
+        return;
+    }
+
+    const bool sendingToTwitch =
+        containsPlatform(this->selectedSendPlatforms(),
+                         MessagePlatform::AnyOrTwitch);
+    const bool twitchVisible = twitchChannel != nullptr && sendingToTwitch;
+    const bool canManage = canManagePollPredictions(twitchChannel);
+    const bool predictionVisible =
+        twitchVisible && (canManage || pollPredictionBar->hasOpenPrediction());
+    const bool pollVisible =
+        twitchVisible && (canManage || pollPredictionBar->hasActivePoll());
+
+    this->ui_.predictionButton->setVisible(predictionVisible);
+    this->ui_.predictionButton->setEnabled(predictionVisible);
+    QString predictionTooltip = QStringLiteral("Start prediction");
+    if (predictionVisible)
+    {
+        if (!canManage && pollPredictionBar->hasOpenPrediction())
+        {
+            predictionTooltip = QStringLiteral("Open prediction on Twitch");
+        }
+        else
+        {
+            predictionTooltip =
+                pollPredictionBar->predictionButtonTooltip(canManage);
+        }
+    }
+    this->ui_.predictionButton->setToolTip(predictionTooltip);
+
+    this->ui_.pollButton->setVisible(pollVisible);
+    this->ui_.pollButton->setEnabled(pollVisible);
+    QString pollTooltip = QStringLiteral("Start poll");
+    if (pollVisible)
+    {
+        if (!canManage && pollPredictionBar->hasActivePoll())
+        {
+            pollTooltip = QStringLiteral("Open poll on Twitch");
+        }
+        else
+        {
+            pollTooltip = pollPredictionBar->pollButtonTooltip(canManage);
+        }
+    }
+    this->ui_.pollButton->setToolTip(pollTooltip);
+}
+
+void SplitInput::applyActiveAccountProviderDefault()
+{
+    const auto platforms = this->availableSendPlatforms();
+    if (platforms.empty())
+    {
+        this->updatePlatformSelector();
+        return;
+    }
+
+    const auto preferredPlatform = messagePlatformForProvider(
+        getApp()->getWindows()->activeAccountProvider());
+    auto selectedPlatform = platforms.front();
+    if (std::ranges::find(platforms, preferredPlatform) != platforms.end())
+    {
+        selectedPlatform = preferredPlatform;
+    }
+
+    const bool changed = this->selectedSendAllPlatforms_ ||
+                         !this->customSelectedSendPlatforms_.empty() ||
+                         !this->enabledSendPlatforms_.empty() ||
+                         this->selectedSendPlatform_ != selectedPlatform;
+    this->selectedSendAllPlatforms_ = false;
+    this->customSelectedSendPlatforms_.clear();
+    this->enabledSendPlatforms_.clear();
+    this->selectedSendPlatform_ = selectedPlatform;
+    this->updatePlatformSelector(changed);
+
+    if (changed)
+    {
+        this->sendPlatformChanged.invoke();
+    }
+}
+
+SplitInput::SendPlatformSelection SplitInput::sendPlatformSelection() const
+{
+    return {
+        this->selectedSendPlatform_,
+        this->selectedSendAllPlatforms_,
+        this->customSelectedSendPlatforms_,
+        this->enabledSendPlatforms_,
+    };
+}
+
+void SplitInput::restoreSendPlatformSelection(
+    const SendPlatformSelection &selection)
+{
+    this->selectedSendPlatform_ = selection.selectedPlatform;
+    this->selectedSendAllPlatforms_ = selection.allPlatforms;
+    this->customSelectedSendPlatforms_ = selection.customPlatforms;
+    this->enabledSendPlatforms_ = selection.enabledPlatforms;
+    this->updatePlatformSelector();
 }
 
 std::optional<MessagePlatform> SplitInput::selectedSendPlatform() const
 {
-    if (auto replyPlatform = this->replySendPlatform())
-    {
-        return *replyPlatform;
-    }
-
-    if (this->selectedSendAllPlatforms_)
+    const auto platforms = this->selectedSendPlatforms();
+    if (platforms.size() != 1)
     {
         return std::nullopt;
     }
 
-    const auto platforms = this->availableSendPlatforms();
-    if (std::ranges::find(platforms, this->selectedSendPlatform_) ==
-        platforms.end())
-    {
-        if (platforms.empty())
-        {
-            return std::nullopt;
-        }
-        return platforms.front();
-    }
-    return this->selectedSendPlatform_;
+    return platforms.front();
 }
 
 QString SplitInput::selectedSendPlatformDisplayName() const
@@ -909,6 +1374,16 @@ QString SplitInput::selectedSendAccountName() const
                 }
             }
             break;
+            case MessagePlatform::YouTube: {
+                auto user = getApp()->getAccounts()->youtube.current();
+                if (user && !user->isAnonymous())
+                {
+                    accountNames.append(user->displayName().isEmpty()
+                                            ? user->channelID()
+                                            : user->displayName());
+                }
+            }
+            break;
             case MessagePlatform::AnyOrTwitch:
             default: {
                 auto user = getApp()->getAccounts()->twitch.getCurrent();
@@ -927,12 +1402,17 @@ QString SplitInput::selectedSendAccountName() const
 
 void SplitInput::selectSendPlatform(MessagePlatform platform)
 {
-    if (!this->canSendToPlatform(platform))
+    const auto platforms =
+        this->cycleSendPlatforms(this->availableSendPlatforms());
+    if (!containsPlatform(platforms, platform) ||
+        !this->canSendToPlatform(platform))
     {
         return;
     }
 
+    const bool wasCustom = !this->customSelectedSendPlatforms_.empty();
     if (!this->selectedSendAllPlatforms_ &&
+        !wasCustom &&
         this->selectedSendPlatform_ == platform)
     {
         this->cycleSendPlatform();
@@ -940,6 +1420,7 @@ void SplitInput::selectSendPlatform(MessagePlatform platform)
     }
 
     this->selectedSendAllPlatforms_ = false;
+    this->customSelectedSendPlatforms_.clear();
     this->selectedSendPlatform_ = platform;
     this->updatePlatformSelector(true);
     this->sendPlatformChanged.invoke();
@@ -947,7 +1428,9 @@ void SplitInput::selectSendPlatform(MessagePlatform platform)
 
 void SplitInput::selectAllSendPlatforms()
 {
-    if (this->availableSendPlatforms().size() < 2)
+    const auto platforms =
+        this->cycleSendPlatforms(this->availableSendPlatforms());
+    if (platforms.size() < 2)
     {
         return;
     }
@@ -959,13 +1442,221 @@ void SplitInput::selectAllSendPlatforms()
     }
 
     this->selectedSendAllPlatforms_ = true;
+    this->customSelectedSendPlatforms_.clear();
+    this->selectedSendPlatform_ = platforms.front();
     this->updatePlatformSelector(true);
     this->sendPlatformChanged.invoke();
 }
 
+void SplitInput::normalizeSelectedSendPlatforms(
+    const std::vector<MessagePlatform> &availablePlatforms)
+{
+    if (availablePlatforms.empty())
+    {
+        this->selectedSendAllPlatforms_ = false;
+        this->customSelectedSendPlatforms_.clear();
+        this->enabledSendPlatforms_.clear();
+        return;
+    }
+
+    if (!this->enabledSendPlatforms_.empty())
+    {
+        auto enabledPlatforms = platformSelectionIntersection(
+            availablePlatforms, this->enabledSendPlatforms_);
+        if (enabledPlatforms.empty() ||
+            enabledPlatforms.size() == availablePlatforms.size())
+        {
+            this->enabledSendPlatforms_.clear();
+        }
+        else
+        {
+            this->enabledSendPlatforms_ = std::move(enabledPlatforms);
+        }
+    }
+
+    const auto cyclePlatforms = this->cycleSendPlatforms(availablePlatforms);
+
+    if (!this->customSelectedSendPlatforms_.empty())
+    {
+        auto selectedPlatforms = platformSelectionIntersection(
+            cyclePlatforms, this->customSelectedSendPlatforms_);
+        if (selectedPlatforms.empty())
+        {
+            this->customSelectedSendPlatforms_.clear();
+            this->selectedSendAllPlatforms_ = false;
+            this->selectedSendPlatform_ = cyclePlatforms.front();
+            return;
+        }
+
+        if (selectedPlatforms.size() == cyclePlatforms.size())
+        {
+            this->customSelectedSendPlatforms_.clear();
+            this->selectedSendAllPlatforms_ = cyclePlatforms.size() > 1;
+            this->selectedSendPlatform_ = cyclePlatforms.front();
+            return;
+        }
+
+        if (selectedPlatforms.size() == 1)
+        {
+            this->customSelectedSendPlatforms_.clear();
+            this->selectedSendAllPlatforms_ = false;
+            this->selectedSendPlatform_ = selectedPlatforms.front();
+            return;
+        }
+
+        this->selectedSendAllPlatforms_ = false;
+        this->customSelectedSendPlatforms_ = std::move(selectedPlatforms);
+        this->selectedSendPlatform_ = this->customSelectedSendPlatforms_.front();
+        return;
+    }
+
+    if (this->selectedSendAllPlatforms_ && cyclePlatforms.size() < 2)
+    {
+        this->selectedSendAllPlatforms_ = false;
+    }
+
+    if (!containsPlatform(cyclePlatforms, this->selectedSendPlatform_))
+    {
+        this->selectedSendPlatform_ = cyclePlatforms.front();
+    }
+}
+
+void SplitInput::setSelectedSendPlatforms(
+    std::vector<MessagePlatform> platforms)
+{
+    const auto availablePlatforms = this->availableSendPlatforms();
+    if (availablePlatforms.empty())
+    {
+        return;
+    }
+
+    const auto previousPlatforms = this->selectedSendPlatforms();
+    auto selectedPlatforms =
+        platformSelectionIntersection(availablePlatforms, platforms);
+    if (selectedPlatforms.empty())
+    {
+        return;
+    }
+
+    if (previousPlatforms.size() == 1 && selectedPlatforms.size() > 1)
+    {
+        const auto previousPlatform = previousPlatforms.front();
+        auto it = std::ranges::find(selectedPlatforms, previousPlatform);
+        if (it != selectedPlatforms.end())
+        {
+            selectedPlatforms.erase(it);
+            selectedPlatforms.insert(selectedPlatforms.begin(),
+                                     previousPlatform);
+        }
+    }
+
+    if (selectedPlatforms.size() == availablePlatforms.size())
+    {
+        this->enabledSendPlatforms_.clear();
+    }
+    else
+    {
+        this->enabledSendPlatforms_ = selectedPlatforms;
+    }
+
+    const auto cyclePlatforms = this->cycleSendPlatforms(availablePlatforms);
+    if (cyclePlatforms.size() == 1)
+    {
+        this->selectedSendAllPlatforms_ = false;
+        this->customSelectedSendPlatforms_.clear();
+        this->selectedSendPlatform_ = cyclePlatforms.front();
+    }
+    else
+    {
+        this->selectedSendAllPlatforms_ = true;
+        this->customSelectedSendPlatforms_.clear();
+        this->selectedSendPlatform_ = cyclePlatforms.front();
+    }
+
+    const auto currentPlatforms = this->selectedSendPlatforms();
+    const bool changed = previousPlatforms != currentPlatforms;
+    this->updatePlatformSelector(changed);
+    if (changed)
+    {
+        this->sendPlatformChanged.invoke();
+    }
+}
+
+void SplitInput::showPlatformSelectionMenu()
+{
+    const auto availablePlatforms = this->availableSendPlatforms();
+    if (availablePlatforms.size() < 3 || this->replySendPlatform().has_value())
+    {
+        this->tryCycleSendPlatform();
+        return;
+    }
+
+    QMenu menu(this);
+    const auto enabledPlatforms = this->cycleSendPlatforms(availablePlatforms);
+    for (const auto platform : availablePlatforms)
+    {
+        auto *action = new QWidgetAction(&menu);
+        auto *checkBox = new QCheckBox(platformDisplayName(platform), &menu);
+        checkBox->setIcon(QIcon(platformIconPath(platform)));
+        checkBox->setChecked(
+            containsPlatform(enabledPlatforms, platform));
+        checkBox->setFocusPolicy(Qt::NoFocus);
+        action->setDefaultWidget(checkBox);
+        menu.addAction(action);
+
+        QObject::connect(checkBox, &QCheckBox::toggled, this,
+                         [this, checkBox, platform](bool checked) {
+                             auto selectedPlatforms =
+                                 this->cycleSendPlatforms(
+                                     this->availableSendPlatforms());
+                             if (checked)
+                             {
+                                 if (!containsPlatform(selectedPlatforms,
+                                                       platform))
+                                 {
+                                     selectedPlatforms.push_back(platform);
+                                 }
+                             }
+                             else
+                             {
+                                 if (selectedPlatforms.size() <= 1)
+                                 {
+                                     QSignalBlocker blocker(checkBox);
+                                     checkBox->setChecked(true);
+                                     return;
+                                 }
+                                 std::erase(selectedPlatforms, platform);
+                             }
+
+                             this->setSelectedSendPlatforms(
+                                 std::move(selectedPlatforms));
+                         });
+    }
+
+    menu.exec(this->ui_.platformButton->mapToGlobal(
+        QPoint{0, this->ui_.platformButton->height()}));
+}
+
+bool SplitInput::tryCycleSendPlatform()
+{
+    this->updatePlatformSelector();
+
+    const auto platforms =
+        this->cycleSendPlatforms(this->availableSendPlatforms());
+    const auto targetCount = platforms.size() + (platforms.size() > 1 ? 1 : 0);
+    if (this->replySendPlatform().has_value() || targetCount < 2)
+    {
+        return false;
+    }
+
+    this->cycleSendPlatform();
+    return true;
+}
+
 void SplitInput::cycleSendPlatform()
 {
-    const auto platforms = this->availableSendPlatforms();
+    const auto platforms =
+        this->cycleSendPlatforms(this->availableSendPlatforms());
     const auto targetCount = platforms.size() + (platforms.size() > 1 ? 1 : 0);
     if (targetCount < 2)
     {
@@ -973,6 +1664,11 @@ void SplitInput::cycleSendPlatform()
     }
 
     if (this->selectedSendAllPlatforms_)
+    {
+        this->selectSendPlatform(platforms.front());
+        return;
+    }
+    if (!this->customSelectedSendPlatforms_.empty())
     {
         this->selectSendPlatform(platforms.front());
         return;
@@ -993,6 +1689,148 @@ void SplitInput::updateCancelReplyButton()
 
     this->ui_.cancelReplyButton->setFixedHeight(int(12 * scale));
     this->ui_.cancelReplyButton->setFixedWidth(int(20 * scale));
+}
+
+void SplitInput::openPollDialog()
+{
+    if (!containsPlatform(this->selectedSendPlatforms(),
+                          MessagePlatform::AnyOrTwitch))
+    {
+        return;
+    }
+
+    auto channel = this->split_->getChannel();
+    auto twitchChannel = twitchChannelForPollPrediction(channel);
+    if (twitchChannel == nullptr)
+    {
+        return;
+    }
+    const bool canManage = canManagePollPredictions(twitchChannel);
+    const bool hasActivePoll =
+        this->split_->twitchPollsAndPredictionsBar_->hasActivePoll();
+    if (!canManage)
+    {
+        if (hasActivePoll)
+        {
+            QDesktopServices::openUrl(twitchPollPopoutUrl(*twitchChannel));
+        }
+        return;
+    }
+
+    if (!getApp()->getAccounts()->twitch.isLoggedIn())
+    {
+        if (channel != nullptr)
+        {
+            channel->addSystemMessage(
+                QStringLiteral("You must be logged in to create a poll!"));
+        }
+        return;
+    }
+
+    if (!hasBroadcasterPollPredictionToken(twitchChannel))
+    {
+        // Managing polls needs the broadcaster's own Helix token; there is
+        // no ToS-compliant path for moderators. Open an already-running poll
+        // on Twitch, otherwise there is nothing to do here.
+        if (hasActivePoll)
+        {
+            QDesktopServices::openUrl(twitchPollPopoutUrl(*twitchChannel));
+        }
+        return;
+    }
+
+    CreatePollDialog::showDialog(std::move(channel), *twitchChannel);
+}
+
+void SplitInput::openPredictionDialog()
+{
+    if (!containsPlatform(this->selectedSendPlatforms(),
+                          MessagePlatform::AnyOrTwitch))
+    {
+        return;
+    }
+
+    auto channel = this->split_->getChannel();
+    auto twitchChannel = twitchChannelForPollPrediction(channel);
+    if (twitchChannel == nullptr)
+    {
+        return;
+    }
+    const bool canManage = canManagePollPredictions(twitchChannel);
+    const bool canUseBroadcasterHelix =
+        hasBroadcasterPollPredictionToken(twitchChannel);
+    const bool hasOpenPrediction =
+        this->split_->twitchPollsAndPredictionsBar_->hasOpenPrediction();
+    if (!canManage)
+    {
+        if (hasOpenPrediction)
+        {
+            QDesktopServices::openUrl(
+                twitchPredictionSummaryUrl(*twitchChannel));
+        }
+        return;
+    }
+
+    if (!canUseBroadcasterHelix)
+    {
+        // Managing predictions needs the broadcaster's own Helix token;
+        // there is no ToS-compliant path for moderators. Open an
+        // already-running prediction on Twitch, otherwise nothing to do.
+        if (hasOpenPrediction)
+        {
+            QDesktopServices::openUrl(
+                twitchPredictionSummaryUrl(*twitchChannel));
+        }
+        return;
+    }
+
+    if (!getApp()->getAccounts()->twitch.isLoggedIn())
+    {
+        if (channel != nullptr)
+        {
+            channel->addSystemMessage(QStringLiteral(
+                "You must be logged in to create or manage a prediction!"));
+        }
+        return;
+    }
+
+    const auto roomId = twitchChannel->roomId();
+    const auto channelLogin = twitchChannel->getName();
+    getHelix()->getPredictions(
+        roomId, {}, 20, {},
+        [channel, roomId, channelLogin](const auto &result) {
+            const auto openPrediction = std::find_if(
+                result.predictions.begin(), result.predictions.end(),
+                [](const auto &prediction) {
+                    return prediction.status == "ACTIVE" ||
+                           prediction.status == "LOCKED";
+                });
+            if (openPrediction != result.predictions.end())
+            {
+                ManagePredictionDialog::showDialog(channel, roomId, channelLogin,
+                                                   *openPrediction);
+                return;
+            }
+
+            if (auto twitch = twitchChannelForPollPrediction(channel))
+            {
+                CreatePredictionDialog::showDialog(channel, *twitch);
+                return;
+            }
+
+            if (channel != nullptr)
+            {
+                channel->addSystemMessage(QStringLiteral(
+                    "The prediction button only works in Twitch channels"));
+            }
+        },
+        [channel](const auto &error) {
+            if (channel != nullptr)
+            {
+                channel->addSystemMessage("Failed to query predictions - " +
+                                          error);
+            }
+        });
 }
 
 void SplitInput::openEmotePopup()
@@ -1044,7 +1882,12 @@ void SplitInput::updateEmotePopupChannel()
         return;
     }
 
-    this->emotePopup_->loadChannel(channel, this->selectedSendPlatforms());
+    // Show every emote the channel's platforms provide, independent of the
+    // currently selected send platform and login state (an empty platform list
+    // means "all platforms" in loadChannel). Gating the browse popup on the
+    // send platform left it completely empty whenever no send platform was
+    // available (e.g. logged out, or a merged tab whose send target was unset).
+    this->emotePopup_->loadChannel(channel, {});
 }
 
 QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)
@@ -1057,6 +1900,7 @@ QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)
 
     struct SendTarget {
         ChannelPtr channel;
+        YouTubeLiveChat *youtubeLiveChat{};
         std::optional<MessagePlatform> platform;
     };
 
@@ -1077,7 +1921,7 @@ QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)
             else
             {
                 c->addSystemMessage(
-                    u"Log in to Twitch or Kick to send merged chat."_s);
+                    u"Log in to Twitch, Kick, or YouTube to send merged chat."_s);
             }
             return "";
         }
@@ -1085,19 +1929,23 @@ QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)
         for (const auto platform : sendPlatforms)
         {
             auto sendChannel = this->channelForSendPlatform(platform);
-            if (!sendChannel || !this->canSendToPlatform(platform))
+            auto *youtubeLiveChat =
+                platform == MessagePlatform::YouTube ? merged->youtubeLiveChat()
+                                                     : nullptr;
+            if ((!sendChannel && !youtubeLiveChat) ||
+                !this->canSendToPlatform(platform))
             {
                 c->addSystemMessage(
                     QString(u"Log in to %1 to send merged chat."_s)
                         .arg(platformDisplayName(platform)));
                 return "";
             }
-            sendTargets.push_back({sendChannel, platform});
+            sendTargets.push_back({sendChannel, youtubeLiveChat, platform});
         }
     }
     else
     {
-        sendTargets.push_back({c, std::nullopt});
+        sendTargets.push_back({c, nullptr, std::nullopt});
     }
 
     QString message = this->ui_.textEdit->toPlainText();
@@ -1112,6 +1960,14 @@ QString SplitInput::handleSendMessage(const std::vector<QString> &arguments)
 
         if (this->replyTarget_ != nullptr && !replyMatchesSendPlatform)
         {
+            continue;
+        }
+
+        if (target.youtubeLiveChat != nullptr)
+        {
+            QString sendMessage =
+                getApp()->getCommands()->execCommand(message, c, false);
+            target.youtubeLiveChat->sendMessage(sendMessage);
             continue;
         }
 
@@ -1279,6 +2135,13 @@ void SplitInput::addShortcuts()
              (void)arguments;
 
              this->openEmotePopup();
+             return "";
+         }},
+        {"cycleSendPlatform",
+         [this](const std::vector<QString> &arguments) -> QString {
+             (void)arguments;
+
+             this->tryCycleSendPlatform();
              return "";
          }},
         {"sendMessage",
@@ -1453,6 +2316,17 @@ void SplitInput::addShortcuts()
 
 bool SplitInput::eventFilter(QObject *obj, QEvent *event)
 {
+    const bool isPollPredictionButton =
+        (this->ui_.predictionButton != nullptr &&
+         obj == this->ui_.predictionButton) ||
+        (this->ui_.pollButton != nullptr && obj == this->ui_.pollButton);
+    if (isPollPredictionButton &&
+        (event->type() == QEvent::Enter ||
+         event->type() == QEvent::ToolTip))
+    {
+        this->updatePollPredictionButtons();
+    }
+
     if (event->type() == QEvent::ShortcutOverride ||
         event->type() == QEvent::Shortcut)
     {
@@ -1478,6 +2352,17 @@ void SplitInput::installTextEditEvents()
     // the textEdit object, so it will always be deleted before SplitInput
     std::ignore =
         this->ui_.textEdit->keyPressed.connect([this](QKeyEvent *event) {
+            if (event->key() == Qt::Key_Escape &&
+                (event->modifiers() &
+                 (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier |
+                  Qt::MetaModifier)) == Qt::NoModifier &&
+                this->replyTarget_ != nullptr)
+            {
+                this->clearReplyTarget();
+                event->accept();
+                return;
+            }
+
             if (auto *popup = this->inputCompletionPopup_.data())
             {
                 if (popup->isVisible())
@@ -1487,6 +2372,16 @@ void SplitInput::installTextEditEvents()
                         event->accept();
                         return;
                     }
+                }
+            }
+
+            if (event->key() == Qt::Key_D &&
+                event->modifiers() == Qt::ControlModifier)
+            {
+                if (this->tryCycleSendPlatform())
+                {
+                    event->accept();
+                    return;
                 }
             }
 
@@ -1588,11 +2483,13 @@ void SplitInput::onCursorPositionChanged()
 void SplitInput::updateCompletionPopup()
 {
     auto *channel = this->split_->getChannel().get();
-    auto *tc = dynamic_cast<TwitchChannel *>(channel);
+    bool showCommandCompletion = true;
     bool showEmoteCompletion = getSettings()->emoteCompletionWithColon;
     bool showUsernameCompletion =
-        tc != nullptr && getSettings()->showUsernameCompletionMenu;
-    if (!showEmoteCompletion && !showUsernameCompletion)
+        dynamic_cast<ChannelChatters *>(channel) != nullptr &&
+        getSettings()->showUsernameCompletionMenu;
+    if (!showCommandCompletion && !showEmoteCompletion &&
+        !showUsernameCompletion)
     {
         this->hideCompletionPopup();
         return;
@@ -1615,6 +2512,20 @@ void SplitInput::updateCompletionPopup()
         if (text[i] == ' ')
         {
             this->hideCompletionPopup();
+            return;
+        }
+
+        if (text[i] == '/' && showCommandCompletion)
+        {
+            if (text.left(i).trimmed().isEmpty())
+            {
+                this->showCompletionPopup(text.mid(i, position - i + 1),
+                                          CompletionKind::Command);
+            }
+            else
+            {
+                this->hideCompletionPopup();
+            }
             return;
         }
 
@@ -1668,7 +2579,24 @@ void SplitInput::showCompletionPopup(const QString &text, CompletionKind kind)
     auto *popup = this->inputCompletionPopup_.data();
     assert(popup);
 
-    popup->updateCompletion(text, kind, this->split_->getChannel());
+    auto channel = this->split_->getChannel();
+    const auto platforms = this->selectedSendPlatforms();
+    if ((kind == CompletionKind::Command || kind == CompletionKind::User) &&
+        platforms.size() == 1)
+    {
+        channel = this->channelForSendPlatform(platforms.front());
+    }
+
+    if (channel == nullptr)
+    {
+        this->hideCompletionPopup();
+        return;
+    }
+
+    popup->updateCompletion(text, kind, std::move(channel),
+                            kind == CompletionKind::Emote
+                                ? platforms
+                                : std::vector<MessagePlatform>{});
 
     auto pos = this->mapToGlobal(QPoint{0, 0}) - QPoint(0, popup->height()) +
                QPoint((this->width() - popup->width()) / 2, 0);
@@ -1697,6 +2625,10 @@ void SplitInput::insertCompletionText(const QString &input_) const
     {
         bool done = false;
         if (text[i] == ':')
+        {
+            done = true;
+        }
+        else if (text[i] == '/')
         {
             done = true;
         }
@@ -1759,6 +2691,7 @@ void SplitInput::hide()
     this->hidden = true;
     this->setMaximumHeight(0);
     this->updateGeometry();
+    this->updatePollPredictionButtons();
 }
 
 void SplitInput::show()
@@ -1771,6 +2704,7 @@ void SplitInput::show()
     this->hidden = false;
     this->setMaximumHeight(this->scaledMaxHeight());
     this->updateGeometry();
+    this->updatePollPredictionButtons();
 }
 
 bool SplitInput::isHidden() const
@@ -1899,16 +2833,14 @@ void SplitInput::paintEvent(QPaintEvent * /*event*/)
     QColor borderColor =
         this->theme->isLightTheme() ? QColor("#ccc") : QColor("#333");
 
-    QRect baseRect = this->rect();
-    baseRect.setWidth(baseRect.width() - 1);
-
     auto *inputWrap = this->ui_.inputWrapper;
     auto inputBoxRect = inputWrap->geometry();
     inputBoxRect.setSize(inputBoxRect.size() - QSize{1, 1});
 
-    painter.setBrush({this->theme->splits.input.background});
-    painter.setPen(borderColor);
-    painter.drawRect(inputBoxRect);
+    const auto inputBackground = this->theme->splits.input.background;
+
+    painter.setBrush(inputBackground);
+    painter.fillRect(inputBoxRect, inputBackground);
 
     if (this->enableInlineReplying_ && this->replyTarget_ != nullptr)
     {
@@ -2043,6 +2975,9 @@ void SplitInput::clearReplyTarget()
     const bool hadReply = this->replyTarget_ != nullptr;
     this->replyTarget_.reset();
     this->ui_.replyMessage->clearMessage();
+    this->ui_.replyWrapper->hide();
+    this->ui_.replyLabel->hide();
+    this->ui_.cancelReplyButton->hide();
     this->ui_.vbox->setSpacing(0);
     if (!this->isHidden())
     {

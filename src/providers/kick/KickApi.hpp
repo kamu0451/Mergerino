@@ -2,6 +2,7 @@
 
 #include "util/Expected.hpp"
 
+#include <boost/json/object.hpp>
 #include <QDateTime>
 #include <QString>
 
@@ -9,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <span>
+#include <vector>
 
 namespace chatterino {
 
@@ -36,6 +38,26 @@ struct KickPrivateChatroomInfo {
     std::optional<std::chrono::minutes> followersModeDuration;
 };
 
+struct KickPrivateSubscriberBadgeInfo {
+    KickPrivateSubscriberBadgeInfo(BoostJsonObject obj);
+
+    uint64_t months = 0;
+    QString imageUrl;
+};
+
+struct KickPrivateUserBadgeInfo {
+    KickPrivateUserBadgeInfo(BoostJsonObject obj);
+
+    QString type;
+    QString text;
+    QString imageUrl;
+    uint64_t count = 0;
+    uint64_t level = 0;
+    uint64_t sortOrder = 1000;
+    bool active = true;
+    bool selected = true;
+};
+
 struct KickPrivateChannelInfo {
     KickPrivateChannelInfo(BoostJsonObject obj);
 
@@ -50,15 +72,18 @@ struct KickPrivateChannelInfo {
     uint64_t viewerCount = 0;
     QDateTime startTime;
     QString thumbnailUrl;
+    std::vector<KickPrivateSubscriberBadgeInfo> subscriberBadges;
 };
 
 struct KickPrivateUserInChannelInfo {
     KickPrivateUserInChannelInfo(BoostJsonObject obj);
 
     uint64_t userID = 0;
+    QString username;
     std::optional<QDateTime> followingSince;
     std::optional<uint16_t> subscriptionMonths;
     std::optional<QString> profilePictureURL;
+    std::vector<KickPrivateUserBadgeInfo> badges;
 };
 
 struct KickPrivateEmoteInfo {
@@ -98,6 +123,7 @@ struct KickChannelInfo {
     KickChannelInfo(BoostJsonObject obj);
 
     uint64_t userID = 0;
+    QString slug;
     KickCategoryInfo category;
     KickStreamInfo stream;
     QString streamTitle;
@@ -113,6 +139,12 @@ public:
 
     static QString slugify(const QString &usernameOrSlug);
 
+    /// Returns true if `errorMessage` (as previously handed to a Callback via
+    /// ExpectedStr) is the message this API produces when a request was
+    /// blocked by a Cloudflare challenge page. Callers can use this to show a
+    /// clearer, rate-limited notice instead of the raw error.
+    static bool isCloudflareChallengeError(const QString &errorMessage);
+
     static void privateChannelInfo(const QString &username,
                                    Callback<KickPrivateChannelInfo> cb);
 
@@ -123,6 +155,10 @@ public:
     static void privateEmotesInChannel(
         const QString &username,
         Callback<std::vector<KickPrivateEmoteSetInfo>> cb);
+
+    static void privateRecentMessages(
+        uint64_t chatroomID, int limit,
+        Callback<std::vector<boost::json::object>> cb);
 
     void sendMessage(uint64_t broadcasterUserID, const QString &message,
                      const QString &replyToMessageID, Callback<void> cb);

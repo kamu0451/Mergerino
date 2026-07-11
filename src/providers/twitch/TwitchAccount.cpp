@@ -27,7 +27,29 @@
 #include <QThread>
 #include <QTimer>
 
+#include <chrono>
+
 using namespace Qt::Literals::StringLiterals;
+
+namespace {
+
+QString normalizeOAuthToken(QString token)
+{
+    token = token.trimmed();
+    if (token.startsWith("oauth:", Qt::CaseInsensitive))
+    {
+        token.remove(0, 6);
+    }
+    return token;
+}
+
+// STAB-06: reloadEmotes walks Helix pagination. When a page fails, the load is
+// retried this many times (with a growing delay) before whatever pages were
+// already fetched are committed instead of being dropped.
+constexpr size_t EMOTE_LOAD_MAX_RETRIES = 3;
+constexpr std::chrono::milliseconds EMOTE_LOAD_RETRY_BASE{500};
+
+}  // namespace
 
 namespace chatterino {
 
@@ -35,7 +57,7 @@ TwitchAccount::TwitchAccount(const QString &username, const QString &oauthToken,
                              const QString &oauthClient, const QString &userID)
     : Account(ProviderId::Twitch)
     , oauthClient_(oauthClient)
-    , oauthToken_(oauthToken)
+    , oauthToken_(normalizeOAuthToken(oauthToken))
     , userName_(username)
     , userId_(userID)
     , isAnon_(username == ANONYMOUS_USERNAME)
@@ -95,12 +117,26 @@ bool TwitchAccount::setOAuthClient(const QString &newClientID)
 
 bool TwitchAccount::setOAuthToken(const QString &newOAuthToken)
 {
-    if (this->oauthToken_.compare(newOAuthToken) == 0)
+    const auto normalizedToken = normalizeOAuthToken(newOAuthToken);
+    if (this->oauthToken_.compare(normalizedToken) == 0)
     {
         return false;
     }
 
-    this->oauthToken_ = newOAuthToken;
+    this->oauthToken_ = normalizedToken;
+
+    return true;
+}
+
+bool TwitchAccount::setUserId(const QString &newUserID)
+{
+    if (this->userId_.compare(newUserID) == 0)
+    {
+        return false;
+    }
+
+    this->userId_ = newUserID;
+    this->seventvUserID_.clear();
 
     return true;
 }
@@ -454,11 +490,20 @@ void TwitchAccount::reloadEmotes(void *caller)
         return;
     }
 
+    this->tryReloadEmotes(caller, std::make_shared<EmoteMap>(),
+                          std::make_shared<TwitchEmoteSetMap>(),
+                          std::make_shared<size_t>(0));
+}
+
+void TwitchAccount::tryReloadEmotes(void *caller,
+                                    std::shared_ptr<EmoteMap> emoteMap,
+                                    std::shared_ptr<TwitchEmoteSetMap> sets,
+                                    std::shared_ptr<size_t> attempt)
+{
     CancellationToken token(false);
     this->emoteToken_ = token;
+    CancellationToken guardToken = token;
 
-    auto sets = std::make_shared<TwitchEmoteSetMap>();
-    auto emoteMap = std::make_shared<EmoteMap>();
     auto nCalls = std::make_shared<size_t>();
 
     auto *twitchEmotes = getApp()->getEmotes()->getTwitchEmotes();
@@ -505,6 +550,26 @@ void TwitchAccount::reloadEmotes(void *caller)
         set->second.emotes.emplace_back(std::move(emotePtr));
     };
 
+    // Commits whatever has been accumulated so far and notifies listeners.
+    // Called both on a fully-successful load and, per STAB-06, when the bounded
+    // retries have been exhausted so a partial set is kept instead of dropped.
+    auto commit = [this, caller, emoteMap, sets, nCalls] {
+        qDebug(chatterinoTwitch).nospace()
+            << "Loaded " << emoteMap->size() << " Twitch emotes (" << *nCalls
+            << " requests)";
+
+        for (auto &[id, set] : *sets)
+        {
+            std::ranges::sort(set.emotes, [](const auto &l, const auto &r) {
+                return l->name.string < r->name.string;
+            });
+        }
+
+        *this->emotes_.access() = emoteMap;
+        *this->emoteSets_.access() = sets;
+        getApp()->getAccounts()->twitch.emotesReloaded.invoke(caller, {});
+    };
+
     auto userID = this->getUserId();
     qDebug(chatterinoTwitch).nospace()
         << "Loading Twitch emotes - userID: " << userID
@@ -512,7 +577,7 @@ void TwitchAccount::reloadEmotes(void *caller)
 
     getHelix()->getUserEmotes(
         this->getUserId(), {},
-        [this, caller, emoteMap, sets, addEmote, nCalls](
+        [emoteMap, sets, addEmote, nCalls, commit](
             const auto &emotes, const auto &state) mutable {
             assert(emoteMap && sets);
             (*nCalls)++;
@@ -527,26 +592,51 @@ void TwitchAccount::reloadEmotes(void *caller)
 
             if (state.done)
             {
-                qDebug(chatterinoTwitch).nospace()
-                    << "Loaded " << emoteMap->size() << " Twitch emotes ("
-                    << *nCalls << " requests)";
-
-                for (auto &[id, set] : *sets)
-                {
-                    std::ranges::sort(
-                        set.emotes, [](const auto &l, const auto &r) {
-                            return l->name.string < r->name.string;
-                        });
-                }
-
-                *this->emotes_.access() = std::move(emoteMap);
-                *this->emoteSets_.access() = std::move(sets);
-                getApp()->getAccounts()->twitch.emotesReloaded.invoke(caller,
-                                                                      {});
+                commit();
             }
         },
-        [caller](const auto &error) {
-            qDebug(chatterinoTwitch)
+        [this, caller, emoteMap, sets, attempt, commit,
+         guardToken](const auto &error) {
+            if (guardToken.isCancelled())
+            {
+                return;
+            }
+
+            // Retry the whole load a bounded number of times with a growing
+            // delay. Re-fetched pages are de-duplicated by emote name in
+            // addEmote, so reusing the accumulators across attempts is safe.
+            if (*attempt < EMOTE_LOAD_MAX_RETRIES)
+            {
+                (*attempt)++;
+                qCWarning(chatterinoTwitch).noquote()
+                    << "Failed to load Twitch emotes:" << error
+                    << "- retrying (attempt" << *attempt << "of"
+                    << EMOTE_LOAD_MAX_RETRIES << ")";
+                QTimer::singleShot(
+                    EMOTE_LOAD_RETRY_BASE * static_cast<int>(*attempt),
+                    [this, caller, emoteMap, sets, attempt, guardToken] {
+                        if (guardToken.isCancelled())
+                        {
+                            return;
+                        }
+                        this->tryReloadEmotes(caller, emoteMap, sets, attempt);
+                    });
+                return;
+            }
+
+            // Retries exhausted: keep the pages fetched before the failure
+            // instead of leaving the user with zero native emotes.
+            if (!emoteMap->empty())
+            {
+                qCWarning(chatterinoTwitch).noquote()
+                    << "Failed to load Twitch emotes:" << error
+                    << "- committing" << emoteMap->size()
+                    << "emote(s) fetched before the failure";
+                commit();
+                return;
+            }
+
+            qCWarning(chatterinoTwitch).noquote()
                 << "Failed to load Twitch emotes:" << error;
             getApp()->getAccounts()->twitch.emotesReloaded.invoke(
                 caller, makeUnexpected(error));

@@ -159,7 +159,7 @@ void StreamerMode::start()
 
 StreamerModePrivate::StreamerModePrivate(StreamerMode *parent)
     : parent_(parent)
-    , timer_(new QTimer())
+    , timer_(new QTimer)
 {
     // Don't parent the timer to thread_: Qt forbids moveToThread on objects
     // with a parent (the parent's thread affinity governs them). Construct

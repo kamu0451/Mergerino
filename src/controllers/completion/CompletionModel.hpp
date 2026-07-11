@@ -17,6 +17,7 @@ class Source;
 
 /// @brief Represents the kind of completion occurring
 enum class CompletionKind {
+    Command,
     Emote,
     User,
 };

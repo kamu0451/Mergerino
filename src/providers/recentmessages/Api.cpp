@@ -81,10 +81,10 @@ void load(
                             if (errorCode == "channel_not_joined" &&
                                 !messages.empty())
                             {
-                                shared->addSystemMessage(
-                                    "Message history service recovering, there "
-                                    "may "
-                                    "be gaps in the message history.");
+                                qCDebug(LOG)
+                                    << "Recent messages returned while service "
+                                       "was not joined to"
+                                    << shared->getName();
                             }
                         }
 
@@ -102,10 +102,8 @@ void load(
                 qCDebug(LOG) << "Failed to load recent messages for"
                              << shared->getName();
 
-                shared->addSystemMessage(
-                    QStringLiteral(
-                        "Message history service unavailable (Error: %1)")
-                        .arg(result.formatError()));
+                qCDebug(LOG) << "Recent messages error for"
+                             << shared->getName() << result.formatError();
 
                 onError();
             })

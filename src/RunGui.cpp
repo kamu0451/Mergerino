@@ -9,7 +9,6 @@
 #include "common/Modes.hpp"
 #include "common/network/NetworkManager.hpp"
 #include "common/QLogging.hpp"
-#include "singletons/CrashHandler.hpp"
 #include "singletons/Paths.hpp"
 #include "singletons/Resources.hpp"
 #include "singletons/Settings.hpp"
@@ -38,16 +37,13 @@
 #    include <QBreakpadHandler.h>
 #endif
 
-#ifdef Q_OS_MAC
-#    include "corefoundation/CFBundle.h"
-#endif
-
 // Forward declaration (Qt doesn't declare this in headers)
 // NOLINTNEXTLINE(readability-identifier-naming)
 extern void qt_set_sequence_auto_mnemonic(bool b);
 
 namespace chatterino {
 namespace {
+
 void installCustomPalette()
 {
     // borrowed from
@@ -124,57 +120,8 @@ void showLastCrashDialog(const Args &args, const Paths &paths)
     dialog->exec();
 }
 
-#if defined(NDEBUG) && !defined(CHATTERINO_WITH_CRASHPAD)
-std::chrono::steady_clock::time_point signalsInitTime;
-
-[[noreturn]] void handleSignal(int signum)
-{
-    using namespace std::chrono_literals;
-
-    if (std::chrono::steady_clock::now() - signalsInitTime > 30s &&
-        getApp()->getCrashHandler()->shouldRecover())
-    {
-        QProcess proc;
-
-#    ifdef Q_OS_MAC
-        // On macOS, programs are bundled into ".app" Application bundles,
-        // when restarting Chatterino that bundle should be opened with the "open"
-        // terminal command instead of directly starting the underlying executable,
-        // as those are 2 different things for the OS and i.e. do not use
-        // the same dock icon (resulting in a second Chatterino icon on restarting)
-        CFURLRef appUrlRef = CFBundleCopyBundleURL(CFBundleGetMainBundle());
-        CFStringRef macPath =
-            CFURLCopyFileSystemPath(appUrlRef, kCFURLPOSIXPathStyle);
-        const char *pathPtr =
-            CFStringGetCStringPtr(macPath, CFStringGetSystemEncoding());
-
-        proc.setProgram("open");
-        proc.setArguments({pathPtr, "-n", "--args", "--crash-recovery"});
-
-        CFRelease(appUrlRef);
-        CFRelease(macPath);
-#    else
-        proc.setProgram(QApplication::applicationFilePath());
-        proc.setArguments({"--crash-recovery"});
-#    endif
-
-        proc.startDetached();
-    }
-
-    std::_Exit(signum);
-}
-#endif
-
-// We want to restart Chatterino when it crashes and the setting is set to
-// true.
 void initSignalHandler()
 {
-#if defined(NDEBUG) && !defined(CHATTERINO_WITH_CRASHPAD)
-    signalsInitTime = std::chrono::steady_clock::now();
-
-    signal(SIGSEGV, handleSignal);
-#endif
-
 #if defined(Q_OS_UNIX)
     auto *sigintHandler = new UnixSignalHandler(SIGINT);
     QObject::connect(sigintHandler, &UnixSignalHandler::signalFired, [] {
@@ -246,6 +193,7 @@ void runGui(QApplication &a, const Paths &paths, Settings &settings,
             const Args &args, Updates &updates)
 {
     initQt(args);
+    a.setQuitOnLastWindowClosed(false);
     initResources();
     initSignalHandler();
 

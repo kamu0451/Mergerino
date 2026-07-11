@@ -6,15 +6,8 @@
 
 #include <QtGlobal>
 
-#ifdef CHATTERINO_WITH_CRASHPAD
-#    include <client/crashpad_client.h>
-
-#    include <memory>
-#endif
-
 namespace chatterino {
 
-class Args;
 class Paths;
 
 class CrashHandler
@@ -35,10 +28,5 @@ public:
 private:
     bool shouldRecover_ = false;
 };
-
-#ifdef CHATTERINO_WITH_CRASHPAD
-std::unique_ptr<crashpad::CrashpadClient> installCrashHandler(
-    const Args &args, const Paths &paths);
-#endif
 
 }  // namespace chatterino

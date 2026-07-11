@@ -21,6 +21,7 @@ public:
 
 private:
     QStringListModel userListModel_;
+    QStringListModel blockedUsersModel_;
 };
 
 }  // namespace chatterino

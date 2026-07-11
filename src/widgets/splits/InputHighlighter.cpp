@@ -49,6 +49,12 @@ bool isEmote(TwitchChannel *twitch, KickChannel *kick, const QString &word)
             return true;
         }
 
+        auto channelEmotes = kick->kickChannelEmotes();
+        if (channelEmotes->contains(name))
+        {
+            return true;
+        }
+
         auto globals = getApp()->getKickChatServer()->globalEmotes();
         if (globals->contains(name))
         {

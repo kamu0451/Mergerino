@@ -21,6 +21,9 @@ public:
     ChatterListWidget(const TwitchChannel *twitchChannel, QWidget *parent);
 
     Q_SIGNAL void userClicked(QString userLogin);
+
+protected:
+    bool eventFilter(QObject *object, QEvent *event) override;
 };
 
 }  // namespace chatterino

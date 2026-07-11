@@ -194,11 +194,11 @@ void Connection::onChannelModerate(
 
             if constexpr (CanMakeModMessage<Action>)
             {
-                // FIXME: This message should still be added, but instead hidden during layout if the setting is enabled.
-                if (getSettings()->hideDeletionActions)
-                {
-                    return;
-                }
+                // The message is always built and added. Single-message
+                // deletion notices are hidden at layout time via the
+                // hideDeletionActions setting (see MessageLayout), so toggling
+                // the setting reveals previously received deletions instead of
+                // losing them permanently.
                 EventSubMessageBuilder builder(channel, now);
                 builder->loginName = payload.event.moderatorUserLogin.qt();
                 makeModerateMessage(builder, payload.event, action);

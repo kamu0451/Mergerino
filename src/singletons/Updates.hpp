@@ -72,6 +72,10 @@ private:
 
     QString updateExe_;
     QString updatePortable_;
+    /// Expected SHA-256 of the portable zip, as lowercase hex (no "sha256:"
+    /// prefix). Captured from the release asset's "digest" field; empty when
+    /// the API advertised no digest.
+    QString updateDigest_;
     QString updateGuideLink_;
 
     void setStatus_(Status status);

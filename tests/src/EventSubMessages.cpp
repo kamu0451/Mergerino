@@ -360,3 +360,104 @@ TEST(TestEventSubMessagesP, Integrity)
 {
     ASSERT_FALSE(UPDATE_SNAPSHOTS);  // make sure fixtures are actually tested
 }
+
+// Fixture so setRoomId (private, friended to this class) can be called during
+// setup, mirroring TestEventSubMessagesP.
+class TestEventSubModeration : public ::testing::Test
+{
+public:
+    void SetUp() override
+    {
+        this->mockApplication = std::make_unique<MockApplication>();
+        this->channel = makeMockTwitchChannel("pajlada");
+        this->channel->setRoomId("11148817");
+        this->mockApplication->twitch.mockChannels.emplace("pajlada",
+                                                           this->channel);
+    }
+
+    void TearDown() override
+    {
+        this->channel.reset();
+        this->mockApplication.reset();
+    }
+
+    std::unique_ptr<MockApplication> mockApplication;
+    std::shared_ptr<TwitchChannel> channel;
+};
+
+// Regression test for STAB-04: when the hideDeletionActions setting is enabled,
+// a single-message deletion must still be built and stored on the channel
+// (it is hidden only at layout time) instead of being dropped at construction.
+// Dropping it caused permanent message loss - toggling the setting off later
+// could never reveal a deletion that was received while the setting was on.
+TEST_F(TestEventSubModeration, DeletionMessageIsBuiltWhenHidden)
+{
+    this->mockApplication->settings.hideDeletionActions.setValue(true);
+
+    auto subscription = SUBSCRIPTIONS.find(u"channel-moderate"_s);
+    ASSERT_NE(subscription, SUBSCRIPTIONS.end());
+
+    static constexpr std::string_view eventJson = R"({
+        "action": "delete",
+        "automod_terms": null,
+        "ban": null,
+        "broadcaster_user_id": "11148817",
+        "broadcaster_user_login": "pajlada",
+        "broadcaster_user_name": "pajlada",
+        "delete": {
+            "message_body": "asd",
+            "message_id": "2da2e2d6-61fc-4ee7-8ac4-1586b52b0ff6",
+            "user_id": "117166826",
+            "user_login": "testaccount_420",
+            "user_name": "testaccount_420"
+        },
+        "followers": null,
+        "mod": null,
+        "moderator_user_id": "117166826",
+        "moderator_user_login": "testaccount_420",
+        "moderator_user_name": "testaccount_420",
+        "raid": null,
+        "shared_chat_ban": null,
+        "shared_chat_delete": null,
+        "shared_chat_timeout": null,
+        "shared_chat_unban": null,
+        "shared_chat_untimeout": null,
+        "slow": null,
+        "source_broadcaster_user_id": null,
+        "source_broadcaster_user_login": null,
+        "source_broadcaster_user_name": null,
+        "timeout": null,
+        "unban": null,
+        "unban_request": null,
+        "unmod": null,
+        "unraid": null,
+        "untimeout": null,
+        "unvip": null,
+        "vip": null,
+        "warn": null
+    })";
+
+    auto event =
+        QJsonDocument::fromJson(
+            QByteArray::fromRawData(eventJson.data(),
+                                    static_cast<qsizetype>(eventJson.size())))
+            .object();
+
+    auto json = makePayload(subscription->second, event);
+
+    auto log = std::make_shared<eventsub::lib::NullLogger>();
+    std::unique_ptr<eventsub::lib::Listener> listener =
+        std::make_unique<eventsub::Connection>();
+    boost::asio::io_context ioc;
+    boost::asio::ssl::context ssl(
+        boost::asio::ssl::context::method::tls_client);
+    auto sess = std::make_shared<eventsub::lib::Session>(
+        ioc, ssl, std::move(listener), log);
+
+    auto ec = sess->handleMessage(json);
+    ASSERT_FALSE(ec.failed()) << ec.what() << ec.message();
+
+    auto messages = channel->getMessageSnapshot();
+    ASSERT_EQ(messages.size(), 1U);
+    EXPECT_TRUE(messages[0]->id.startsWith(u"delete:"));
+}

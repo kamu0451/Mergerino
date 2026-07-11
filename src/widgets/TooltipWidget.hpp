@@ -37,7 +37,7 @@ class TooltipWidget : public BaseWindow
 
 public:
     TooltipWidget(BaseWidget *parent);
-    ~TooltipWidget() override = default;
+    ~TooltipWidget() override;
 
     void setOne(const TooltipEntry &entry,
                 TooltipStyle style = TooltipStyle::Vertical);
@@ -70,6 +70,7 @@ private:
     void deleteCurrentLayout();
     void initializeVLayout();
     void initializeGLayout();
+    void releaseNativeWindow();
 
     int visibleEntries_ = 0;
 

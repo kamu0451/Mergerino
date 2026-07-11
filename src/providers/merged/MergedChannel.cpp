@@ -5,7 +5,11 @@
 #include "providers/merged/MergedChannel.hpp"
 
 #include "Application.hpp"
+#include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/highlights/HighlightController.hpp"
+#include "controllers/highlights/HighlightResult.hpp"
+#include "debug/AssertInGuiThread.hpp"
 #include "messages/Emote.hpp"
 #include "messages/Image.hpp"
 #include "messages/MessageBuilder.hpp"
@@ -14,6 +18,7 @@
 #include "providers/kick/KickChatServer.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "providers/tiktok/TikTokLiveChat.hpp"
+#include "providers/twitch/TwitchBadge.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Settings.hpp"
@@ -25,9 +30,12 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QSvgRenderer>
+#include <QUrlQuery>
 #include <QStringList>
 
 #include <algorithm>
+#include <deque>
+#include <unordered_set>
 
 namespace {
 
@@ -68,6 +76,131 @@ QString normalizeChannelName(QString value)
     }
 
     return value.toLower();
+}
+
+QString trimTrailingSlash(QString value)
+{
+    while (value.size() > 1 && value.endsWith('/'))
+    {
+        value.chop(1);
+    }
+    return value;
+}
+
+bool isLikelyYouTubeChannelId(const QString &value)
+{
+    const auto trimmed = value.trimmed();
+    if (!trimmed.startsWith("UC") || trimmed.size() != 24)
+    {
+        return false;
+    }
+
+    for (const auto ch : trimmed)
+    {
+        if (!ch.isLetterOrNumber() && ch != '_' && ch != '-')
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+QUrl youtubeChannelBrowserUrl(QString source)
+{
+    source = source.trimmed();
+    if (source.isEmpty())
+    {
+        return {};
+    }
+
+    if (source.startsWith('@'))
+    {
+        return QUrl(QString("https://www.youtube.com/%1")
+                        .arg(source.section('/', 0, 0).trimmed()));
+    }
+
+    if (isLikelyYouTubeChannelId(source))
+    {
+        return QUrl(QString("https://www.youtube.com/channel/%1").arg(source));
+    }
+
+    if (!source.contains("://") && !source.contains('/') &&
+        !source.contains('\\'))
+    {
+        return QUrl(QString("https://www.youtube.com/@%1").arg(source));
+    }
+
+    if (source.startsWith("//"))
+    {
+        source.prepend("https:");
+    }
+    else if (source.startsWith('/'))
+    {
+        source.prepend("https://www.youtube.com");
+    }
+    else if (!source.contains("://") &&
+             (source.startsWith("www.", Qt::CaseInsensitive) ||
+              source.startsWith("youtube.com/", Qt::CaseInsensitive) ||
+              source.startsWith("m.youtube.com/", Qt::CaseInsensitive)))
+    {
+        source.prepend("https://");
+    }
+
+    const QUrl url(source);
+    if (!url.isValid() || url.host().isEmpty())
+    {
+        return {};
+    }
+
+    const auto host = url.host().toLower();
+    // Exact-or-subdomain match; a bare endsWith would also accept hosts
+    // like notyoutube.com.
+    const bool isYouTubeHost =
+        host == "youtube.com" || host.endsWith(".youtube.com");
+    const auto path = trimTrailingSlash(url.path());
+    const QUrlQuery query(url);
+
+    if (isYouTubeHost && path == "/embed/live_stream")
+    {
+        const auto channelId = query.queryItemValue("channel").trimmed();
+        if (isLikelyYouTubeChannelId(channelId))
+        {
+            return QUrl(QString("https://www.youtube.com/channel/%1")
+                            .arg(channelId));
+        }
+    }
+
+    if (isYouTubeHost && path.startsWith("/@"))
+    {
+        return QUrl(QString("https://www.youtube.com/%1")
+                        .arg(path.section('/', 1, 1).trimmed()));
+    }
+
+    if (isYouTubeHost && path.startsWith("/channel/"))
+    {
+        const auto channelId = path.section('/', 2, 2).trimmed();
+        if (isLikelyYouTubeChannelId(channelId))
+        {
+            return QUrl(QString("https://www.youtube.com/channel/%1")
+                            .arg(channelId));
+        }
+    }
+
+    if (isYouTubeHost)
+    {
+        const auto firstSegment = path.section('/', 1, 1).trimmed();
+        if (firstSegment == "c" || firstSegment == "user")
+        {
+            const auto name = path.section('/', 2, 2).trimmed();
+            if (!name.isEmpty())
+            {
+                return QUrl(QString("https://www.youtube.com/%1/%2")
+                                .arg(firstSegment, name));
+            }
+        }
+    }
+
+    return {};
 }
 
 QString platformName(MessagePlatform platform)
@@ -111,6 +244,94 @@ QPixmap renderPlatformBadge(MessagePlatform platform)
     QSvgRenderer renderer(platformIconPath(platform));
     renderer.render(&painter);
     return pixmap;
+}
+
+HighlightAlert processMergedPlatformHighlights(Message &message)
+{
+    if (getSettings()->isBlacklistedUser(message.loginName))
+    {
+        return {};
+    }
+
+    const MessageParseArgs args;
+    auto [highlighted, highlightResult] = getApp()->getHighlights()->check(
+        args, {}, message.loginName, message.messageText, message.flags,
+        message.platform);
+
+    if (!highlighted)
+    {
+        return {};
+    }
+
+    message.flags.set(MessageFlag::Highlighted);
+    message.highlightColor = highlightResult.color;
+
+    if (highlightResult.showInMentions)
+    {
+        message.flags.set(MessageFlag::ShowInMentions);
+    }
+
+    return {
+        .customSound = highlightResult.customSoundUrl.value_or(QUrl{}),
+        .playSound = highlightResult.playSound,
+        .windowAlert = highlightResult.alert,
+    };
+}
+
+void triggerHighlightsAndAddMention(Channel *channel,
+                                    const std::shared_ptr<Message> &message,
+                                    const HighlightAlert &alert)
+{
+    if (!channel || !message)
+    {
+        return;
+    }
+
+    MessageBuilder::triggerHighlights(channel, alert);
+
+    if (message->flags.has(MessageFlag::Highlighted) &&
+        message->flags.has(MessageFlag::ShowInMentions))
+    {
+        getApp()->getTwitch()->getMentionsChannel()->addMessage(
+            message, MessageContext::Original);
+    }
+}
+
+// Global highlight side effects (sound, window alert, /mentions entry) must
+// fire only once per source message: every MergedChannel subscribed to the
+// same shared YouTubeLiveChat/TikTokLiveChat mirrors its own copy of each
+// message, so without dedupe two tabs on one stream alert twice. Per-channel
+// message flags are still applied everywhere; only the alerts are deduped.
+// Bounded FIFO so the seen-set can't grow without limit. GUI-thread only,
+// like the rest of MergedChannel.
+constexpr std::size_t MAX_ALERTED_HIGHLIGHT_KEYS = 512;
+
+bool markHighlightAlerted(const QString &sourceKey)
+{
+    assertInGuiThread();
+
+    static std::unordered_set<QString> seen;
+    static std::deque<QString> order;
+
+    if (sourceKey.isEmpty())
+    {
+        // No key to dedupe on; let the alert through.
+        return true;
+    }
+
+    if (seen.contains(sourceKey))
+    {
+        return false;
+    }
+
+    seen.insert(sourceKey);
+    order.push_back(sourceKey);
+    while (order.size() > MAX_ALERTED_HIGHLIGHT_KEYS)
+    {
+        seen.erase(order.front());
+        order.pop_front();
+    }
+    return true;
 }
 
 }  // namespace
@@ -212,7 +433,9 @@ bool MergedChannel::canSendMessage() const
 bool MergedChannel::isWritable() const
 {
     return (this->config_.twitchEnabled && this->twitchChannel_ != nullptr) ||
-           (this->config_.kickEnabled && this->kickChannel_ != nullptr);
+           (this->config_.kickEnabled && this->kickChannel_ != nullptr) ||
+           (this->config_.youtubeEnabled &&
+            this->youtubeLiveChat_ != nullptr);
 }
 
 void MergedChannel::sendMessage(const QString &message)
@@ -271,6 +494,19 @@ void MergedChannel::sendMessage(const QString &message)
         }
     }
 
+    if (this->config_.youtubeEnabled && this->youtubeLiveChat_)
+    {
+        if (!getApp()->getAccounts()->youtube.isLoggedIn())
+        {
+            unavailablePlatforms.append("YouTube");
+        }
+        else
+        {
+            this->youtubeLiveChat_->sendMessage(message);
+            sent = true;
+        }
+    }
+
     if (!sent)
     {
         if (!throttledPlatforms.isEmpty())
@@ -294,7 +530,9 @@ void MergedChannel::sendMessage(const QString &message)
 bool MergedChannel::isMod() const
 {
     return (this->twitchChannel_ && this->twitchChannel_->isMod()) ||
-           (this->kickChannel_ && this->kickChannel_->isMod());
+           (this->kickChannel_ && this->kickChannel_->isMod()) ||
+           (this->youtubeLiveChat_ &&
+            this->youtubeLiveChat_->hasModeratorPrivileges());
 }
 
 bool MergedChannel::isBroadcaster() const
@@ -306,7 +544,9 @@ bool MergedChannel::isBroadcaster() const
 bool MergedChannel::hasModRights() const
 {
     return (this->twitchChannel_ && this->twitchChannel_->hasModRights()) ||
-           (this->kickChannel_ && this->kickChannel_->hasModRights());
+           (this->kickChannel_ && this->kickChannel_->hasModRights()) ||
+           (this->youtubeLiveChat_ &&
+            this->youtubeLiveChat_->hasModeratorPrivileges());
 }
 
 bool MergedChannel::isLive() const
@@ -326,7 +566,9 @@ bool MergedChannel::isRerun() const
 
 bool MergedChannel::canReconnect() const
 {
-    return this->youtubeLiveChat_ != nullptr || this->tiktokLiveChat_ != nullptr;
+    return (this->twitchChannel_ && this->twitchChannel_->canReconnect()) ||
+           (this->kickChannel_ && this->kickChannel_->canReconnect()) ||
+           this->youtubeLiveChat_ != nullptr || this->tiktokLiveChat_ != nullptr;
 }
 
 void MergedChannel::reconnect()
@@ -341,6 +583,8 @@ void MergedChannel::reconnect()
     // are not shared (Twitch global IRC reconnect on every layout-restore
     // bind would be wasteful). User-driven reconnects route through
     // userReconnect() instead.
+    qCDebug(chatterinoMerged)
+        << "reconnect (lightweight rebind) for" << this->getDisplayName();
     this->refreshStatusText();
     this->streamStatusChanged.invoke();
 }
@@ -357,6 +601,8 @@ void MergedChannel::userReconnect()
     // instance, and stopping a shared instance disrupts every consumer and
     // tears down expensive state (WebView2 host for TikTok). Each shared
     // provider has its own retry/recovery logic.
+    qCDebug(chatterinoMerged)
+        << "userReconnect (Twitch/Kick only) for" << this->getDisplayName();
     if (this->twitchChannel_)
     {
         this->twitchChannel_->reconnect();
@@ -677,6 +923,134 @@ MergedChannel::viewerCountDeltaPercent() const
     return ViewerDelta{percent, spanMinutes};
 }
 
+std::vector<MergedChannel::BrowserUrl>
+    MergedChannel::liveStreamBrowserUrls() const
+{
+    std::vector<BrowserUrl> urls;
+
+    if (this->config_.twitchEnabled && this->twitchLive_ &&
+        this->twitchChannel_)
+    {
+        const auto channelName = this->config_.effectiveTwitchChannelName();
+        if (!channelName.isEmpty())
+        {
+            urls.push_back(
+                {"Twitch",
+                 QUrl(QString("https://www.twitch.tv/%1").arg(channelName))});
+        }
+    }
+
+    if (this->config_.kickEnabled && this->kickLive_ && this->kickChannel_)
+    {
+        auto slug = this->config_.effectiveKickChannelName();
+        if (auto *kick = dynamic_cast<KickChannel *>(this->kickChannel_.get()))
+        {
+            slug = kick->slug();
+        }
+        if (!slug.isEmpty())
+        {
+            urls.push_back(
+                {"Kick", QUrl(QString("https://kick.com/%1").arg(slug))});
+        }
+    }
+
+    if (this->config_.youtubeEnabled && this->youtubeLive_ &&
+        this->youtubeLiveChat_ && !this->youtubeLiveChat_->videoId().isEmpty())
+    {
+        urls.push_back({"YouTube",
+                        QUrl(QString("https://www.youtube.com/watch?v=%1")
+                                 .arg(this->youtubeLiveChat_->videoId()))});
+    }
+
+    if (this->config_.tiktokEnabled && this->tiktokLive_ &&
+        this->tiktokLiveChat_)
+    {
+        auto source = this->tiktokLiveChat_->username();
+        if (source.isEmpty())
+        {
+            source = TikTokLiveChat::normalizeSource(this->config_.tiktokUsername);
+        }
+        if (!source.isEmpty())
+        {
+            urls.push_back({"TikTok",
+                            QUrl(QString("https://www.tiktok.com/@%1/live")
+                                     .arg(source))});
+        }
+    }
+
+    return urls;
+}
+
+std::vector<MergedChannel::BrowserUrl> MergedChannel::channelBrowserUrls() const
+{
+    std::vector<BrowserUrl> urls;
+
+    if (this->config_.twitchEnabled && this->twitchChannel_)
+    {
+        const auto channelName = this->config_.effectiveTwitchChannelName();
+        if (!channelName.isEmpty())
+        {
+            urls.push_back(
+                {"Twitch",
+                 QUrl(QString("https://www.twitch.tv/%1").arg(channelName))});
+        }
+    }
+
+    if (this->config_.kickEnabled && this->kickChannel_)
+    {
+        auto slug = this->config_.effectiveKickChannelName();
+        if (auto *kick = dynamic_cast<KickChannel *>(this->kickChannel_.get()))
+        {
+            slug = kick->slug();
+        }
+        if (!slug.isEmpty())
+        {
+            urls.push_back(
+                {"Kick", QUrl(QString("https://kick.com/%1").arg(slug))});
+        }
+    }
+
+    if (this->config_.youtubeEnabled)
+    {
+        QString source;
+        if (this->youtubeLiveChat_)
+        {
+            source = this->youtubeLiveChat_->resolvedSource();
+        }
+        if (source.isEmpty())
+        {
+            source = this->config_.youtubeStreamUrl;
+        }
+
+        const auto url = youtubeChannelBrowserUrl(source);
+        if (!url.isEmpty() && url.isValid())
+        {
+            urls.push_back({"YouTube", url});
+        }
+    }
+
+    if (this->config_.tiktokEnabled)
+    {
+        QString source;
+        if (this->tiktokLiveChat_)
+        {
+            source = this->tiktokLiveChat_->username();
+        }
+        if (source.isEmpty())
+        {
+            source = TikTokLiveChat::normalizeSource(this->config_.tiktokUsername);
+        }
+        if (!source.isEmpty())
+        {
+            urls.push_back({"TikTok",
+                            QUrl(QString("https://www.tiktok.com/@%1")
+                                     .arg(source))});
+        }
+    }
+
+    return urls;
+}
+
 ChannelPtr MergedChannel::twitchChannel() const
 {
     return this->twitchChannel_;
@@ -776,14 +1150,11 @@ void MergedChannel::initializeSources()
                     // live_ at the provider level (recoverLiveChat keeps
                     // live_ true while it tries to recover), so we never
                     // see false->true on the same videoId from recovery.
-                    const QString currentId =
-                        this->youtubeLiveChat_->videoId();
-                    if (currentId != this->youtubeAnnouncedVideoId_)
-                    {
-                        this->announceJoinedLiveChat(
-                            MessagePlatform::YouTube,
-                            this->youtubeLiveChat_->liveTitle());
-                    }
+                    this->announceIfNewSession(
+                        MessagePlatform::YouTube,
+                        this->youtubeLiveChat_->videoId(),
+                        this->youtubeAnnouncedVideoId_,
+                        this->youtubeLiveChat_->liveTitle());
                 }
                 else
                 {
@@ -801,6 +1172,10 @@ void MergedChannel::initializeSources()
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
             });
+        this->youtubeConnections_.managedConnect(
+            this->youtubeLiveChat_->moderationStatusChanged, [this] {
+                this->streamStatusChanged.invoke();
+            });
         this->youtubeLiveChat_->start();
         // Late-joining a shared instance: a previously-created MergedChannel
         // for the same source already triggered start()/resolve/setLive, so
@@ -809,13 +1184,10 @@ void MergedChannel::initializeSources()
         this->youtubeLive_ = this->youtubeLiveChat_->isLive();
         if (this->youtubeLive_)
         {
-            const QString currentId = this->youtubeLiveChat_->videoId();
-            if (currentId != this->youtubeAnnouncedVideoId_)
-            {
-                this->announceJoinedLiveChat(
-                    MessagePlatform::YouTube,
-                    this->youtubeLiveChat_->liveTitle());
-            }
+            this->announceIfNewSession(MessagePlatform::YouTube,
+                                       this->youtubeLiveChat_->videoId(),
+                                       this->youtubeAnnouncedVideoId_,
+                                       this->youtubeLiveChat_->liveTitle());
         }
     }
 
@@ -855,14 +1227,11 @@ void MergedChannel::initializeSources()
                     // recovery. Per-roomId comparison alone gates this:
                     // transient drops keep the same roomId so they no
                     // longer re-fire the "Joined" message.
-                    const QString currentId =
-                        this->tiktokLiveChat_->roomId();
-                    if (currentId != this->tiktokAnnouncedRoomId_)
-                    {
-                        this->announceJoinedLiveChat(
-                            MessagePlatform::TikTok,
-                            this->tiktokLiveChat_->liveTitle());
-                    }
+                    this->announceIfNewSession(
+                        MessagePlatform::TikTok,
+                        this->tiktokLiveChat_->roomId(),
+                        this->tiktokAnnouncedRoomId_,
+                        this->tiktokLiveChat_->liveTitle());
                 }
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
@@ -878,13 +1247,10 @@ void MergedChannel::initializeSources()
         this->tiktokLive_ = this->tiktokLiveChat_->isLive();
         if (this->tiktokLive_)
         {
-            const QString currentId = this->tiktokLiveChat_->roomId();
-            if (currentId != this->tiktokAnnouncedRoomId_)
-            {
-                this->announceJoinedLiveChat(
-                    MessagePlatform::TikTok,
-                    this->tiktokLiveChat_->liveTitle());
-            }
+            this->announceIfNewSession(MessagePlatform::TikTok,
+                                       this->tiktokLiveChat_->roomId(),
+                                       this->tiktokAnnouncedRoomId_,
+                                       this->tiktokLiveChat_->liveTitle());
         }
     }
 }
@@ -895,6 +1261,9 @@ void MergedChannel::connectSourceSignals(
 {
     if (!source)
     {
+        qCWarning(chatterinoMerged)
+            << "connectSourceSignals: null source channel for platform"
+            << platformName(platform);
         return;
     }
 
@@ -975,6 +1344,9 @@ void MergedChannel::appendInitialMessages(const ChannelPtr &source,
 {
     if (!source)
     {
+        qCWarning(chatterinoMerged)
+            << "appendInitialMessages: null source channel for platform"
+            << platformName(platform);
         return;
     }
 
@@ -1042,6 +1414,25 @@ void MergedChannel::appendMergedMessage(const MessagePtr &source,
         return;
     }
 
+    // Twitch/Kick source messages already ran highlight processing in their
+    // origin channel and clone() preserves the flags. The YouTube/TikTok
+    // builders do not, so run the merged-tab highlight check for them here --
+    // otherwise a matching message never gets Highlighted/color, plays no
+    // highlight sound or window alert, and is never added to /mentions.
+    if (platform == MessagePlatform::YouTube ||
+        platform == MessagePlatform::TikTok)
+    {
+        const auto alert = processMergedPlatformHighlights(*merged);
+        // The flags set above stay per channel copy, but the sound/toast
+        // and /mentions entry must fire only once per source message even
+        // when several MergedChannels share this source.
+        if (merged->flags.has(MessageFlag::Highlighted) &&
+            markHighlightAlerted(messageKey(source, platform)))
+        {
+            triggerHighlightsAndAddMention(this, merged, alert);
+        }
+    }
+
     this->addMessage(merged, MessageContext::Repost);
 }
 
@@ -1052,12 +1443,18 @@ void MergedChannel::replaceMergedMessage(const MessagePtr &previous,
     const auto key = messageKey(previous, platform);
     if (key.isEmpty())
     {
+        qCDebug(chatterinoMerged)
+            << "replace skipped:" << platformName(platform)
+            << "previous message has no key";
         return;
     }
 
     auto it = this->mirroredMessages_.find(key);
     if (it == this->mirroredMessages_.end())
     {
+        qCDebug(chatterinoMerged)
+            << "replace failed:" << platformName(platform)
+            << "no mirrored message for key" << key;
         return;
     }
 
@@ -1066,6 +1463,9 @@ void MergedChannel::replaceMergedMessage(const MessagePtr &previous,
         it->second->flags.has(MessageFlag::RecentMessage));
     if (!updated)
     {
+        qCDebug(chatterinoMerged)
+            << "replace failed:" << platformName(platform)
+            << "createMergedMessage returned null for key" << key;
         return;
     }
 
@@ -1086,18 +1486,28 @@ std::shared_ptr<Message> MergedChannel::createAndTrackMergedMessage(
 {
     if (!shouldMirrorSourceMessage(source))
     {
+        qCDebug(chatterinoMerged)
+            << "not mirroring" << platformName(platform)
+            << "message (filtered by shouldMirrorSourceMessage):"
+            << (source ? source->messageText : QStringLiteral("<null source>"));
         return nullptr;
     }
 
     const auto key = messageKey(source, platform);
     if (!key.isEmpty() && this->mirroredMessages_.contains(key))
     {
+        qCDebug(chatterinoMerged)
+            << "dropping duplicate" << platformName(platform)
+            << "message, key already mirrored:" << key;
         return nullptr;
     }
 
     auto merged = this->createMergedMessage(source, platform, markAsRecent);
     if (!merged)
     {
+        qCDebug(chatterinoMerged)
+            << "dropping" << platformName(platform)
+            << "message: createMergedMessage returned null for key" << key;
         return nullptr;
     }
 
@@ -1194,6 +1604,17 @@ bool MergedChannel::shouldMirrorSourceMessage(const MessagePtr &message)
 
     return text != "joined" && text != "joined channel" &&
            text != "connected" && text != "reconnected";
+}
+
+void MergedChannel::announceIfNewSession(MessagePlatform platform,
+                                         const QString &currentSessionId,
+                                         const QString &announcedSessionId,
+                                         const QString &title)
+{
+    if (currentSessionId != announcedSessionId)
+    {
+        this->announceJoinedLiveChat(platform, title);
+    }
 }
 
 void MergedChannel::announceJoinedLiveChat(MessagePlatform platform,

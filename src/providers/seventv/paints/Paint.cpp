@@ -8,16 +8,52 @@
 #include <QLabel>
 #include <QPainter>
 
+#include <algorithm>
+
 namespace chatterino {
 
 using namespace Qt::Literals;
+
+QMarginsF Paint::pixmapPadding(float scale, float dpr) const
+{
+    if (this->getDropShadows().empty() ||
+        !getSettings()->displaySevenTVPaintShadows)
+    {
+        return {};
+    }
+
+    QMarginsF padding;
+    const auto effectiveDpr = std::max(dpr, 1.0F);
+    const auto shadowScale = scale / effectiveDpr;
+    for (const auto &shadow : this->getDropShadows())
+    {
+        if (!shadow.isValid())
+        {
+            continue;
+        }
+
+        const auto shadowPadding = shadow.padding(shadowScale);
+        padding.setLeft(std::max(padding.left(), shadowPadding.left()));
+        padding.setTop(std::max(padding.top(), shadowPadding.top()));
+        padding.setRight(std::max(padding.right(), shadowPadding.right()));
+        padding.setBottom(std::max(padding.bottom(), shadowPadding.bottom()));
+    }
+    return padding;
+}
 
 QPixmap Paint::getPixmap(const QString &text, const QFont &font,
                          QColor userColor, QSizeF size, float scale,
                          float dpr) const
 {
-    QPixmap pixmap((size * dpr).toSize());
-    pixmap.setDevicePixelRatio(dpr);
+    const auto effectiveDpr = std::max(dpr, 1.0F);
+    const auto padding = this->pixmapPadding(scale, effectiveDpr);
+    const QSizeF pixmapSize(
+        size.width() + padding.left() + padding.right(),
+        size.height() + padding.top() + padding.bottom());
+    const QPointF textOffset(padding.left(), padding.top());
+
+    QPixmap pixmap((pixmapSize * effectiveDpr).toSize());
+    pixmap.setDevicePixelRatio(effectiveDpr);
     pixmap.fill(Qt::transparent);
 
     QPainter pixmapPainter(&pixmap);
@@ -27,18 +63,21 @@ QPixmap Paint::getPixmap(const QString &text, const QFont &font,
     // NOTE: draw colon separately from the nametag
     // otherwise the paint would extend onto the colon
     bool drawColon = false;
-    QRectF nametagBoundingRect{QPointF{}, size};
+    QRectF nametagBoundingRect{textOffset, size};
     QString nametagText = text;
     if (nametagText.endsWith(':'))
     {
         drawColon = true;
         nametagText = nametagText.chopped(1);
         nametagBoundingRect = pixmapPainter.boundingRect(
-            QRectF(0, 0, 10000, 10000), nametagText,
+            QRectF(textOffset, QSizeF(10000, 10000)), nametagText,
             QTextOption(Qt::AlignLeft | Qt::AlignTop));
     }
 
     QPen pen;
+    // Anchor the brush to the rect the text is actually drawn in - an
+    // origin-anchored rect would shift gradients/textures by the shadow
+    // padding offset.
     const QBrush brush = this->asBrush(userColor, nametagBoundingRect);
     pen.setBrush(brush);
     pixmapPainter.setPen(pen);
@@ -50,8 +89,8 @@ QPixmap Paint::getPixmap(const QString &text, const QFont &font,
     if (!this->getDropShadows().empty() &&
         getSettings()->displaySevenTVPaintShadows)
     {
-        QPixmap outMap((size * dpr).toSize());
-        outMap.setDevicePixelRatio(dpr);
+        QPixmap outMap((pixmapSize * effectiveDpr).toSize());
+        outMap.setDevicePixelRatio(effectiveDpr);
         for (const auto &shadow : this->getDropShadows())
         {
             if (!shadow.isValid())
@@ -82,7 +121,8 @@ QPixmap Paint::getPixmap(const QString &text, const QFont &font,
         pixmapPainter.setPen(QPen(colonColor));
         pixmapPainter.setFont(font);
 
-        QRectF colonBoundingRect(nametagBoundingRect.right(), 0, 10000, 10000);
+        QRectF colonBoundingRect(nametagBoundingRect.right(), textOffset.y(),
+                                 10000, 10000);
         pixmapPainter.drawText(colonBoundingRect, u":"_s,
                                QTextOption(Qt::AlignLeft | Qt::AlignTop));
         pixmapPainter.end();

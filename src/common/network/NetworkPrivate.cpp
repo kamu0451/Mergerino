@@ -88,8 +88,19 @@ void loadCached(std::shared_ptr<NetworkData> &&data)
         return;
     }
 
-    // XXX: check if bytes is empty?
     QByteArray bytes = cachedFile.readAll();
+
+    // A zero-length (or unreadable) cache file is not valid content - it's
+    // most likely a truncated or interrupted write. Treat it as a cache miss
+    // and fall back to the network instead of fabricating an empty HTTP-200
+    // success, which downstream (e.g. image decoding) would take as definitive
+    // content. Drop the stale file so the next load doesn't hit it again.
+    if (bytes.isEmpty())
+    {
+        cachedFile.remove();
+        loadUncached(std::move(data));
+        return;
+    }
 
     qCDebug(chatterinoHTTP).noquote() << data->typeString() << "[CACHED] 200"
                                       << data->request.url().toString();

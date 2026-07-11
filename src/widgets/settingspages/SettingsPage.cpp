@@ -9,12 +9,25 @@
 #include "util/FunctionEventFilter.hpp"
 #include "util/RapidJsonSerializeQString.hpp"
 
+#include <QAbstractItemView>
+#include <QAbstractItemModel>
 #include <QDebug>
+#include <QLayout>
+#include <QSet>
 
 namespace chatterino {
+namespace {
 
-bool filterItemsRec(QObject *object, const QString &query)
+bool filterItemsRec(QObject *object, const QString &query,
+                    QSet<QObject *> &visited)
 {
+    if (object == nullptr || visited.contains(object))
+    {
+        return false;
+    }
+
+    visited.insert(object);
+
     bool any{};
 
     for (auto &&child : object->children())
@@ -59,18 +72,39 @@ bool filterItemsRec(QObject *object, const QString &query)
                     tabAny = true;
                 }
                 auto *widget = tabs->widget(i);
-                tabAny |= filterItemsRec(widget, query);
+                tabAny |= filterItemsRec(widget, query, visited);
 
                 any |= tabAny;
             }
         }
+        else if (dynamic_cast<QAbstractItemModel *>(child))
+        {
+            continue;
+        }
+        else if (dynamic_cast<QAbstractItemView *>(child))
+        {
+            continue;
+        }
+        else if (dynamic_cast<QWidget *>(child) ||
+                 dynamic_cast<QLayout *>(child))
+        {
+            any |= filterItemsRec(child, query, visited);
+        }
         else
         {
-            any |= filterItemsRec(child, query);
+            continue;
         }
     }
     return any;
 }
+
+bool filterItemsRec(QObject *object, const QString &query)
+{
+    QSet<QObject *> visited;
+    return filterItemsRec(object, query, visited);
+}
+
+}  // namespace
 
 SettingsPage::SettingsPage()
 {

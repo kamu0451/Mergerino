@@ -15,6 +15,8 @@
 #include "providers/kick/KickChannel.hpp"
 #include "providers/seventv/eventapi/Dispatch.hpp"
 #include "providers/seventv/SeventvAPI.hpp"
+#include "providers/seventv/SeventvBadges.hpp"
+#include "providers/seventv/SeventvPaints.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
 #include "singletons/Settings.hpp"
 #include "util/Helpers.hpp"
@@ -23,10 +25,13 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QColor>
 #include <QStringView>
 #include <QThread>
 
 #include <array>
+#include <limits>
+#include <optional>
 #include <utility>
 
 /**
@@ -195,6 +200,165 @@ EmotePtr createUpdatedEmote(const EmotePtr &oldEmote,
          oldEmote->homePage, oldEmote->zeroWidth, oldEmote->id,
          oldEmote->author, makeConditionedOptional(!toNonAliased, baseName)}));
     return emote;
+}
+
+void appendUniqueID(QStringList &ids, const QString &id)
+{
+    if (!id.isEmpty() && !ids.contains(id))
+    {
+        ids.emplace_back(id);
+    }
+}
+
+std::optional<QColor> parseRgbaColor(const QJsonValue &color)
+{
+    if (color.isNull() || color.isUndefined())
+    {
+        return std::nullopt;
+    }
+
+    bool ok = false;
+    qint64 parsed = 0;
+    if (color.isString())
+    {
+        parsed = color.toString().toLongLong(&ok);
+    }
+    else if (color.isDouble())
+    {
+        const double number = color.toDouble();
+        ok = number >=
+                 static_cast<double>(std::numeric_limits<int32_t>::min()) &&
+             number <=
+                 static_cast<double>(std::numeric_limits<uint32_t>::max());
+        if (ok)
+        {
+            parsed = static_cast<qint64>(number);
+        }
+    }
+
+    if (!ok || parsed < std::numeric_limits<int32_t>::min() ||
+        parsed > std::numeric_limits<uint32_t>::max())
+    {
+        return std::nullopt;
+    }
+
+    const auto rgba = static_cast<uint32_t>(parsed);
+    return QColor((rgba >> 24) & 0xFF, (rgba >> 16) & 0xFF,
+                  (rgba >> 8) & 0xFF, rgba & 0xFF);
+}
+
+std::optional<QColor> collectUserStyleColor(const QJsonObject &user,
+                                            const QJsonObject &json)
+{
+    for (const auto &style :
+         {user["style"].toObject(), json["style"].toObject()})
+    {
+        if (auto color = parseRgbaColor(style["color"]))
+        {
+            if (color->isValid() && color->alpha() > 0)
+            {
+                return color;
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+void appendObjectID(QStringList &ids, const QJsonValue &value)
+{
+    if (value.isString())
+    {
+        appendUniqueID(ids, value.toString());
+        return;
+    }
+
+    const auto obj = value.toObject();
+    if (!obj.isEmpty())
+    {
+        appendUniqueID(ids, obj["id"].toString());
+    }
+}
+
+void collectActiveStyleCosmetics(const QJsonObject &style,
+                                 QStringList &paintIDs,
+                                 QStringList &badgeIDs)
+{
+    appendObjectID(paintIDs, style["paint_id"]);
+    appendObjectID(paintIDs, style["paintId"]);
+    appendObjectID(paintIDs, style["active_paint_id"]);
+    appendObjectID(paintIDs, style["activePaintId"]);
+    appendObjectID(paintIDs, style["paint"]);
+    appendObjectID(paintIDs, style["active_paint"]);
+    appendObjectID(paintIDs, style["activePaint"]);
+
+    appendObjectID(badgeIDs, style["badge_id"]);
+    appendObjectID(badgeIDs, style["badgeId"]);
+    appendObjectID(badgeIDs, style["active_badge_id"]);
+    appendObjectID(badgeIDs, style["activeBadgeId"]);
+    appendObjectID(badgeIDs, style["badge"]);
+    appendObjectID(badgeIDs, style["active_badge"]);
+    appendObjectID(badgeIDs, style["activeBadge"]);
+}
+
+bool isTruthyActiveFlag(const QJsonObject &obj)
+{
+    for (const auto &key : {"active", "selected", "equipped", "enabled"})
+    {
+        if (obj.contains(key) && obj[key].toBool())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void collectActiveCosmeticEntries(const QJsonArray &cosmetics,
+                                  QStringList &paintIDs,
+                                  QStringList &badgeIDs)
+{
+    for (const auto &value : cosmetics)
+    {
+        const auto obj = value.toObject();
+        if (obj.isEmpty() || !isTruthyActiveFlag(obj))
+        {
+            continue;
+        }
+
+        QString id = obj["ref_id"].toString();
+        if (id.isEmpty())
+        {
+            id = obj["refId"].toString();
+        }
+        if (id.isEmpty())
+        {
+            id = obj["id"].toString();
+        }
+
+        const auto kind = obj["kind"].toString().toLower();
+        if (kind == QStringLiteral("paint") || kind == QStringLiteral("paints"))
+        {
+            appendUniqueID(paintIDs, id);
+        }
+        else if (kind == QStringLiteral("badge") ||
+                 kind == QStringLiteral("badges"))
+        {
+            appendUniqueID(badgeIDs, id);
+        }
+    }
+}
+
+void appendUserConnection(QVarLengthArray<User, 2> &connections,
+                          const QJsonObject &connection)
+{
+    const auto platform = connection["platform"].toString();
+    if (platform == "TWITCH")
+    {
+        connections.emplace_back(seventv::eventapi::TwitchUser(connection));
+    }
+    else if (platform == "KICK")
+    {
+        connections.emplace_back(seventv::eventapi::KickUser(connection));
+    }
 }
 
 }  // namespace
@@ -386,7 +550,8 @@ void SeventvEmotes::loadChannelEmotes(
             }
             else
             {
-                // TODO: Auto retry in case of a timeout, with a delay
+                // Transient failures (e.g. timeouts) are already retried with a
+                // delay in SeventvAPI before reaching this point.
                 auto errorString = result.formatError();
                 qCWarning(chatterinoSeventv)
                     << "Error fetching 7TV emotes for channel" << channelId
@@ -420,6 +585,7 @@ void SeventvEmotes::loadKickChannelEmotes(
          userID](const auto &json) {
             writeProviderEmotesCache(u"kick." % QString::number(userID),
                                      "seventv", QJsonDocument(json).toJson());
+            SeventvEmotes::applyUserCosmetics(json);
             const auto emoteSet = json["emote_set"].toObject();
             const auto parsedEmotes = emoteSet["emotes"].toArray();
 
@@ -488,7 +654,8 @@ void SeventvEmotes::loadKickChannelEmotes(
             }
             else
             {
-                // TODO: Auto retry in case of a timeout, with a delay
+                // Transient failures (e.g. timeouts) are already retried with a
+                // delay in SeventvAPI before reaching this point.
                 auto errorString = result.formatError();
                 qCWarning(chatterinoSeventv)
                     << "Error fetching 7TV emotes for channel" << userID
@@ -504,6 +671,57 @@ void SeventvEmotes::loadKickChannelEmotes(
                 }
             }
         });
+}
+
+void SeventvEmotes::applyUserCosmetics(const QJsonObject &json,
+                                       const QJsonObject &preferredConnection)
+{
+    auto user = json["user"].toObject();
+    if (user.isEmpty())
+    {
+        user = json;
+    }
+
+    QVarLengthArray<seventv::eventapi::User, 2> connections;
+    appendUserConnection(connections, preferredConnection);
+    appendUserConnection(connections, json);
+    for (const auto &value : user["connections"].toArray())
+    {
+        appendUserConnection(connections, value.toObject());
+    }
+
+    if (connections.empty())
+    {
+        return;
+    }
+
+    QStringList paintIDs;
+    QStringList badgeIDs;
+
+    collectActiveStyleCosmetics(user["style"].toObject(), paintIDs, badgeIDs);
+    collectActiveStyleCosmetics(json["style"].toObject(), paintIDs, badgeIDs);
+    collectActiveStyleCosmetics(user["cosmetic"].toObject(), paintIDs,
+                                badgeIDs);
+    collectActiveStyleCosmetics(json["cosmetic"].toObject(), paintIDs,
+                                badgeIDs);
+    collectActiveCosmeticEntries(user["cosmetics"].toArray(), paintIDs,
+                                 badgeIDs);
+    collectActiveCosmeticEntries(json["cosmetics"].toArray(), paintIDs,
+                                 badgeIDs);
+    const auto styleColor = collectUserStyleColor(user, json);
+
+    auto *app = getApp();
+    auto *badges = app->getSeventvBadges();
+    auto *paints = app->getSeventvPaints();
+
+    for (const auto &badgeID : badgeIDs)
+    {
+        badges->assignBadgeToUsers(badgeID, connections);
+    }
+    for (const auto &paintID : paintIDs)
+    {
+        paints->assignPaintToUsers(paintID, connections, styleColor);
+    }
 }
 
 std::optional<EmotePtr> SeventvEmotes::addEmote(

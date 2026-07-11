@@ -14,8 +14,15 @@
 #include "util/QMagicEnum.hpp"
 
 #include <magic_enum/magic_enum.hpp>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <QStringBuilder>
+#include <QUrl>
+#include <QUrlQuery>
+
+#include <algorithm>
 
 namespace {
 
@@ -2862,7 +2869,7 @@ void Helix::getGlobalBadges(
             switch (*result.status())
             {
                 case 401: {
-                    failureCallback(Error::Forwarded, message);
+                    failureCallback(Error::UserNotAuthenticated, message);
                 }
                 break;
 
@@ -2913,9 +2920,13 @@ void Helix::getChannelBadges(
 
             switch (*result.status())
             {
-                case 400:
-                case 401: {
+                case 400: {
                     failureCallback(Error::Forwarded, message);
+                }
+                break;
+
+                case 401: {
+                    failureCallback(Error::UserNotAuthenticated, message);
                 }
                 break;
 

@@ -18,7 +18,11 @@
 #include <QFormLayout>
 #include <QGraphicsOpacityEffect>
 #include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
 #include <QSpinBox>
+#include <QToolButton>
+#include <QToolTip>
 #include <QVariantAnimation>
 #include <QVBoxLayout>
 
@@ -30,31 +34,148 @@ namespace chatterino {
 
 namespace {
 
-int indicatorModeIndex(PlatformIndicatorMode mode)
+QToolButton *makeHelpButton(const QString &tip, QWidget *parent)
+{
+    auto *btn = new QToolButton(parent);
+    btn->setText(QStringLiteral("?"));
+    btn->setToolTip(tip);
+    btn->setAutoRaise(true);
+    btn->setCursor(Qt::WhatsThisCursor);
+    btn->setFocusPolicy(Qt::NoFocus);
+    btn->setFixedSize(16, 16);
+    QObject::connect(btn, &QToolButton::clicked, btn, [btn]() {
+        QToolTip::showText(
+            btn->mapToGlobal(QPoint(btn->width() / 2, btn->height())),
+            btn->toolTip(), btn);
+    });
+    return btn;
+}
+
+QWidget *createLabelWithInfo(const QString &labelText, const QString &tooltip,
+                             QWidget *parent)
+{
+    auto *row = new QWidget(parent);
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    layout->addWidget(new QLabel(labelText, row));
+    layout->addWidget(makeHelpButton(tooltip, row));
+    layout->addStretch(1);
+    return row;
+}
+
+QWidget *createCheckboxRow(QCheckBox *checkbox, const QString &tooltip,
+                           QWidget *parent)
+{
+    auto *row = new QWidget(parent);
+    auto *layout = new QHBoxLayout(row);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(6);
+    layout->addWidget(checkbox);
+    layout->addWidget(makeHelpButton(tooltip, row));
+    layout->addStretch(1);
+    return row;
+}
+
+void setIndicatorModeCombo(QComboBox *combo, PlatformIndicatorMode mode)
+{
+    if (combo == nullptr)
+    {
+        return;
+    }
+
+    auto index = combo->findData(static_cast<int>(mode));
+    if (index < 0)
+    {
+        index =
+            combo->findData(static_cast<int>(PlatformIndicatorMode::LineColor));
+    }
+    if (index >= 0)
+    {
+        combo->setCurrentIndex(index);
+    }
+}
+
+void populateIndicatorModeCombo(QComboBox *combo,
+                                PlatformIndicatorMode defaultMode)
+{
+    combo->addItem("None", static_cast<int>(PlatformIndicatorMode::None));
+    combo->addItem("Highlights",
+                   static_cast<int>(PlatformIndicatorMode::LineColor));
+    combo->addItem("Logos", static_cast<int>(PlatformIndicatorMode::Badge));
+    combo->addItem("Both", static_cast<int>(PlatformIndicatorMode::Both));
+    setIndicatorModeCombo(combo, defaultMode);
+}
+
+PlatformIndicatorMode indicatorModeFromCombo(const QComboBox *combo,
+                                             PlatformIndicatorMode fallback)
+{
+    if (combo == nullptr)
+    {
+        return fallback;
+    }
+
+    bool ok = false;
+    const auto value = combo->currentData().toInt(&ok);
+    if (!ok)
+    {
+        return fallback;
+    }
+
+    const auto mode = static_cast<PlatformIndicatorMode>(value);
+    switch (mode)
+    {
+        case PlatformIndicatorMode::None:
+        case PlatformIndicatorMode::LineColor:
+        case PlatformIndicatorMode::Badge:
+        case PlatformIndicatorMode::Both:
+            return mode;
+        default:
+            return fallback;
+    }
+}
+
+PlatformIndicatorMode defaultIndicatorModeForDialog(bool isActivityPane)
+{
+    if (isActivityPane)
+    {
+        return PlatformIndicatorMode::LineColor;
+    }
+
+    return getSettings()->mergedPlatformIndicatorMode.getEnum();
+}
+
+PlatformIndicatorMode fallbackIndicatorModeForDialog(bool isActivityPane)
+{
+    if (isActivityPane)
+    {
+        return PlatformIndicatorMode::LineColor;
+    }
+
+    return getSettings()->mergedPlatformIndicatorMode.getEnum();
+}
+
+int activityTimeDisplayModeIndex(ActivityTimeDisplayMode mode)
 {
     switch (mode)
     {
-        case PlatformIndicatorMode::Badge:
+        case ActivityTimeDisplayMode::Relative:
+            return 0;
+        case ActivityTimeDisplayMode::Timestamp:
             return 1;
-        case PlatformIndicatorMode::Both:
-            return 2;
-        case PlatformIndicatorMode::LineColor:
         default:
             return 0;
     }
 }
 
-PlatformIndicatorMode indicatorModeFromIndex(int index)
+ActivityTimeDisplayMode activityTimeDisplayModeFromIndex(int index)
 {
     switch (index)
     {
         case 1:
-            return PlatformIndicatorMode::Badge;
-        case 2:
-            return PlatformIndicatorMode::Both;
-        case 0:
+            return ActivityTimeDisplayMode::Timestamp;
         default:
-            return PlatformIndicatorMode::LineColor;
+            return ActivityTimeDisplayMode::Relative;
     }
 }
 
@@ -123,6 +244,7 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
                                          bool showTwitchBitsMinimum,
                                          bool showKickKicksMinimum,
                                          bool showTikTokGiftMinimum,
+                                         bool showStreamDatabaseBadgeFeed,
                                          QWidget *parent)
     : BaseWindow(
           {
@@ -136,6 +258,7 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
     , showTwitchBitsMinimum_(showTwitchBitsMinimum)
     , showKickKicksMinimum_(showKickKicksMinimum)
     , showTikTokGiftMinimum_(showTikTokGiftMinimum)
+    , showStreamDatabaseBadgeFeed_(showStreamDatabaseBadgeFeed)
 {
     this->setWindowTitle(isActivityPane ? "Activity settings"
                                         : "Split settings");
@@ -148,22 +271,83 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
     auto *appearanceLayout = new QFormLayout(appearanceGroup);
 
     this->ui_.indicatorMode = new QComboBox();
-    this->ui_.indicatorMode->addItem("Highlights");
-    this->ui_.indicatorMode->addItem("Logos");
-    this->ui_.indicatorMode->addItem("Both");
-    this->ui_.indicatorMode->setToolTip(
-        "Choose whether this split uses platform-colored rows, platform "
-        "logo badges, or both.");
-    appearanceLayout->addRow("Platform style", this->ui_.indicatorMode);
+    populateIndicatorModeCombo(this->ui_.indicatorMode,
+                               defaultIndicatorModeForDialog(
+                                   this->isActivityPane_));
+    const auto platformStyleTooltip = QStringLiteral(
+        "Show no platform indicator, platform color, logo, or both.");
+    const auto addPlatformStyleRow = [this, appearanceLayout,
+                                      platformStyleTooltip] {
+        appearanceLayout->addRow(
+            createLabelWithInfo("Platform style", platformStyleTooltip, this),
+            this->ui_.indicatorMode);
+    };
 
-    if (!this->isActivityPane_)
+    if (this->isActivityPane_)
     {
+        addPlatformStyleRow();
+    }
+    else
+    {
+        addPlatformStyleRow();
+
         this->ui_.filterActivity = new QCheckBox("Filter activity");
-        this->ui_.filterActivity->setToolTip(
-            "Hide sub, hype chat, and cheer activity from this main chat. "
-            "When a linked Activity tab is enabled, this starts turned on by "
-            "default.");
-        appearanceLayout->addRow(this->ui_.filterActivity);
+        const auto filterActivityTooltip = QStringLiteral(
+            "Hide activity alerts from this chat.");
+        appearanceLayout->addRow(createCheckboxRow(this->ui_.filterActivity,
+                                                   filterActivityTooltip,
+                                                   this));
+
+        this->ui_.slowerChat = new QCheckBox("Slower chat");
+        const auto slowerChatTooltip = QStringLiteral(
+            "Queue messages and release them at a fixed rate.");
+        appearanceLayout->addRow(createCheckboxRow(this->ui_.slowerChat,
+                                                   slowerChatTooltip, this));
+
+        this->ui_.slowerChatRate = new QDoubleSpinBox();
+        this->ui_.slowerChatRate->setDecimals(2);
+        this->ui_.slowerChatRate->setRange(MIN_SLOWER_CHAT_MESSAGES_PER_SECOND,
+                                           MAX_SLOWER_CHAT_MESSAGES_PER_SECOND);
+        this->ui_.slowerChatRate->setSingleStep(0.25);
+        this->ui_.slowerChatRate->setButtonSymbols(
+            QAbstractSpinBox::NoButtons);
+        this->ui_.slowerChatRate->setFixedWidth(32);
+        const auto slowerChatRateTooltip = QStringLiteral(
+            "How many queued messages to show each second.");
+        this->ui_.slowerChatRateLabel = createLabelWithInfo(
+            "Messages per second", slowerChatRateTooltip, this);
+        this->ui_.slowerChatRateField = this->ui_.slowerChatRate;
+        appearanceLayout->addRow(this->ui_.slowerChatRateLabel,
+                                 this->ui_.slowerChatRateField);
+
+        this->ui_.slowerChatMessageAnimations =
+            new QCheckBox("Message animations");
+        const auto slowerChatMessageAnimationsTooltip = QStringLiteral(
+            "Animate messages as they arrive in this chat.");
+        appearanceLayout->addRow(
+            createCheckboxRow(this->ui_.slowerChatMessageAnimations,
+                              slowerChatMessageAnimationsTooltip, this));
+
+        this->ui_.viewerCount = new QCheckBox("Viewer count");
+        const auto viewerCountTooltip = QStringLiteral(
+            "Show the viewer count in this split header.");
+        appearanceLayout->addRow(createCheckboxRow(this->ui_.viewerCount,
+                                                   viewerCountTooltip, this));
+
+        if (this->showStreamDatabaseBadgeFeed_)
+        {
+            this->ui_.streamDatabaseBadgeFeed = new QCheckBox("Badge feed");
+            const auto streamDatabaseBadgeFeedTooltip = QStringLiteral(
+                "Show the StreamDatabase badge feed on StreamDatabase tabs.");
+            appearanceLayout->addRow(
+                createCheckboxRow(this->ui_.streamDatabaseBadgeFeed,
+                                  streamDatabaseBadgeFeedTooltip, this));
+        }
+
+        QObject::connect(this->ui_.slowerChat, &QCheckBox::toggled, this,
+                         [this] {
+                             this->updateSlowerChatVisibility();
+                         });
     }
 
     if (this->isActivityPane_)
@@ -176,6 +360,16 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
             this->ui_.activityScale->addItem(option.label, option.scale);
         }
         appearanceLayout->addRow("Chat line size", this->ui_.activityScale);
+
+        this->ui_.activityTimeDisplayMode = new QComboBox();
+        this->ui_.activityTimeDisplayMode->addItem("Relative");
+        this->ui_.activityTimeDisplayMode->addItem("Timestamp");
+        const auto activityTimeDisplayTooltip = QStringLiteral(
+            "Show activity times as 37s ago/1m ago, or as normal timestamps.");
+        appearanceLayout->addRow(
+            createLabelWithInfo("Time display", activityTimeDisplayTooltip,
+                                this),
+            this->ui_.activityTimeDisplayMode);
 
         if (this->showTwitchBitsMinimum_)
         {
@@ -234,46 +428,6 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
 
     rootLayout->addWidget(appearanceGroup);
 
-    if (!this->isActivityPane_)
-    {
-        auto *paceGroup = new QGroupBox("Pace");
-        auto *paceLayout = new QFormLayout(paceGroup);
-
-        this->ui_.slowerChat = new QCheckBox("Slow down incoming chat");
-        this->ui_.slowerChat->setToolTip(
-            "Buffer incoming messages and release them at a steady rate. "
-            "Moderator messages bypass the queue; VIP messages jump to the "
-            "front.");
-        paceLayout->addRow(this->ui_.slowerChat);
-
-        this->ui_.slowerChatRate = new QDoubleSpinBox();
-        this->ui_.slowerChatRate->setRange(
-            MIN_SLOWER_CHAT_MESSAGES_PER_SECOND,
-            MAX_SLOWER_CHAT_MESSAGES_PER_SECOND);
-        this->ui_.slowerChatRate->setSingleStep(0.5);
-        this->ui_.slowerChatRate->setDecimals(2);
-        this->ui_.slowerChatRate->setSuffix(" msg/s");
-        this->ui_.slowerChatRate->setToolTip(
-            "How many messages per second are released from the queue.");
-        paceLayout->addRow("Release rate", this->ui_.slowerChatRate);
-
-        this->ui_.messageAnimations = new QCheckBox(
-            "Animate arriving and shifting messages");
-        this->ui_.messageAnimations->setToolTip(
-            "Fade and slide newly released messages into view, and animate "
-            "layout shifts when messages arrive.");
-        paceLayout->addRow(this->ui_.messageAnimations);
-
-        QObject::connect(this->ui_.slowerChat, &QCheckBox::toggled,
-                         this->ui_.slowerChatRate,
-                         &QDoubleSpinBox::setEnabled);
-        QObject::connect(this->ui_.slowerChat, &QCheckBox::toggled,
-                         this->ui_.messageAnimations,
-                         &QCheckBox::setEnabled);
-
-        rootLayout->addWidget(paceGroup);
-    }
-
     rootLayout->addStretch(1);
 
     auto *buttonBox =
@@ -288,6 +442,8 @@ SplitSettingsDialog::SplitSettingsDialog(bool isActivityPane,
         this->close();
     });
 
+    this->updateSlowerChatVisibility(false);
+
     this->addShortcuts();
     this->themeChangedEvent();
 }
@@ -296,18 +452,15 @@ void SplitSettingsDialog::setPlatformIndicatorMode(PlatformIndicatorMode mode)
 {
     if (this->ui_.indicatorMode)
     {
-        this->ui_.indicatorMode->setCurrentIndex(indicatorModeIndex(mode));
+        setIndicatorModeCombo(this->ui_.indicatorMode, mode);
     }
 }
 
 PlatformIndicatorMode SplitSettingsDialog::platformIndicatorMode() const
 {
-    if (this->ui_.indicatorMode == nullptr)
-    {
-        return PlatformIndicatorMode::LineColor;
-    }
-
-    return indicatorModeFromIndex(this->ui_.indicatorMode->currentIndex());
+    return indicatorModeFromCombo(
+        this->ui_.indicatorMode,
+        fallbackIndicatorModeForDialog(this->isActivityPane_));
 }
 
 void SplitSettingsDialog::setFilterActivity(bool enabled)
@@ -351,6 +504,27 @@ qreal SplitSettingsDialog::activityMessageScale() const
     return this->ui_.activityScale->currentData().toDouble();
 }
 
+void SplitSettingsDialog::setActivityTimeDisplayMode(
+    ActivityTimeDisplayMode mode)
+{
+    if (this->ui_.activityTimeDisplayMode)
+    {
+        this->ui_.activityTimeDisplayMode->setCurrentIndex(
+            activityTimeDisplayModeIndex(mode));
+    }
+}
+
+ActivityTimeDisplayMode SplitSettingsDialog::activityTimeDisplayMode() const
+{
+    if (this->ui_.activityTimeDisplayMode == nullptr)
+    {
+        return ActivityTimeDisplayMode::Relative;
+    }
+
+    return activityTimeDisplayModeFromIndex(
+        this->ui_.activityTimeDisplayMode->currentIndex());
+}
+
 void SplitSettingsDialog::setSlowerChatEnabled(bool enabled)
 {
     if (this->ui_.slowerChat == nullptr)
@@ -362,10 +536,7 @@ void SplitSettingsDialog::setSlowerChatEnabled(bool enabled)
     {
         this->ui_.slowerChatRate->setEnabled(enabled);
     }
-    if (this->ui_.messageAnimations)
-    {
-        this->ui_.messageAnimations->setEnabled(enabled);
-    }
+    this->updateSlowerChatVisibility(false);
 }
 
 bool SplitSettingsDialog::slowerChatEnabled() const
@@ -395,17 +566,43 @@ qreal SplitSettingsDialog::slowerChatMessagesPerSecond() const
 
 void SplitSettingsDialog::setSlowerChatMessageAnimations(bool enabled)
 {
-    if (this->ui_.messageAnimations == nullptr)
+    if (this->ui_.slowerChatMessageAnimations)
     {
-        return;
+        this->ui_.slowerChatMessageAnimations->setChecked(enabled);
     }
-    this->ui_.messageAnimations->setChecked(enabled);
 }
 
 bool SplitSettingsDialog::slowerChatMessageAnimations() const
 {
-    return this->ui_.messageAnimations &&
-           this->ui_.messageAnimations->isChecked();
+    return this->ui_.slowerChatMessageAnimations &&
+           this->ui_.slowerChatMessageAnimations->isChecked();
+}
+
+void SplitSettingsDialog::setViewerCountEnabled(bool enabled)
+{
+    if (this->ui_.viewerCount)
+    {
+        this->ui_.viewerCount->setChecked(enabled);
+    }
+}
+
+bool SplitSettingsDialog::viewerCountEnabled() const
+{
+    return this->ui_.viewerCount && this->ui_.viewerCount->isChecked();
+}
+
+void SplitSettingsDialog::setStreamDatabaseBadgeFeedVisible(bool visible)
+{
+    if (this->ui_.streamDatabaseBadgeFeed)
+    {
+        this->ui_.streamDatabaseBadgeFeed->setChecked(visible);
+    }
+}
+
+bool SplitSettingsDialog::streamDatabaseBadgeFeedVisible() const
+{
+    return this->ui_.streamDatabaseBadgeFeed == nullptr ||
+           this->ui_.streamDatabaseBadgeFeed->isChecked();
 }
 
 void SplitSettingsDialog::setTwitchActivityMinimumBits(uint32_t value)
@@ -553,6 +750,10 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     {
         this->ui_.activityScale->setFont(uiFont);
     }
+    if (this->ui_.activityTimeDisplayMode)
+    {
+        this->ui_.activityTimeDisplayMode->setFont(uiFont);
+    }
     if (this->ui_.slowerChat)
     {
         this->ui_.slowerChat->setFont(uiFont);
@@ -561,9 +762,17 @@ void SplitSettingsDialog::scaleChangedEvent(float newScale)
     {
         this->ui_.slowerChatRate->setFont(uiFont);
     }
-    if (this->ui_.messageAnimations)
+    if (this->ui_.slowerChatMessageAnimations)
     {
-        this->ui_.messageAnimations->setFont(uiFont);
+        this->ui_.slowerChatMessageAnimations->setFont(uiFont);
+    }
+    if (this->ui_.viewerCount)
+    {
+        this->ui_.viewerCount->setFont(uiFont);
+    }
+    if (this->ui_.streamDatabaseBadgeFeed)
+    {
+        this->ui_.streamDatabaseBadgeFeed->setFont(uiFont);
     }
     if (this->ui_.twitchBitsMinimum)
     {

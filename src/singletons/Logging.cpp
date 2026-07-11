@@ -4,6 +4,7 @@
 
 #include "singletons/Logging.hpp"
 
+#include "controllers/logging/LoggedUsers.hpp"
 #include "messages/Message.hpp"
 #include "singletons/helper/LoggingChannel.hpp"
 #include "singletons/Settings.hpp"
@@ -18,20 +19,48 @@ namespace chatterino {
 
 Logging::Logging(Settings &settings)
 {
-    // We can safely ignore this signal connection since settings are only-ever destroyed
-    // on application exit
-    // NOTE: SETTINGS_LIFETIME
-    std::ignore = settings.loggedChannels.delayedItemsChanged.connect(
-        [this, &settings]() {
-            this->threadGuard.guard();
+    logging::initLoggedUsers();
 
-            this->onlyLogListedChannels.clear();
+    auto refreshLoggedChannels = [this, &settings] {
+        std::lock_guard lock(this->loggingChannelsMutex_);
+        this->onlyLogListedChannels_.clear();
 
-            for (const auto &loggedChannel :
-                 *settings.loggedChannels.readOnly())
+        for (const auto &loggedChannel : *settings.loggedChannels.readOnly())
+        {
+            this->onlyLogListedChannels_.insert(
+                loggedChannel.channelName().toLower());
+        }
+    };
+
+    refreshLoggedChannels();
+
+    this->settingConnections_.managedConnect(
+        settings.loggedChannels.delayedItemsChanged,
+        [this, refreshLoggedChannels]() {
+            refreshLoggedChannels();
+        });
+
+    auto refreshLoggedUsers = [this, &settings] {
+        std::lock_guard lock(this->loggingChannelsMutex_);
+        this->loggedUsers_.clear();
+
+        for (const auto &loggedUser : *settings.loggedUsers.readOnly())
+        {
+            const auto normalized =
+                logging::normalizeLoggedUserName(loggedUser.channelName());
+            if (!normalized.isEmpty())
             {
-                this->onlyLogListedChannels.insert(loggedChannel.channelName());
+                this->loggedUsers_.insert(normalized);
             }
+        }
+    };
+
+    refreshLoggedUsers();
+
+    this->settingConnections_.managedConnect(
+        settings.loggedUsers.delayedItemsChanged,
+        [this, refreshLoggedUsers]() {
+            refreshLoggedUsers();
         });
 }
 
@@ -43,21 +72,44 @@ void Logging::addMessage(const QString &channelName, MessagePtr message,
         return;
     }
 
-    this->threadGuard.guard();
-
     if (!getSettings()->enableLogging)
     {
         return;
     }
 
-    if (getSettings()->onlyLogListedChannels)
+    const auto lowerChannelName = channelName.toLower();
+
+    std::lock_guard lock(this->loggingChannelsMutex_);
+
+    // Normalizing runs a regex per message; skip it while no users are logged.
+    QString lowerUserName;
+    if (!this->loggedUsers_.empty())
     {
-        if (!this->onlyLogListedChannels.contains(channelName))
-        {
-            return;
-        }
+        lowerUserName = logging::normalizeLoggedUserName(message->loginName);
+    }
+    const bool logUser = !lowerUserName.isEmpty() &&
+                         this->loggedUsers_.contains(lowerUserName);
+
+    const bool logChannel = !getSettings()->onlyLogListedChannels ||
+                            this->onlyLogListedChannels_.contains(
+                                lowerChannelName);
+
+    if (logChannel)
+    {
+        this->addMessageToChannel(channelName, message, platformName, streamID);
     }
 
+    if (logUser)
+    {
+        this->addMessageToChannel(QStringLiteral("/users/") + lowerUserName,
+                                  message, platformName, streamID);
+    }
+}
+
+void Logging::addMessageToChannel(const QString &channelName, MessagePtr message,
+                                  const QString &platformName,
+                                  const QString &streamID)
+{
     auto platIt = this->loggingChannels_.find(platformName);
     if (platIt == this->loggingChannels_.end())
     {
@@ -89,6 +141,8 @@ void Logging::closeChannel(const QString &channelName,
     {
         return;
     }
+
+    std::lock_guard lock(this->loggingChannelsMutex_);
 
     auto platIt = this->loggingChannels_.find(platformName);
     if (platIt == this->loggingChannels_.end())

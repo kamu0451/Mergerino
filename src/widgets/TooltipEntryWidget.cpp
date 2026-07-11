@@ -24,11 +24,11 @@ TooltipEntryWidget::TooltipEntryWidget(ImagePtr image, const QString &text,
     layout->setContentsMargins(0, 0, 0, 0);
     this->setLayout(layout);
 
-    this->displayImage_ = new QLabel();
+    this->displayImage_ = new QLabel(this);
     this->displayImage_->setAlignment(Qt::AlignHCenter);
     this->displayImage_->setStyleSheet("background: transparent");
     this->displayImage_->hide();
-    this->displayText_ = new QLabel(text);
+    this->displayText_ = new QLabel(text, this);
     this->displayText_->setAlignment(Qt::AlignHCenter);
     this->displayText_->setStyleSheet("background: transparent");
 

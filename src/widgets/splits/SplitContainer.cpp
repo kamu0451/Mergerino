@@ -8,12 +8,14 @@
 #include "common/Common.hpp"
 #include "common/QLogging.hpp"
 #include "common/WindowDescriptors.hpp"
+#include "controllers/filters/FilterRecord.hpp"
 #include "debug/AssertInGuiThread.hpp"
 #include "providers/kick/KickApi.hpp"
 #include "providers/kick/KickChannel.hpp"
 #include "providers/merged/MergedChannel.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "providers/youtube/YouTubeLiveChat.hpp"
 #include "singletons/Fonts.hpp"
 #include "singletons/Settings.hpp"
 #include "singletons/Theme.hpp"
@@ -25,6 +27,7 @@
 #include "widgets/splits/ClosedSplits.hpp"
 #include "widgets/splits/DraggedSplit.hpp"
 #include "widgets/splits/Split.hpp"
+#include "widgets/splits/SplitInput.hpp"
 #include "widgets/Window.hpp"
 
 #include <QApplication>
@@ -38,10 +41,124 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPointer>
+#include <QStringList>
 
 #include <algorithm>
+#include <optional>
 
 namespace chatterino {
+namespace {
+
+QStringList normalizedFilterIds(const QList<QUuid> &ids)
+{
+    QStringList out;
+    out.reserve(ids.size());
+    for (const auto &id : ids)
+    {
+        out.append(id.toString(QUuid::WithoutBraces));
+    }
+    out.sort(Qt::CaseInsensitive);
+    return out;
+}
+
+std::optional<QUuid> findAlertsFilterId()
+{
+    static const auto filterText = QStringLiteral(
+        "flags.sub_message || flags.elevated_message || flags.cheer_message");
+
+    const auto filters = getSettings()->filterRecords.readOnly();
+    for (const auto &filter : *filters)
+    {
+        if (filter && filter->getFilter() == filterText)
+        {
+            return filter->getId();
+        }
+    }
+
+    return std::nullopt;
+}
+
+QJsonObject encodeChannelSignature(IndirectChannel channel)
+{
+    QJsonObject obj;
+    WindowManager::encodeChannel(std::move(channel), obj);
+    return obj;
+}
+
+bool splitMatchesChannelAndFilters(Split *split,
+                                   const QJsonObject &channelSignature,
+                                   const QList<QUuid> &filterIds)
+{
+    if (!split)
+    {
+        return false;
+    }
+
+    return encodeChannelSignature(split->getIndirectChannel()) ==
+               channelSignature &&
+           normalizedFilterIds(split->getFilters()) ==
+               normalizedFilterIds(filterIds);
+}
+
+Split *findRestoredActivityOwner(SplitContainer *container, Split *candidate,
+                                 const QUuid &alertFilterId)
+{
+    if (!container || !candidate || candidate->isActivityPane())
+    {
+        return nullptr;
+    }
+
+    auto candidateFilters = candidate->getFilters();
+    if (!candidateFilters.contains(alertFilterId))
+    {
+        return nullptr;
+    }
+
+    auto ownerFilters = candidateFilters;
+    ownerFilters.removeAll(alertFilterId);
+
+    const auto channel = candidate->getChannel();
+    if (!channel || channel->isEmpty())
+    {
+        return nullptr;
+    }
+
+    const auto channelSignature = encodeChannelSignature(
+        candidate->getIndirectChannel());
+    for (auto *split : container->getSplits())
+    {
+        if (split == candidate || split->isActivityPane())
+        {
+            continue;
+        }
+
+        if (splitMatchesChannelAndFilters(split, channelSignature,
+                                          ownerFilters))
+        {
+            return split;
+        }
+    }
+
+    return nullptr;
+}
+
+void restoreSendPlatformSelection(Split *split,
+                                  const SplitNodeDescriptor &splitNode)
+{
+    if (!splitNode.selectedSendPlatform_)
+    {
+        return;
+    }
+
+    SplitInput::SendPlatformSelection selection;
+    selection.selectedPlatform = *splitNode.selectedSendPlatform_;
+    selection.allPlatforms = splitNode.selectedSendAllPlatforms_;
+    selection.customPlatforms = splitNode.customSelectedSendPlatforms_;
+    selection.enabledPlatforms = splitNode.enabledSendPlatforms_;
+    split->getInput().restoreSendPlatformSelection(selection);
+}
+
+}  // namespace
 
 namespace {
 
@@ -181,10 +298,43 @@ void tryKickAvatar(const TabAvatarRequest &request,
 void tryYouTubeAvatar(const TabAvatarRequest &request,
                       QPointer<NotebookTab> tab, int nextStage)
 {
-    // TODO: YouTube channel avatar requires extracting the channelId from the
-    // watch page (og:image or externalId) — not yet implemented. Fall through
-    // for now so YouTube-only tabs simply show no avatar.
-    loadAvatarForTab(request, tab, nextStage);
+    const auto source = request.youtubeKey;
+    if (source.isEmpty())
+    {
+        loadAvatarForTab(request, tab, nextStage);
+        return;
+    }
+
+    // Key the cache on the normalized channel identity so the same channel
+    // entered as a handle / URL / channelId shares one cached avatar. Fall
+    // back to the raw source when normalization yields nothing recognizable.
+    const auto normalized = YouTubeLiveChat::normalizeSource(source);
+    const auto cacheKey =
+        QStringLiteral("youtube:") +
+        (normalized.isEmpty() ? source : normalized).toLower();
+    auto &cache = tabAvatarCache();
+    if (auto it = cache.constFind(cacheKey); it != cache.constEnd())
+    {
+        if (!tab.isNull())
+        {
+            tab->setAvatar(it.value());
+        }
+        return;
+    }
+
+    auto fallback = [request, tab, nextStage]() {
+        loadAvatarForTab(request, tab, nextStage);
+    };
+
+    YouTubeLiveChat::fetchChannelAvatarUrl(
+        source, [cacheKey, tab, fallback](QString avatarUrl) mutable {
+            if (avatarUrl.isEmpty())
+            {
+                fallback();
+                return;
+            }
+            downloadAvatarInto(cacheKey, avatarUrl, tab, fallback);
+        });
 }
 
 void loadAvatarForTab(const TabAvatarRequest &request,
@@ -303,7 +453,7 @@ Split *SplitContainer::appendNewSplit(bool openChannelNameDialog)
 
     if (openChannelNameDialog)
     {
-        split->showChangeChannelPopup("Open channel", true, [=, this](bool ok) {
+        split->showChangeChannelPopup("Add tab", true, [=, this](bool ok) {
             if (!ok)
             {
                 this->deleteSplit(split);
@@ -344,10 +494,17 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
     clone->setFilterActivity(source->filterActivity(),
                              source->filterActivityExplicit());
     clone->setActivityMessageScale(source->activityMessageScale());
+    clone->setActivityTimeDisplayMode(source->activityTimeDisplayMode());
     clone->setSlowerChatEnabled(source->slowerChatEnabled());
     clone->setSlowerChatMessagesPerSecond(source->slowerChatMessagesPerSecond());
     clone->setSlowerChatMessageAnimations(
         source->slowerChatMessageAnimations());
+    clone->setStreamDatabaseBadgeFeedVisible(
+        source->streamDatabaseBadgeFeedVisible());
+    clone->setTitleSettingsButtonVisible(
+        source->titleSettingsButtonVisible());
+    clone->setChatModeIndicatorVisible(source->chatModeIndicatorVisible());
+    clone->setViewerCountEnabledOverride(source->viewerCountEnabledOverride());
     clone->setTwitchActivityMinimumBits(source->twitchActivityMinimumBits());
     clone->setKickActivityMinimumKicks(source->kickActivityMinimumKicks());
     clone->setTikTokActivityMinimumDiamonds(
@@ -358,6 +515,8 @@ Split *SplitContainer::cloneSplit(Split *source, const QList<QUuid> &filters,
     clone->setTikTokActivityShowShares(source->tiktokActivityShowShares());
     clone->setCheckSpellingOverride(source->checkSpellingOverride());
     clone->setChannel(source->getIndirectChannel());
+    clone->getInput().restoreSendPlatformSelection(
+        source->getInput().sendPlatformSelection());
     clone->setPlatformIndicatorMode(source->platformIndicatorMode());
 
     this->insertSplit(clone, {
@@ -928,17 +1087,7 @@ void SplitContainer::paintEvent(QPaintEvent * /*event*/)
             getApp()->getFonts()->getFont(FontStyle::ChatMedium, this->scale());
         painter.setFont(font);
 
-        QString text = "Click to add a split";
-
-        auto *notebook = dynamic_cast<Notebook *>(this->parentWidget());
-
-        if (notebook != nullptr)
-        {
-            if (notebook->getPageCount() > 1)
-            {
-                text += "\n\nAfter adding hold <Ctrl+Alt> to move or split it.";
-            }
-        }
+        const QString text = "Click to add a tab";
 
         painter.drawText(this->rect(), text, QTextOption(Qt::AlignCenter));
     }
@@ -1076,6 +1225,7 @@ void SplitContainer::applyFromDescriptor(const NodeDescriptor &rootNode)
     assert(this->baseNode_->type_ == Node::Type::EmptyRoot);
 
     this->splitsNeedingActivityFilterNormalization_.clear();
+    this->splitsNeedingActivityPaneMigration_.clear();
     this->disableLayouting_ = true;
     this->applyFromDescriptorRecursively(rootNode, this->baseNode_.get());
     this->disableLayouting_ = false;
@@ -1151,18 +1301,23 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
         result.filters_ = currentNode->split_->getFilters();
         result.spellCheckOverride =
             currentNode->split_->checkSpellingOverride();
+        result.activityPane_ = currentNode->split_->isActivityPane();
         result.inputEnabled_ = currentNode->split_->inputEnabled();
         result.filterActivity_ = currentNode->split_->filterActivity();
         result.filterActivityExplicit_ =
             currentNode->split_->filterActivityExplicit();
         result.activityMessageScale_ =
             currentNode->split_->activityMessageScale();
+        result.activityTimeDisplayMode_ =
+            currentNode->split_->activityTimeDisplayMode();
         result.slowerChatEnabled_ =
             currentNode->split_->slowerChatEnabled();
         result.slowerChatMessagesPerSecond_ =
             currentNode->split_->slowerChatMessagesPerSecond();
         result.slowerChatMessageAnimations_ =
             currentNode->split_->slowerChatMessageAnimations();
+        result.viewerCountEnabled_ =
+            currentNode->split_->viewerCountEnabledOverride();
         result.twitchActivityMinimumBits_ =
             currentNode->split_->twitchActivityMinimumBits();
         result.kickActivityMinimumKicks_ =
@@ -1179,6 +1334,15 @@ NodeDescriptor SplitContainer::buildDescriptorRecursively(
             currentNode->split_->tiktokActivityShowShares();
         result.platformIndicatorMode_ =
             currentNode->split_->platformIndicatorMode();
+        const auto sendPlatformSelection =
+            currentNode->split_->getInput().sendPlatformSelection();
+        result.selectedSendPlatform_ =
+            sendPlatformSelection.selectedPlatform;
+        result.selectedSendAllPlatforms_ = sendPlatformSelection.allPlatforms;
+        result.customSelectedSendPlatforms_ =
+            sendPlatformSelection.customPlatforms;
+        result.enabledSendPlatforms_ =
+            sendPlatformSelection.enabledPlatforms;
         return result;
     }
 
@@ -1213,7 +1377,13 @@ void SplitContainer::applyFromDescriptorRecursively(
         split->setModerationMode(splitNode.moderationMode_);
         split->setFilters(splitNode.filters_);
         split->setCheckSpellingOverride(splitNode.spellCheckOverride);
-        split->setInputEnabled(splitNode.inputEnabled_);
+        split->setInputEnabled(splitNode.activityPane_.value_or(false)
+                                   ? false
+                                   : splitNode.inputEnabled_);
+        if (!splitNode.activityPane_)
+        {
+            this->splitsNeedingActivityPaneMigration_.push_back(split);
+        }
         const bool hasExplicitFilterActivity =
             splitNode.filterActivityExplicit_.has_value();
         if (splitNode.filterActivity_)
@@ -1227,11 +1397,21 @@ void SplitContainer::applyFromDescriptorRecursively(
             this->splitsNeedingActivityFilterNormalization_.push_back(split);
         }
         split->setActivityMessageScale(splitNode.activityMessageScale_);
+        split->setActivityTimeDisplayMode(
+            splitNode.activityTimeDisplayMode_.value_or(
+                ActivityTimeDisplayMode::Relative));
         split->setSlowerChatEnabled(splitNode.slowerChatEnabled_);
         split->setSlowerChatMessagesPerSecond(
             splitNode.slowerChatMessagesPerSecond_);
         split->setSlowerChatMessageAnimations(
             splitNode.slowerChatMessageAnimations_);
+        split->setStreamDatabaseBadgeFeedVisible(
+            splitNode.streamDatabaseBadgeFeedVisible_);
+        split->setTitleSettingsButtonVisible(
+            splitNode.titleSettingsButtonVisible_);
+        split->setChatModeIndicatorVisible(
+            splitNode.chatModeIndicatorVisible_);
+        split->setViewerCountEnabledOverride(splitNode.viewerCountEnabled_);
         split->setTwitchActivityMinimumBits(
             splitNode.twitchActivityMinimumBits_);
         split->setKickActivityMinimumKicks(splitNode.kickActivityMinimumKicks_);
@@ -1253,6 +1433,7 @@ void SplitContainer::applyFromDescriptorRecursively(
         {
             split->setPlatformIndicatorMode(PlatformIndicatorMode::LineColor);
         }
+        restoreSendPlatformSelection(split, splitNode);
 
         this->insertSplit(split);
 
@@ -1289,7 +1470,13 @@ void SplitContainer::applyFromDescriptorRecursively(
                 split->setChannel(WindowManager::decodeChannel(splitNode));
                 split->setModerationMode(splitNode.moderationMode_);
                 split->setCheckSpellingOverride(splitNode.spellCheckOverride);
-                split->setInputEnabled(splitNode.inputEnabled_);
+                split->setInputEnabled(splitNode.activityPane_.value_or(false)
+                                           ? false
+                                           : splitNode.inputEnabled_);
+                if (!splitNode.activityPane_)
+                {
+                    this->splitsNeedingActivityPaneMigration_.push_back(split);
+                }
                 const bool hasExplicitFilterActivity =
                     splitNode.filterActivityExplicit_.has_value();
                 if (splitNode.filterActivity_)
@@ -1304,11 +1491,22 @@ void SplitContainer::applyFromDescriptorRecursively(
                         split);
                 }
                 split->setActivityMessageScale(splitNode.activityMessageScale_);
+                split->setActivityTimeDisplayMode(
+                    splitNode.activityTimeDisplayMode_.value_or(
+                        ActivityTimeDisplayMode::Relative));
                 split->setSlowerChatEnabled(splitNode.slowerChatEnabled_);
                 split->setSlowerChatMessagesPerSecond(
                     splitNode.slowerChatMessagesPerSecond_);
                 split->setSlowerChatMessageAnimations(
                     splitNode.slowerChatMessageAnimations_);
+                split->setStreamDatabaseBadgeFeedVisible(
+                    splitNode.streamDatabaseBadgeFeedVisible_);
+                split->setTitleSettingsButtonVisible(
+                    splitNode.titleSettingsButtonVisible_);
+                split->setChatModeIndicatorVisible(
+                    splitNode.chatModeIndicatorVisible_);
+                split->setViewerCountEnabledOverride(
+                    splitNode.viewerCountEnabled_);
                 split->setTwitchActivityMinimumBits(
                     splitNode.twitchActivityMinimumBits_);
                 split->setKickActivityMinimumKicks(
@@ -1333,6 +1531,7 @@ void SplitContainer::applyFromDescriptorRecursively(
                     split->setPlatformIndicatorMode(
                         PlatformIndicatorMode::LineColor);
                 }
+                restoreSendPlatformSelection(split, splitNode);
 
                 auto node = std::make_shared<Node>();
                 node->parent_ = baseNode;
@@ -1366,6 +1565,27 @@ void SplitContainer::applyFromDescriptorRecursively(
 
 void SplitContainer::normalizeRestoredActivityFiltering()
 {
+    if (const auto alertFilterId = findAlertsFilterId())
+    {
+        for (auto *split : this->splitsNeedingActivityPaneMigration_)
+        {
+            auto *owner =
+                findRestoredActivityOwner(this, split, *alertFilterId);
+            if (!owner)
+            {
+                continue;
+            }
+
+            split->setInputEnabled(false);
+            split->setFilterActivity(false);
+            split->setSlowerChatEnabled(false);
+            split->setPlatformIndicatorMode(PlatformIndicatorMode::LineColor);
+            owner->setFilterActivity(true);
+        }
+    }
+
+    this->splitsNeedingActivityPaneMigration_.clear();
+
     for (auto *split : this->splitsNeedingActivityFilterNormalization_)
     {
         if (!split || split->isActivityPane())

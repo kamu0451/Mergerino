@@ -8,6 +8,7 @@
 #include "controllers/hotkeys/Hotkey.hpp"
 #include "controllers/hotkeys/HotkeyCategory.hpp"
 #include "controllers/hotkeys/HotkeyModel.hpp"
+#include "singletons/Settings.hpp"
 #include "util/RapidJsonSerializeQString.hpp"  // IWYU pragma: keep
 
 #include <pajlada/settings.hpp>
@@ -387,10 +388,10 @@ void HotkeyController::addDefaults(std::set<QString> &addedHotkeys)
                             QKeySequence("Ctrl+Shift+F"), "showGlobalSearch",
                             std::vector<QString>(), "show global search");
         this->tryAddDefault(addedHotkeys, HotkeyCategory::Split,
-                            QKeySequence("Ctrl+F5"), "reconnect",
+                            QKeySequence("F5"), "reconnect",
                             std::vector<QString>(), "reconnect");
         this->tryAddDefault(addedHotkeys, HotkeyCategory::Split,
-                            QKeySequence("F5"), "reloadEmotes",
+                            QKeySequence("Ctrl+F5"), "reloadEmotes",
                             std::vector<QString>(), "reload emotes");
 
         this->tryAddDefault(addedHotkeys, HotkeyCategory::Split,
@@ -440,6 +441,9 @@ void HotkeyController::addDefaults(std::set<QString> &addedHotkeys)
         this->tryAddDefault(addedHotkeys, HotkeyCategory::SplitInput,
                             QKeySequence("Ctrl+E"), "openEmotesPopup",
                             std::vector<QString>(), "emote picker");
+        this->tryAddDefault(addedHotkeys, HotkeyCategory::SplitInput,
+                            QKeySequence("Ctrl+D"), "cycleSendPlatform",
+                            std::vector<QString>(), "cycle send platform");
 
         // all variations of send message :)
         {
@@ -574,13 +578,90 @@ void HotkeyController::resetToDefaults()
 
 void HotkeyController::clearRemovedDefaults()
 {
+    bool changed = false;
+
+    const auto isDefaultHotkey =
+        [](const std::shared_ptr<Hotkey> &hotkey, HotkeyCategory category,
+           const QKeySequence &keySequence, const QString &action,
+           const std::vector<QString> &args, const QString &name) {
+            return hotkey != nullptr && hotkey->category() == category &&
+                   hotkey->keySequence().matches(keySequence) ==
+                       QKeySequence::ExactMatch &&
+                   keySequence.matches(hotkey->keySequence()) ==
+                       QKeySequence::ExactMatch &&
+                   hotkey->action() == action && hotkey->arguments() == args &&
+                   hotkey->name() == name;
+        };
+
+    auto oldReconnect = this->getHotkeyByName("reconnect");
+    auto oldReloadEmotes = this->getHotkeyByName("reload emotes");
+    const auto noArguments = std::vector<QString>();
+
+    const bool reconnectWasOldDefault = isDefaultHotkey(
+        oldReconnect, HotkeyCategory::Split, QKeySequence("Ctrl+F5"),
+        "reconnect", noArguments, "reconnect");
+    const bool reloadEmotesWasOldDefault = isDefaultHotkey(
+        oldReloadEmotes, HotkeyCategory::Split, QKeySequence("F5"),
+        "reloadEmotes", noArguments, "reload emotes");
+
+    if (reconnectWasOldDefault && reloadEmotesWasOldDefault)
+    {
+        this->replaceHotkey(
+            "reconnect",
+            std::make_shared<Hotkey>(HotkeyCategory::Split, QKeySequence("F5"),
+                                     "reconnect", noArguments, "reconnect"));
+        this->replaceHotkey("reload emotes",
+                            std::make_shared<Hotkey>(
+                                HotkeyCategory::Split, QKeySequence("Ctrl+F5"),
+                                "reloadEmotes", noArguments, "reload emotes"));
+        changed = true;
+    }
+    else
+    {
+        const auto migrateDefault =
+            [this, &isDefaultHotkey, &noArguments](
+                const QKeySequence &oldSequence,
+                const QKeySequence &newSequence, const QString &action,
+                const QString &name) {
+                auto current = this->getHotkeyByName(name);
+                if (!isDefaultHotkey(current, HotkeyCategory::Split,
+                                     oldSequence, action, noArguments, name))
+                {
+                    return false;
+                }
+
+                auto migrated = std::make_shared<Hotkey>(
+                    HotkeyCategory::Split, newSequence, action, noArguments,
+                    name);
+                if (this->isDuplicate(migrated, name))
+                {
+                    return false;
+                }
+
+                this->replaceHotkey(name, migrated);
+                return true;
+            };
+
+        changed |= migrateDefault(QKeySequence("Ctrl+F5"), QKeySequence("F5"),
+                                  "reconnect", "reconnect");
+        changed |= migrateDefault(QKeySequence("F5"), QKeySequence("Ctrl+F5"),
+                                  "reloadEmotes", "reload emotes");
+    }
+
     // The "toggleLiveOnly" argument was removed 2024-08-04
-    this->tryRemoveDefault(HotkeyCategory::Window, QKeySequence("Ctrl+Shift+L"),
-                           "setTabVisibility", {"toggleLiveOnly"},
-                           "toggle live tabs only");
+    changed |= this->tryRemoveDefault(HotkeyCategory::Window,
+                                      QKeySequence("Ctrl+Shift+L"),
+                                      "setTabVisibility", {"toggleLiveOnly"},
+                                      "toggle live tabs only");
 
     this->warnForRemovedHotkeyActions(HotkeyCategory::Window,
                                       "setTabVisibility", {"toggleLiveOnly"});
+
+    if (changed)
+    {
+        this->saveHotkeys();
+        getSettings()->requestSave();
+    }
 }
 
 void HotkeyController::tryAddDefault(std::set<QString> &addedHotkeys,

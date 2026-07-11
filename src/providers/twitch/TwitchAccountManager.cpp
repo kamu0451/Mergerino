@@ -11,6 +11,7 @@
 #include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
+#include "controllers/twitch/LiveController.hpp"
 #include "messages/MessageBuilder.hpp"
 #include "providers/twitch/api/Helix.hpp"
 #include "providers/twitch/TwitchAccount.hpp"
@@ -52,13 +53,30 @@ QString missingScopes(const QJsonArray &scopesArray)
     return missingList;
 }
 
+QString normalizeOAuthToken(QString token)
+{
+    token = token.trimmed();
+    if (token.startsWith("oauth:", Qt::CaseInsensitive))
+    {
+        token.remove(0, 6);
+    }
+    return token;
+}
+
 void checkMissingScopes(const std::shared_ptr<TwitchAccount> &account)
 {
+    const auto oauthToken = account->getOAuthToken();
+
     NetworkRequest(u"https://id.twitch.tv/oauth2/validate"_s,
                    NetworkRequestType::Get)
-        .header("Authorization", u"OAuth " % account->getOAuthToken())
+        .header("Authorization", u"OAuth " % oauthToken)
         .timeout(20000)
-        .onSuccess([account](const auto &res) {
+        .onSuccess([account, oauthToken](const auto &res) {
+            if (account->getOAuthToken() != oauthToken)
+            {
+                return;
+            }
+
             auto *app = tryGetApp();
             if (!app)
             {
@@ -66,16 +84,49 @@ void checkMissingScopes(const std::shared_ptr<TwitchAccount> &account)
             }
 
             const auto json = res.parseJson();
+            std::string settingsBasePath =
+                "/accounts/uid" + account->getUserId().toStdString();
+            bool accountSettingsChanged = false;
+            bool shouldReloadIdentityBackedData = false;
+
+            const auto tokenUserID = json["user_id"_L1].toString();
+            if (!tokenUserID.isEmpty() && account->setUserId(tokenUserID))
+            {
+                const auto correctedSettingsBasePath =
+                    "/accounts/uid" + tokenUserID.toStdString();
+                if (correctedSettingsBasePath != settingsBasePath)
+                {
+                    pajlada::Settings::Setting<QString>::set(
+                        correctedSettingsBasePath + "/username",
+                        account->getUserName());
+                    pajlada::Settings::Setting<QString>::set(
+                        correctedSettingsBasePath + "/userID", tokenUserID);
+                    pajlada::Settings::Setting<QString>::set(
+                        correctedSettingsBasePath + "/clientID",
+                        account->getOAuthClient());
+                    pajlada::Settings::Setting<QString>::set(
+                        correctedSettingsBasePath + "/oauthToken",
+                        account->getOAuthToken());
+                    pajlada::Settings::SettingManager::gRemoveSetting(
+                        settingsBasePath);
+                    settingsBasePath = correctedSettingsBasePath;
+                }
+                else
+                {
+                    pajlada::Settings::Setting<QString>::set(
+                        settingsBasePath + "/userID", tokenUserID);
+                }
+                accountSettingsChanged = true;
+                shouldReloadIdentityBackedData = true;
+            }
 
             const auto login = json["login"_L1].toString();
             if (!login.isEmpty() &&
                 login.compare(account->getUserName(), Qt::CaseInsensitive) != 0)
             {
                 account->setUserName(login);
-                const std::string basePath =
-                    "/accounts/uid" + account->getUserId().toStdString();
-                pajlada::Settings::Setting<QString>::set(basePath + "/username",
-                                                         login);
+                pajlada::Settings::Setting<QString>::set(
+                    settingsBasePath + "/username", login);
                 auto &manager = app->getAccounts()->twitch;
                 auto currentUsername = manager.getCurrent()->getUserName();
                 if (currentUsername.compare(manager.currentUsername.getValue(),
@@ -83,8 +134,18 @@ void checkMissingScopes(const std::shared_ptr<TwitchAccount> &account)
                 {
                     manager.currentUsername = currentUsername;
                 }
-                getSettings()->requestSave();
+                accountSettingsChanged = true;
                 app->getAccounts()->twitch.currentUserNameChanged.invoke();
+            }
+
+            if (accountSettingsChanged)
+            {
+                getSettings()->requestSave();
+            }
+            if (shouldReloadIdentityBackedData)
+            {
+                account->loadSeventvUserID();
+                account->reloadEmotes();
             }
 
             auto missing = missingScopes(json["scopes"_L1].toArray());
@@ -103,6 +164,12 @@ void checkMissingScopes(const std::shared_ptr<TwitchAccount> &account)
                 << "Failed to check for missing scopes:" << res.formatError();
         })
         .execute();
+}
+
+bool hasHelixCredentials(const std::shared_ptr<TwitchAccount> &account)
+{
+    return account && !account->getOAuthClient().isEmpty() &&
+           !account->getOAuthToken().isEmpty();
 }
 
 }  // namespace
@@ -299,6 +366,7 @@ void TwitchAccountManager::reloadUsers()
     UserData userData;
 
     bool listUpdated = false;
+    bool settingsUpdated = false;
 
     for (const auto &uid : keys)
     {
@@ -307,14 +375,15 @@ void TwitchAccountManager::reloadUsers()
             continue;
         }
 
+        const std::string accountPath = "/accounts/" + uid;
         auto username = pajlada::Settings::Setting<QString>::get(
-            "/accounts/" + uid + "/username");
-        auto userID = pajlada::Settings::Setting<QString>::get("/accounts/" +
-                                                               uid + "/userID");
+            accountPath + "/username");
+        auto userID = pajlada::Settings::Setting<QString>::get(accountPath +
+                                                               "/userID");
         auto clientID = pajlada::Settings::Setting<QString>::get(
-            "/accounts/" + uid + "/clientID");
+            accountPath + "/clientID");
         auto oauthToken = pajlada::Settings::Setting<QString>::get(
-            "/accounts/" + uid + "/oauthToken");
+            accountPath + "/oauthToken");
 
         if (username.isEmpty() || userID.isEmpty() || clientID.isEmpty() ||
             oauthToken.isEmpty())
@@ -325,7 +394,15 @@ void TwitchAccountManager::reloadUsers()
         userData.username = username.trimmed();
         userData.userID = userID.trimmed();
         userData.clientID = clientID.trimmed();
-        userData.oauthToken = oauthToken.trimmed();
+        userData.oauthToken = normalizeOAuthToken(oauthToken);
+
+        if (userData.oauthToken != oauthToken.trimmed())
+        {
+            pajlada::Settings::Setting<QString>::set(accountPath +
+                                                         "/oauthToken",
+                                                     userData.oauthToken);
+            settingsUpdated = true;
+        }
 
         switch (this->addUser(userData))
         {
@@ -356,6 +433,11 @@ void TwitchAccountManager::reloadUsers()
         }
     }
 
+    if (settingsUpdated)
+    {
+        getSettings()->requestSave();
+    }
+
     if (listUpdated)
     {
         this->userListUpdated.invoke();
@@ -373,6 +455,29 @@ void TwitchAccountManager::load()
 
     this->currentUsername.connect([this](const QString &newUsername) {
         auto user = this->findUserByUsername(newUsername);
+        auto *app = getApp();
+
+        auto updateHelixCredentials =
+            [this](const std::shared_ptr<TwitchAccount> &preferredUser) {
+                if (hasHelixCredentials(preferredUser))
+                {
+                    getHelix()->update(preferredUser->getOAuthClient(),
+                                       preferredUser->getOAuthToken());
+                    return;
+                }
+
+                for (const auto &account : this->accounts)
+                {
+                    if (hasHelixCredentials(account))
+                    {
+                        getHelix()->update(account->getOAuthClient(),
+                                           account->getOAuthToken());
+                        return;
+                    }
+                }
+
+                getHelix()->update({}, {});
+            };
 
         this->currentUserAboutToChange.invoke(this->currentUser_, user);
 
@@ -380,17 +485,22 @@ void TwitchAccountManager::load()
         {
             qCDebug(chatterinoTwitch)
                 << "Twitch user updated to" << newUsername;
-            getHelix()->update(user->getOAuthClient(), user->getOAuthToken());
+            updateHelixCredentials(user);
             this->currentUser_ = user;
         }
         else
         {
             qCDebug(chatterinoTwitch) << "Twitch user updated to anonymous";
+            updateHelixCredentials(nullptr);
             this->currentUser_ = this->anonymousUser_;
         }
 
         this->currentUserChanged();
         this->currentUser_->reloadEmotes();
+        if (!app->isTest())
+        {
+            app->getTwitchLiveController()->request();
+        }
     });
 }
 
@@ -411,10 +521,33 @@ bool TwitchAccountManager::removeUser(TwitchAccount *account)
     static const QString accountFormat("/accounts/uid%1");
 
     auto userID(account->getUserId());
-    if (!userID.isEmpty())
+    const auto exactAccountPath = accountFormat.arg(userID).toStdString();
+
+    auto keys = pajlada::Settings::SettingManager::getObjectKeys("/accounts");
+    for (const auto &uid : keys)
     {
-        pajlada::Settings::SettingManager::gRemoveSetting(
-            accountFormat.arg(userID).toStdString());
+        if (uid == "current")
+        {
+            continue;
+        }
+
+        const std::string accountPath = "/accounts/" + uid;
+        const auto storedUserID = pajlada::Settings::Setting<QString>::get(
+            accountPath + "/userID");
+        const auto storedUsername = pajlada::Settings::Setting<QString>::get(
+            accountPath + "/username");
+        const bool matchesExactPath = accountPath == exactAccountPath;
+        const bool matchesUserID =
+            !userID.isEmpty() && storedUserID.compare(userID) == 0;
+        const bool matchesUsername =
+            !account->getUserName().isEmpty() &&
+            storedUsername.compare(account->getUserName(),
+                                   Qt::CaseInsensitive) == 0;
+
+        if (matchesExactPath || matchesUserID || matchesUsername)
+        {
+            pajlada::Settings::SettingManager::gRemoveSetting(accountPath);
+        }
     }
 
     if (account->getUserName() == this->currentUsername)
@@ -443,6 +576,11 @@ TwitchAccountManager::AddUserResponse TwitchAccountManager::addUser(
         }
 
         if (previousUser->setOAuthToken(userData.oauthToken))
+        {
+            userUpdated = true;
+        }
+
+        if (previousUser->setUserId(userData.userID))
         {
             userUpdated = true;
         }

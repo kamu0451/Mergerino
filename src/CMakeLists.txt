@@ -432,6 +432,7 @@ set(SOURCE_FILES
         providers/kick/KickLiveUpdates.hpp
         providers/kick/KickMessageBuilder.cpp
         providers/kick/KickMessageBuilder.hpp
+        providers/kick/KickTimeoutClamp.hpp
         providers/merged/MergedChannel.cpp
         providers/merged/MergedChannel.hpp
 
@@ -443,13 +444,6 @@ set(SOURCE_FILES
         providers/liveupdates/BasicPubSubClient.hpp
         providers/liveupdates/BasicPubSubListener.hpp
         providers/liveupdates/BasicPubSubManager.hpp
-
-        providers/pronouns/Pronouns.cpp
-        providers/pronouns/Pronouns.hpp
-        providers/pronouns/UserPronouns.cpp
-        providers/pronouns/UserPronouns.hpp
-        providers/pronouns/alejo/PronounsAlejoApi.cpp
-        providers/pronouns/alejo/PronounsAlejoApi.hpp
 
         providers/recentmessages/Api.cpp
         providers/recentmessages/Api.hpp
@@ -494,6 +488,7 @@ set(SOURCE_FILES
 
         providers/twitch/ChannelPointReward.cpp
         providers/twitch/ChannelPointReward.hpp
+        providers/twitch/CurrentUserBadges.hpp
         providers/twitch/IrcMessageHandler.cpp
         providers/twitch/IrcMessageHandler.hpp
         providers/twitch/PubSubClient.cpp
@@ -522,8 +517,15 @@ set(SOURCE_FILES
         providers/twitch/TwitchIrcServer.cpp
         providers/twitch/TwitchIrcServer.hpp
         providers/twitch/TwitchUser.cpp
+        providers/youtube/YouTubeAccount.cpp
+        providers/youtube/YouTubeAccount.hpp
+        providers/youtube/YouTubeAccountManager.cpp
+        providers/youtube/YouTubeAccountManager.hpp
+        providers/youtube/YouTubeCommon.hpp
         providers/youtube/YouTubeLiveChat.cpp
         providers/youtube/YouTubeLiveChat.hpp
+        providers/youtube/YouTubeParsing.cpp
+        providers/youtube/YouTubeParsing.hpp
         providers/tiktok/ProtobufReader.hpp
         providers/tiktok/TikTokFrameDecoder.cpp
         providers/tiktok/TikTokFrameDecoder.hpp
@@ -599,6 +601,8 @@ set(SOURCE_FILES
         util/AttachToConsole.hpp
         util/Backup.cpp
         util/Backup.hpp
+        util/ChatterinoImport.cpp
+        util/ChatterinoImport.hpp
         util/BadgeRegistry.cpp
         util/BadgeRegistry.hpp
         util/BoostJsonWrap.cpp
@@ -647,6 +651,7 @@ set(SOURCE_FILES
         util/RapidjsonHelpers.hpp
         util/RatelimitBucket.cpp
         util/RatelimitBucket.hpp
+        util/RateLimiter.hpp
         util/RenameThread.cpp
         util/RenameThread.hpp
         util/SampleData.cpp
@@ -745,6 +750,12 @@ set(SOURCE_FILES
         widgets/dialogs/ChannelFilterEditorDialog.hpp
         widgets/dialogs/ColorPickerDialog.cpp
         widgets/dialogs/ColorPickerDialog.hpp
+        widgets/dialogs/CreatePollDialog.cpp
+        widgets/dialogs/CreatePollDialog.hpp
+        widgets/dialogs/CreatePredictionDialog.cpp
+        widgets/dialogs/CreatePredictionDialog.hpp
+        widgets/dialogs/ManagePredictionDialog.cpp
+        widgets/dialogs/ManagePredictionDialog.hpp
         widgets/dialogs/EditHotkeyDialog.cpp
         widgets/dialogs/EditHotkeyDialog.hpp
         widgets/dialogs/EditUserNotesDialog.cpp
@@ -773,6 +784,10 @@ set(SOURCE_FILES
         widgets/dialogs/LastRunCrashDialog.hpp
         widgets/dialogs/LoginDialog.cpp
         widgets/dialogs/LoginDialog.hpp
+        widgets/dialogs/TwitchLoginPage.cpp
+        widgets/dialogs/TwitchLoginPage.hpp
+        widgets/dialogs/YouTubeLoginPage.cpp
+        widgets/dialogs/YouTubeLoginPage.hpp
         widgets/dialogs/QualityPopup.cpp
         widgets/dialogs/QualityPopup.hpp
         widgets/dialogs/ReplyThreadPopup.cpp
@@ -933,6 +948,10 @@ set(SOURCE_FILES
         widgets/splits/SplitInput.hpp
         widgets/splits/SplitOverlay.cpp
         widgets/splits/SplitOverlay.hpp
+        widgets/splits/StreamDatabaseBadgeBar.cpp
+        widgets/splits/StreamDatabaseBadgeBar.hpp
+        widgets/splits/TwitchPollsAndPredictionsBar.cpp
+        widgets/splits/TwitchPollsAndPredictionsBar.hpp
         )
 
 # Generate source groups for use in IDEs

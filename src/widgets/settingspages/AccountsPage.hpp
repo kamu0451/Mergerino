@@ -6,6 +6,9 @@
 
 #include "widgets/settingspages/SettingsPage.hpp"
 
+#include <QLabel>
+#include <QPushButton>
+
 namespace chatterino {
 
 class AccountSwitchWidget;

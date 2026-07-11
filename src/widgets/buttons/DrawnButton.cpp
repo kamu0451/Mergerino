@@ -64,6 +64,7 @@ void DrawnButton::themeChangedEvent()
             o.foregroundHover = this->theme->messages.textColors.regular;
         }
         break;
+
     }
 
     this->invalidateContent();
@@ -161,6 +162,7 @@ void DrawnButton::paintContent(QPainter &painter)
             painter.fillRect(topBox, fg);
         }
         break;
+
     }
 }
 

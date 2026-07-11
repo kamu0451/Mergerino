@@ -8,12 +8,50 @@
 #include "widgets/BaseWindow.hpp"
 
 #include <pajlada/signals/signalholder.hpp>
+#include <QNetworkAccessManager>
+#include <QString>
 
+#include <functional>
+
+class QLabel;
+class QNetworkReply;
 class QPushButton;
 
 namespace chatterino {
 
 class Label;
+
+/// A stable fingerprint of the latest patch-notes section in patchnotes.txt.
+/// Used to decide whether the post-update dialog has new notes to show (so a
+/// bare version bump with unchanged notes does not re-nag). Empty string if no
+/// patch notes could be loaded.
+QString latestPatchNotesFingerprint();
+
+class StreamDatabaseUpdateDialog : public BaseWindow
+{
+public:
+    explicit StreamDatabaseUpdateDialog(
+        QWidget *parent = nullptr,
+        std::function<void()> onContinueToPatchNotes = {});
+
+private:
+    void addStreamDatabaseTab();
+    void requestStreamDatabaseLogo();
+    void handleStreamDatabaseLogoFinished(QNetworkReply *reply);
+
+    QLabel *streamDatabaseLogo_ = nullptr;
+    QPushButton *addTabButton_ = nullptr;
+    QNetworkAccessManager network_;
+    QNetworkReply *pendingLogoReply_ = nullptr;
+    std::function<void()> onContinueToPatchNotes_;
+    bool addedStreamDatabaseTab_ = false;
+};
+
+class PostUpdateDialog : public BaseWindow
+{
+public:
+    explicit PostUpdateDialog(const QString &version, QWidget *parent = nullptr);
+};
 
 /// The UpdateDialog is what's shown to the user after they clicked the update indicator in the tab bar/title bar.
 ///

@@ -475,29 +475,6 @@ void TwitchIrcServer::onReadConnected(IrcConnection *connection)
         this->joinBucket_->send(channel->getName());
     }
 
-    // connected/disconnected message
-    auto connectedMsg = makeSystemMessage("connected");
-    connectedMsg->flags.set(MessageFlag::ConnectedMessage);
-    auto reconnected = makeSystemMessage("reconnected");
-    reconnected->flags.set(MessageFlag::ConnectedMessage);
-
-    for (const auto &chan : activeChannels)
-    {
-        MessagePtr last = chan->getLastMessage();
-
-        bool replaceMessage =
-            last && last->flags.has(MessageFlag::DisconnectedMessage);
-
-        if (replaceMessage)
-        {
-            chan->replaceMessage(last, reconnected);
-        }
-        else
-        {
-            chan->addMessage(connectedMsg, MessageContext::Original);
-        }
-    }
-
     this->falloffCounter_ = 1;
 }
 
@@ -510,10 +487,6 @@ void TwitchIrcServer::onDisconnected()
 {
     std::lock_guard<std::mutex> lock(this->channelMutex);
 
-    MessageBuilder b(systemMessage, "disconnected");
-    b->flags.set(MessageFlag::DisconnectedMessage);
-    auto disconnectedMsg = b.release();
-
     for (std::weak_ptr<Channel> &weak : this->channels.values())
     {
         std::shared_ptr<Channel> chan = weak.lock();
@@ -521,8 +494,6 @@ void TwitchIrcServer::onDisconnected()
         {
             continue;
         }
-
-        chan->addMessage(disconnectedMsg, MessageContext::Original);
 
         if (auto *channel = dynamic_cast<TwitchChannel *>(chan.get()))
         {
@@ -701,44 +672,38 @@ bool TwitchIrcServer::prepareToSend(
 {
     std::lock_guard<std::mutex> guard(this->lastMessageMutex_);
 
-    auto &lastMessage = channel->hasHighRateLimit() ? this->lastMessageMod_
-                                                    : this->lastMessagePleb_;
+    auto &limiter = channel->hasHighRateLimit() ? this->rateLimiterMod_
+                                                : this->rateLimiterPleb_;
     size_t maxMessageCount = channel->hasHighRateLimit() ? 99 : 19;
     auto minMessageOffset = (channel->hasHighRateLimit() ? 100ms : 1100ms);
 
     auto now = std::chrono::steady_clock::now();
 
-    // check if you are sending messages too fast
-    if (!lastMessage.empty() && lastMessage.back() + minMessageOffset > now)
+    // The sliding-window mechanics are shared with the Kick send path via
+    // BurstRateLimiter. Twitch keeps its own thresholds and its 32s window, and
+    // deliberately shares a single pair of error-throttle timestamps
+    // (lastErrorTimeSpeed_/lastErrorTimeAmount_) across the mod and pleb
+    // limiters, exactly as the original inline code did.
+    auto result = limiter.check(now, minMessageOffset, maxMessageCount, 32s);
+
+    if (result == RateLimitResult::TooFast)
     {
-        if (this->lastErrorTimeSpeed_ + 30s < now)
+        if (shouldNotify(this->lastErrorTimeSpeed_, now, 30s))
         {
             channel->addSystemMessage("You are sending messages too quickly.");
-
-            this->lastErrorTimeSpeed_ = now;
         }
         return false;
     }
 
-    // remove messages older than 30 seconds
-    while (!lastMessage.empty() && lastMessage.front() + 32s < now)
+    if (result == RateLimitResult::TooMany)
     {
-        lastMessage.pop();
-    }
-
-    // check if you are sending too many messages
-    if (lastMessage.size() >= maxMessageCount)
-    {
-        if (this->lastErrorTimeAmount_ + 30s < now)
+        if (shouldNotify(this->lastErrorTimeAmount_, now, 30s))
         {
             channel->addSystemMessage("You are sending too many messages.");
-
-            this->lastErrorTimeAmount_ = now;
         }
         return false;
     }
 
-    lastMessage.push(now);
     return true;
 }
 

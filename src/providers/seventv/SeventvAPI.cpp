@@ -8,6 +8,8 @@
 #include "common/network/NetworkRequest.hpp"
 #include "common/network/NetworkResult.hpp"
 
+#include <QTimer>
+
 namespace {
 
 using namespace chatterino::literals;
@@ -75,55 +77,82 @@ query GetCosmetics($ids: [ObjectID!]) {
 // NOLINTBEGIN(readability-convert-member-functions-to-static)
 namespace chatterino {
 
+namespace {
+
+// 7TV's API is occasionally slow to respond under load and trips our request
+// timeout. A single timeout would otherwise surface to the user as
+// "Failed to fetch 7TV channel emotes" and force a stale-cache fallback, so we
+// retry transient failures (timeouts / cancelled connections) once after a
+// short delay before giving up. Definitive responses such as 404 ("not on
+// 7TV") are not transient and are passed straight through to the caller.
+void getSeventvJson(const QString &url, int timeoutMs, int retriesLeft,
+                    NetworkSuccessCallback onSuccess,
+                    NetworkErrorCallback onError)
+{
+    NetworkRequest(url, NetworkRequestType::Get)
+        .timeout(timeoutMs)
+        .onSuccess(onSuccess)
+        .onError([url, timeoutMs, retriesLeft, onSuccess,
+                  onError](const NetworkResult &result) {
+            bool transient =
+                result.error() == NetworkResult::NetworkError::TimeoutError ||
+                result.error() ==
+                    NetworkResult::NetworkError::OperationCanceledError;
+            if (transient && retriesLeft > 0)
+            {
+                QTimer::singleShot(2000, [=]() {
+                    getSeventvJson(url, timeoutMs, retriesLeft - 1, onSuccess,
+                                   onError);
+                });
+                return;
+            }
+            onError(result);
+        })
+        .execute();
+}
+
+}  // namespace
+
 void SeventvAPI::getUserByTwitchID(
     const QString &twitchID, SuccessCallback<const QJsonObject &> &&onSuccess,
     ErrorCallback &&onError)
 {
-    NetworkRequest(API_URL_USER.arg(twitchID), NetworkRequestType::Get)
-        .timeout(20000)
-        .onSuccess(
-            [callback = std::move(onSuccess)](const NetworkResult &result) {
-                auto json = result.parseJson();
-                callback(json);
-            })
-        .onError([callback = std::move(onError)](const NetworkResult &result) {
+    getSeventvJson(
+        API_URL_USER.arg(twitchID), 20000, 1,
+        [callback = std::move(onSuccess)](const NetworkResult &result) {
+            callback(result.parseJson());
+        },
+        [callback = std::move(onError)](const NetworkResult &result) {
             callback(result);
-        })
-        .execute();
+        });
 }
 
 void SeventvAPI::getUserByKickID(
     uint64_t userID, SuccessCallback<const QJsonObject &> &&onSuccess,
     ErrorCallback &&onError)
 {
-    NetworkRequest(API_URL_KICK_USER.arg(userID), NetworkRequestType::Get)
-        .timeout(20000)
-        .onSuccess(
-            [callback = std::move(onSuccess)](const NetworkResult &result) {
-                auto json = result.parseJson();
-                callback(json);
-            })
-        .onError([callback = std::move(onError)](const NetworkResult &result) {
+    getSeventvJson(
+        API_URL_KICK_USER.arg(userID), 20000, 1,
+        [callback = std::move(onSuccess)](const NetworkResult &result) {
+            callback(result.parseJson());
+        },
+        [callback = std::move(onError)](const NetworkResult &result) {
             callback(result);
-        })
-        .execute();
+        });
 }
 
 void SeventvAPI::getEmoteSet(const QString &emoteSet,
                              SuccessCallback<const QJsonObject &> &&onSuccess,
                              ErrorCallback &&onError)
 {
-    NetworkRequest(API_URL_EMOTE_SET.arg(emoteSet), NetworkRequestType::Get)
-        .timeout(25000)
-        .onSuccess(
-            [callback = std::move(onSuccess)](const NetworkResult &result) {
-                auto json = result.parseJson();
-                callback(json);
-            })
-        .onError([callback = std::move(onError)](const NetworkResult &result) {
+    getSeventvJson(
+        API_URL_EMOTE_SET.arg(emoteSet), 25000, 1,
+        [callback = std::move(onSuccess)](const NetworkResult &result) {
+            callback(result.parseJson());
+        },
+        [callback = std::move(onError)](const NetworkResult &result) {
             callback(result);
-        })
-        .execute();
+        });
 }
 
 void SeventvAPI::getCosmeticsByIDs(

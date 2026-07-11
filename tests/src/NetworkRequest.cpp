@@ -6,11 +6,16 @@
 
 #include "common/network/NetworkManager.hpp"
 #include "common/network/NetworkResult.hpp"
+#include "mocks/BaseApplication.hpp"
 #include "NetworkHelpers.hpp"
 #include "Test.hpp"
 #include "util/QMagicEnum.hpp"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
+#include <QFile>
+#include <QFileInfo>
+#include <QUrl>
 
 using namespace chatterino;
 
@@ -408,6 +413,70 @@ TEST(NetworkRequest, HttpBody)
         waiter.waitForRequest();
         ASSERT_TRUE(success) << path;
     }
+}
+
+// A 0-byte cache file (e.g. from a truncated/interrupted write) must be
+// treated as a cache miss and served from the network, not delivered as an
+// empty HTTP-200 success. See STAB-01/STAB-03.
+TEST(NetworkRequest, CacheEmptyFileFallsBackToNetwork)
+{
+    if (!isHttpbinAvailable())
+    {
+        GTEST_SKIP() << "HTTP test service is unavailable at "
+                     << HTTPBIN_BASE_URL;
+    }
+
+    // A MockApplication provides the app instance (tryGetApp) and cache path
+    // (getPaths) the cached-load path relies on.
+    mock::BaseApplication app;
+
+    auto url = getHttpbinUrl(u"headers");  // returns a non-empty JSON body
+
+    // Mirror NetworkData::getHash(): sha256 of the URL string followed by each
+    // raw request-header name. A plain cached GET carries only the default
+    // "User-Agent" header set by NetworkRequest::initializeDefaultValues().
+    QByteArray hashInput;
+    hashInput.append(QUrl(url).toString().toUtf8());
+    hashInput.append("User-Agent");
+    auto hash = QString::fromUtf8(
+        QCryptographicHash::hash(hashInput, QCryptographicHash::Sha256)
+            .toHex());
+
+    auto cacheFilePath = app.getPaths().cacheDirectory() + "/" + hash;
+
+    // Pre-seed a 0-byte cache file for this URL.
+    {
+        QFile seed(cacheFilePath);
+        ASSERT_TRUE(seed.open(QIODevice::WriteOnly));
+        seed.close();
+    }
+    ASSERT_TRUE(QFileInfo::exists(cacheFilePath));
+    ASSERT_EQ(QFileInfo(cacheFilePath).size(), 0);
+
+    RequestWaiter waiter;
+    QByteArray received;
+    bool errored = false;
+
+    NetworkRequest(url)
+        .cache()
+        .onSuccess([&](const NetworkResult &result) {
+            received = result.getData();
+            waiter.requestDone();
+        })
+        .onError([&](const NetworkResult & /*result*/) {
+            errored = true;
+            waiter.requestDone();
+        })
+        .execute();
+
+    waiter.waitForRequest();
+
+    // The empty cache file is a miss: the request must reach the network and
+    // yield a non-empty body, never an empty success.
+    EXPECT_FALSE(errored);
+    EXPECT_FALSE(received.isEmpty());
+
+    QFile::remove(cacheFilePath);
 }
 
 TEST(NetworkRequest, HttpBodyMultipart)

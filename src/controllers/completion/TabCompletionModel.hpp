@@ -10,11 +10,15 @@
 #include <QString>
 #include <QStringListModel>
 
+#include <cstdint>
+#include <functional>
 #include <optional>
+#include <vector>
 
 namespace chatterino {
 
 class Channel;
+enum class MessagePlatform : std::uint8_t;
 
 /// @brief TabCompletionModel is a QStringListModel intended to provide tab
 /// completion to a ResizingTextInput. The model automatically selects a completion
@@ -22,11 +26,16 @@ class Channel;
 class TabCompletionModel : public QStringListModel
 {
 public:
+    using PlatformFilterCallback =
+        std::function<std::vector<MessagePlatform>()>;
+
     /// @brief Initializes a new TabCompletionModel bound to a Channel.
     /// The reference to the Channel must live as long as the TabCompletionModel.
     /// @param channel Channel reference
     /// @param parent Model parent
-    explicit TabCompletionModel(Channel &channel, QObject *parent);
+    explicit TabCompletionModel(
+        Channel &channel, QObject *parent,
+        PlatformFilterCallback platformFilterCallback = nullptr);
 
     /// @brief Updates the model based on the completion query
     /// @param query Completion query
@@ -74,8 +83,11 @@ private:
     std::unique_ptr<completion::Source> buildEmoteSource() const;
     std::unique_ptr<completion::Source> buildUserSource(bool prependAt) const;
     std::unique_ptr<completion::Source> buildCommandSource() const;
+    std::vector<MessagePlatform> platformFilter() const;
+    const Channel *sourceChannelForSelectedPlatform() const;
 
     Channel &channel_;
+    PlatformFilterCallback platformFilterCallback_;
     std::unique_ptr<completion::Source> source_{};
 };
 

@@ -1,33 +1,50 @@
-// SPDX-FileCopyrightText: 2026 Contributors to Mergerino <https://mergerino.app>
+// SPDX-FileCopyrightText: 2026 Contributors to Chatterino <https://chatterino.com>
 //
 // SPDX-License-Identifier: MIT
 
 #pragma once
 
+#include "util/Expected.hpp"
+
 #include <QString>
+#include <QStringList>
 
-namespace chatterino::chatterinoImport {
+#include <optional>
 
-struct ImportResult {
-    bool ok = false;
-    int filesCopied = 0;
-    QString error;
+namespace chatterino {
+
+class Paths;
+
+namespace chatterino_import {
+
+struct ImportOptions {
+    std::optional<bool> startupPromptAcknowledged;
+    std::optional<bool> autorun;
+    std::optional<QString> currentVersion;
+    std::optional<QString> mergedPlatformIndicatorMode;
+    std::optional<QString> platformEventHighlightStyle;
+    std::optional<QString> platformEventHighlightCustomColor;
 };
 
-// Path to %APPDATA%\Chatterino2 on Windows, empty string elsewhere or if
-// %APPDATA% is unset.
-QString chatterino2RootDir();
+struct ImportSummary {
+    QString sourceDirectory;
+    QString backupSuffix;
+    QStringList importedFiles;
+};
 
-// True iff Chatterino2's Settings/settings.json exists.
-bool chatterino2HasSettings();
+QString defaultSourceSettingsDirectory();
+bool defaultSourceSettingsDirectoryExists();
 
-// True iff mergerinoRoot has no Settings/settings.json yet — i.e. the user
-// has never configured this Mergerino install.
-bool isFreshInstall(const QString &mergerinoRoot);
+bool hasPendingImport(const Paths &paths);
+ExpectedStr<void> stageImportFromDefaultSource(const Paths &paths,
+                                               const ImportOptions &options);
+ExpectedStr<ImportSummary> applyPendingImport(const Paths &paths);
+ExpectedStr<ImportSummary> importFromDirectory(const QString &sourceDirectory,
+                                               const Paths &paths,
+                                               const ImportOptions &options);
 
-// Copies the user-data subdirectories (Settings, Themes, Plugins, Misc,
-// Dictionaries) from %APPDATA%\Chatterino2 into mergerinoRoot. Existing
-// files in mergerinoRoot are overwritten.
-ImportResult importFromChatterino2(const QString &mergerinoRoot);
+bool restartApplication();
 
-}  // namespace chatterino::chatterinoImport
+}  // namespace chatterino_import
+
+}  // namespace chatterino

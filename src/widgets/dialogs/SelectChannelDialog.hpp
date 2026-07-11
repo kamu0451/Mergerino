@@ -42,16 +42,27 @@ class SelectChannelDialog final : public BaseWindow
 {
 public:
     SelectChannelDialog(bool showSpecialPage, QWidget *parent = nullptr);
+    SelectChannelDialog(bool showSpecialPage, bool allowFolderSelection,
+                        QWidget *parent = nullptr);
 
     void setSelectedChannel(std::optional<IndirectChannel> channel_);
     void setActivityPaneEnabled(bool enabled);
     void setFilterActivity(bool enabled);
     void setPlatformIndicatorMode(PlatformIndicatorMode mode);
+    void setSlowerChatEnabled(bool enabled);
+    void setSlowerChatMessagesPerSecond(qreal value);
+    void setViewerCountEnabled(bool enabled);
+    void setStreamDatabaseBadgeFeedVisible(bool visible);
     IndirectChannel getSelectedChannel() const;
     bool activityPaneEnabled() const;
     bool filterActivity() const;
     PlatformIndicatorMode platformIndicatorMode() const;
+    bool slowerChatEnabled() const;
+    qreal slowerChatMessagesPerSecond() const;
+    bool viewerCountEnabled() const;
+    bool streamDatabaseBadgeFeedVisible() const;
     bool hasSeletedChannel() const;
+    bool selectedFolder() const;
 
     pajlada::Signals::NoArgSignal closed;
 
@@ -73,10 +84,21 @@ private:
         QLineEdit *kickName{};
         QCheckBox *enableYouTube{};
         QLineEdit *youtubeUrl{};
+        QLabel *youtubeHint{};
         QCheckBox *enableTikTok{};
         QLineEdit *tiktokInput{};
+        QLabel *tiktokHint{};
         QComboBox *indicatorMode{};
         QCheckBox *filterActivity{};
+        QCheckBox *slowerChat{};
+        QDoubleSpinBox *slowerChatRate{};
+        QCheckBox *viewerCount{};
+        QCheckBox *streamDatabaseBadgeFeed{};
+        QWidget *streamDatabaseBadgeFeedRow{};
+        QWidget *slowerChatRateLabel{};
+        QWidget *slowerChatRateField{};
+        QVariantAnimation *slowerChatRateAnimation{};
+        qreal slowerChatRateVisibilityProgress = 1.0;
 
         QWidget *specialPage{};
         detail::AutoCheckedRadioButton *whispers{};
@@ -84,15 +106,23 @@ private:
         detail::AutoCheckedRadioButton *watching{};
         detail::AutoCheckedRadioButton *live{};
         detail::AutoCheckedRadioButton *automod{};
+        detail::AutoCheckedRadioButton *folder{};
     } ui_{};
 
     IndirectChannel selectedChannel_;
     bool hasSelectedChannel_ = false;
+    bool selectedFolder_ = false;
 
     void ok();
     void setMergedDefaults();
     void loadMergedDefaultsFromChannel(const IndirectChannel &indirectChannel);
     void syncMergedFieldState();
+    void updateMergedInputHints();
+    void updatePlatformOverridePlaceholders();
+    void updateStreamDatabaseBadgeFeedVisibility();
+    void updateDialogSize();
+    void updateSlowerChatVisibility(bool animate = true);
+    void applySlowerChatRateVisibilityProgress(qreal progress);
     bool buildMergedSelection();
     bool buildSpecialSelection();
     void addShortcuts() override;

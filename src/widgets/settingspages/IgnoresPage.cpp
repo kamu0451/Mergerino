@@ -18,7 +18,9 @@
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QHeaderView>
+#include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListView>
 #include <QPushButton>
 #include <QTableView>
@@ -30,7 +32,22 @@ using namespace literals;
 
 static void addPhrasesTab(LayoutCreator<QVBoxLayout> box);
 static void addUsersTab(IgnoresPage &page, LayoutCreator<QVBoxLayout> box,
-                        QStringListModel &model);
+                        QStringListModel &model,
+                        QStringListModel &blockedModel);
+
+// Fills @a model with the locally blocked usernames, sorted case-insensitively.
+static void fillBlockedUsersModel(QStringListModel &model)
+{
+    QStringList users;
+    auto blocked = getSettings()->blockedUsers.readOnly();
+    users.reserve(blocked->size());
+    for (const auto &user : *blocked)
+    {
+        users << user;
+    }
+    users.sort(Qt::CaseInsensitive);
+    model.setStringList(users);
+}
 
 IgnoresPage::IgnoresPage()
 {
@@ -40,7 +57,7 @@ IgnoresPage::IgnoresPage()
 
     addPhrasesTab(tabs.appendTab(new QVBoxLayout, "Messages"));
     addUsersTab(*this, tabs.appendTab(new QVBoxLayout, "Users"),
-                this->userListModel_);
+                this->userListModel_, this->blockedUsersModel_);
     this->onShow();
 }
 
@@ -79,7 +96,7 @@ void addPhrasesTab(LayoutCreator<QVBoxLayout> layout)
 }
 
 void addUsersTab(IgnoresPage &page, LayoutCreator<QVBoxLayout> users,
-                 QStringListModel &userModel)
+                 QStringListModel &userModel, QStringListModel &blockedModel)
 {
     auto label = users.emplace<QLabel>(
         u"/block <user> in chat blocks a user.\n/unblock <user> in chat unblocks a user.\nYou can also click on a user to open the usercard."_s);
@@ -122,11 +139,69 @@ void addUsersTab(IgnoresPage &page, LayoutCreator<QVBoxLayout> users,
 
     users.emplace<QLabel>("List of blocked users:");
     users.emplace<QListView>()->setModel(&userModel);
+
+    auto *localLabel = users
+                           .emplace<QLabel>(
+                               u"Locally blocked users (client-only; their "
+                               "messages are hidden on every platform). Add by "
+                               "right-clicking a user in chat and choosing "
+                               "\"Block ... (local)\"."_s)
+                           .getElement();
+    localLabel->setWordWrap(true);
+
+    fillBlockedUsersModel(blockedModel);
+    auto *localView = users.emplace<QListView>().getElement();
+    localView->setModel(&blockedModel);
+    localView->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    localView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+
+    auto localButtons = users.emplace<QHBoxLayout>().withoutMargin();
+    {
+        auto add = localButtons.emplace<QPushButton>("Block user...");
+        auto remove = localButtons.emplace<QPushButton>("Unblock selected");
+        localButtons->addStretch(1);
+
+        QObject::connect(
+            add.getElement(), &QPushButton::clicked, &page, [&blockedModel] {
+                bool ok = false;
+                auto name =
+                    QInputDialog::getText(
+                        nullptr, "Block user (local)",
+                        "Username to block (hidden on all platforms):",
+                        QLineEdit::Normal, QString(), &ok)
+                        .trimmed();
+                if (ok && !name.isEmpty())
+                {
+                    getSettings()->blockUserLocally(name);
+                    fillBlockedUsersModel(blockedModel);
+                }
+            });
+
+        QObject::connect(remove.getElement(), &QPushButton::clicked, &page,
+                         [localView, &blockedModel] {
+                             const auto selected =
+                                 localView->selectionModel()->selectedIndexes();
+                             QStringList names;
+                             for (const auto &index : selected)
+                             {
+                                 names << index.data().toString();
+                             }
+                             for (const auto &name : names)
+                             {
+                                 getSettings()->unblockUserLocally(name);
+                             }
+                             fillBlockedUsersModel(blockedModel);
+                         });
+    }
 }
 
 void IgnoresPage::onShow()
 {
     auto *app = getApp();
+
+    // Local blocks are independent of the Twitch account, so refresh them
+    // first -- they apply even when signed out.
+    fillBlockedUsersModel(this->blockedUsersModel_);
 
     auto user = app->getAccounts()->twitch.getCurrent();
 

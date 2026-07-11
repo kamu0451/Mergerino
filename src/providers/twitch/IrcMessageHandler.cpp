@@ -8,6 +8,8 @@
 #include "common/Channel.hpp"
 #include "common/Common.hpp"
 #include "common/Literals.hpp"
+#include "common/network/NetworkRequest.hpp"
+#include "common/network/NetworkResult.hpp"
 #include "common/QLogging.hpp"
 #include "controllers/accounts/AccountController.hpp"
 #include "controllers/ignores/IgnoreController.hpp"
@@ -21,6 +23,7 @@
 #include "providers/twitch/TwitchAccount.hpp"
 #include "providers/twitch/TwitchAccountManager.hpp"
 #include "providers/twitch/TwitchChannel.hpp"
+#include "providers/twitch/CurrentUserBadges.hpp"
 #include "providers/twitch/TwitchHelpers.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "providers/twitch/UserColor.hpp"
@@ -34,6 +37,7 @@
 #include <IrcMessage>
 #include <QLocale>
 #include <QStringBuilder>
+#include <QTimer>
 
 #include <memory>
 
@@ -239,8 +243,76 @@ MessagePtr parseNoticeMessage(Communi::IrcNoticeMessage *message)
         const auto linkColor = MessageColor(MessageColor::Link);
         const auto accountsLink = Link(Link::OpenAccountsPage, QString());
         const auto curUser = getApp()->getAccounts()->twitch.getCurrent();
+        const auto expiredUserName = curUser->getUserName();
+        if (!curUser->isAnon())
+        {
+            QTimer::singleShot(0, [expiredUserName] {
+                auto *app = tryGetApp();
+                if (!app)
+                {
+                    return;
+                }
+
+                auto &twitchAccounts = app->getAccounts()->twitch;
+                const auto current = twitchAccounts.getCurrent();
+                if (current->isAnon() ||
+                    current->getUserName().compare(expiredUserName,
+                                                   Qt::CaseInsensitive) != 0)
+                {
+                    return;
+                }
+
+                // Re-validate the token before logging the user out - a
+                // transient Twitch-side auth blip must not permanently
+                // switch the client to anonymous.
+                const auto oauthToken{current->getOAuthToken()};
+                NetworkRequest(u"https://id.twitch.tv/oauth2/validate"_s,
+                               NetworkRequestType::Get)
+                    .header("Authorization", u"OAuth " % oauthToken)
+                    .timeout(20000)
+                    .onSuccess([expiredUserName](const auto & /*res*/) {
+                        qCWarning(chatterinoTwitch)
+                            << "Received a login auth NOTICE for"
+                            << expiredUserName
+                            << "but the token still validates - keeping the "
+                               "account";
+                    })
+                    .onError([expiredUserName,
+                              oauthToken](const NetworkResult &res) {
+                        if (res.status() != 401)
+                        {
+                            qCWarning(chatterinoTwitch)
+                                << "Failed to re-validate the token for"
+                                << expiredUserName
+                                << "after a login auth NOTICE:"
+                                << res.formatError() << "- keeping the account";
+                            return;
+                        }
+
+                        auto *app = tryGetApp();
+                        if (!app)
+                        {
+                            return;
+                        }
+
+                        auto &twitchAccounts = app->getAccounts()->twitch;
+                        const auto current = twitchAccounts.getCurrent();
+                        if (current->isAnon() ||
+                            current->getUserName().compare(
+                                expiredUserName, Qt::CaseInsensitive) != 0 ||
+                            current->getOAuthToken() != oauthToken)
+                        {
+                            return;
+                        }
+
+                        twitchAccounts.currentUsername = QString{};
+                        getSettings()->requestSave();
+                    })
+                    .execute();
+            });
+        }
         const auto expirationText = QString("Login expired for user \"%1\"!")
-                                        .arg(curUser->getUserName());
+                                        .arg(expiredUserName);
         const auto loginPromptText = QString("Try adding your account again.");
 
         MessageBuilder builder;
@@ -366,8 +438,9 @@ void IrcMessageHandler::parseMessageInto(Communi::IrcMessage *message,
 
         msg->flags.set(MessageFlag::Disabled);
         msg->flags.set(MessageFlag::InvalidReplyTarget);
-        if (!getSettings()->hideDeletionActions &&
-            sink.findMessageByID(deletionNoticeId) == nullptr)
+        // Always added; hidden at layout time when hideDeletionActions is
+        // enabled, so toggling the setting reveals past deletions.
+        if (sink.findMessageByID(deletionNoticeId) == nullptr)
         {
             sink.addMessage(MessageBuilder::makeDeletionMessageFromIRC(msg),
                             MessageContext::Original);
@@ -398,12 +471,15 @@ void IrcMessageHandler::parsePrivMessageInto(
     TwitchChannel *channel)
 {
     auto currentUser = getApp()->getAccounts()->twitch.getCurrent();
-    if (message->tag("user-id") == currentUser->getUserId())
+    if (!currentUser->isAnon() &&
+        message->tag("user-id") == currentUser->getUserId())
     {
         auto badgesTag = message->tag("badges");
         if (badgesTag.isValid())
         {
             auto parsedBadges = parseBadges(badgesTag.toString());
+            twitch::updateCurrentUserBadgesForChannel(channel->getName(),
+                                                      parsedBadges);
             channel->setMod(parsedBadges.contains("moderator") ||
                             parsedBadges.contains("lead_moderator"));
             channel->setVIP(parsedBadges.contains("vip"));
@@ -603,8 +679,9 @@ void IrcMessageHandler::handleClearMessageMessage(Communi::IrcMessage *message)
 
     msg->flags.set(MessageFlag::Disabled);
     msg->flags.set(MessageFlag::InvalidReplyTarget);
-    if (!getSettings()->hideDeletionActions &&
-        chan->findMessageByID(deletionNoticeId) == nullptr)
+    // Always added; hidden at layout time when hideDeletionActions is
+    // enabled, so toggling the setting reveals past deletions.
+    if (chan->findMessageByID(deletionNoticeId) == nullptr)
     {
         chan->addMessage(MessageBuilder::makeDeletionMessageFromIRC(msg),
                          MessageContext::Original);
@@ -642,6 +719,8 @@ void IrcMessageHandler::handleUserStateMessage(Communi::IrcMessage *message)
         if (badgesTag.isValid())
         {
             auto parsedBadges = parseBadges(badgesTag.toString());
+            twitch::updateCurrentUserBadgesForChannel(channelName,
+                                                      parsedBadges);
             tc->setVIP(parsedBadges.contains("vip"));
             tc->setStaff(parsedBadges.contains("staff"));
 

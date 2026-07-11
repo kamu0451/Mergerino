@@ -5,6 +5,7 @@
 #include "util/VectorMessageSink.hpp"
 
 #include "messages/MessageSimilarity.hpp"
+#include "singletons/Settings.hpp"
 #include "util/ChannelHelpers.hpp"
 
 #include <cassert>
@@ -74,6 +75,11 @@ void VectorMessageSink::disableAllMessages()
 
 void VectorMessageSink::applySimilarityFilters(const MessagePtr &message) const
 {
+    if (!getSettings()->similarityEnabled)
+    {
+        return;
+    }
+
     setSimilarityFlags(message, this->messages_);
 }
 

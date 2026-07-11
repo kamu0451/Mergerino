@@ -49,14 +49,49 @@ jobs:
           # go through youtubeHeaders().
           AUTH_MARKERS='"Authorization"|Bearer[[:space:]]|authToken\('
           guard_failed=0
-          for file in src/providers/youtube/*.cpp; do
+
+          # Scan recursively - the provider's headers/hpp declarations live
+          # alongside the .cpp, and a non-recursive top-level glob would
+          # silently stop covering any file moved into a subdirectory.
+          mapfile -t files < <(find src/providers/youtube -type f \( -name '*.cpp' -o -name '*.hpp' \) | sort)
+
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "TOS-03 guard error: no files found under src/providers/youtube - guard scanned nothing."
+            exit 1
+          fi
+
+          # Sentinel assertions: if the youtubeHeaders() definition or every
+          # call site guarding it has disappeared (rename, refactor, provider
+          # removal), the checks below would silently pass with nothing left
+          # to check. Fail loudly instead of failing open. CRLF is stripped
+          # before matching since checkout on windows-2022 can leave \r at
+          # end of line, which would break the `$`-anchored awk patterns.
+          def_sentinel=0
+          callsite_sentinel=0
+          for file in "${files[@]}"; do
+            content=$(tr -d '\r' < "$file")
+            def_hits=$(printf '%s\n' "$content" | grep -cE 'youtubeHeaders\(\)$' || true)
+            def_sentinel=$((def_sentinel + def_hits))
+            total_hits=$(printf '%s\n' "$content" | grep -oE 'youtubeHeaders\(\)' | wc -l || true)
+            callsite_sentinel=$((callsite_sentinel + total_hits - def_hits))
+          done
+
+          if [ "$def_sentinel" -eq 0 ] || [ "$callsite_sentinel" -eq 0 ]; then
+            echo "guard sentinels not found - the guard no longer covers anything."
+            echo "youtubeHeaders() definitions found: $def_sentinel, call sites found: $callsite_sentinel"
+            exit 1
+          fi
+
+          for file in "${files[@]}"; do
+            content=$(tr -d '\r' < "$file")
+
             # Check 1: the shared read-path header builder youtubeHeaders()
             # must contain no auth marker anywhere in its body.
-            headers_body_viol=$(awk '
+            headers_body_viol=$(printf '%s\n' "$content" | awk '
               /youtubeHeaders\(\)$/ { inFn = 1 }
               inFn { print NR ": " $0 }
               inFn && /^}/ { inFn = 0 }
-            ' "$file" | grep -E -- "$AUTH_MARKERS" || true)
+            ' | grep -E -- "$AUTH_MARKERS" || true)
             if [ -n "$headers_body_viol" ]; then
               echo "TOS-03 VIOLATION in $file (youtubeHeaders body):"
               echo "An auth marker appears inside youtubeHeaders(), the shared"
@@ -66,25 +101,49 @@ jobs:
               guard_failed=1
             fi
 
-            # Check 2: no single top-level function may combine a read request
-            # (.headerList(youtubeHeaders())) with an auth marker. Flags are set
-            # regardless of order and reset at each column-0 closing brace, so
-            # this is order-independent and does not rely on any URL literal.
-            # The auth pattern is a hardcoded awk regex literal (not passed via
-            # -v) so backslash-escaping of the paren is unambiguous.
-            combined_viol=$(awk '
-              /headerList\(youtubeHeaders\(\)\)/ { hasRead = 1 }
+            # Check 2: no single top-level function may combine a call to
+            # youtubeHeaders() - anywhere in the function, not only via the
+            # exact composed literal .headerList(youtubeHeaders()) - with an
+            # auth marker. Flags are set regardless of order and reset at each
+            # column-0 closing brace, so this is order-independent and does
+            # not depend on a single call-site spelling. The auth pattern is a
+            # hardcoded awk regex literal (not passed via -v) so backslash-
+            # escaping of the paren is unambiguous.
+            combined_viol=$(printf '%s\n' "$content" | awk '
+              /youtubeHeaders\(\)/ { hasRead = 1 }
               /"Authorization"|Bearer[[:space:]]|authToken\(/ { hasAuth = 1 }
               /^}/ {
                 if (hasRead && hasAuth) {
-                  print "  function ending at line " NR " mixes a youtubeHeaders() read with an auth marker"
+                  print "  function ending at line " NR " mixes a youtubeHeaders() call with an auth marker"
                 }
                 hasRead = 0; hasAuth = 0
               }
-            ' "$file")
+            ')
             if [ -n "$combined_viol" ]; then
               echo "TOS-03 VIOLATION in $file (read request + auth in one function):"
               echo "$combined_viol"
+              guard_failed=1
+            fi
+
+            # Check 3: no single top-level function may reference an InnerTube
+            # endpoint fragment (youtubei, /live_chat/, updated_metadata) and
+            # an auth marker at the same time. This closes the gap Check 2
+            # alone would miss: a future call site attaching OAuth headers
+            # inline against an InnerTube endpoint without ever going through
+            # youtubeHeaders().
+            inline_auth_viol=$(printf '%s\n' "$content" | awk '
+              /youtubei|\/live_chat\/|updated_metadata/ { hasEndpoint = 1 }
+              /"Authorization"|Bearer[[:space:]]|authToken\(/ { hasAuth = 1 }
+              /^}/ {
+                if (hasEndpoint && hasAuth) {
+                  print "  function ending at line " NR " mixes an InnerTube endpoint with an auth marker"
+                }
+                hasEndpoint = 0; hasAuth = 0
+              }
+            ')
+            if [ -n "$inline_auth_viol" ]; then
+              echo "TOS-03 VIOLATION in $file (InnerTube endpoint + inline auth in one function):"
+              echo "$inline_auth_viol"
               guard_failed=1
             fi
           done
@@ -92,7 +151,7 @@ jobs:
           if [ "$guard_failed" -ne 0 ]; then
             exit 1
           fi
-          echo "TOS-03 guard passed: youtubeHeaders() is auth-free and no InnerTube read function attaches credentials."
+          echo "TOS-03 guard passed: youtubeHeaders() is auth-free, no InnerTube read function attaches credentials, and no InnerTube endpoint is called with inline auth."
 
       - name: Install Qt6
         uses: jurplel/install-qt-action@v4.3.0
@@ -178,6 +237,11 @@ jobs:
           Copy-Item bin/mergerino.exe $packageDir/
           Get-ChildItem bin -Filter '*.dll' | Copy-Item -Destination $packageDir -Force
           ..\.CI\deploy-crt.ps1 $packageDir
+
+          # Bundle the Kick onboarding screenshots staged by generate_resources.cmake
+          # at build/bin/kick_onboarding - they live on disk now (not in the qrc), so
+          # KickLoginPage would render blanks without this.
+          Copy-Item bin/kick_onboarding $packageDir/ -Recurse -Force
 
           # Bundle the in-app updater so Updates::installUpdates() can spawn it.
           $updaterDir = Join-Path $packageDir "updater.1"

@@ -830,6 +830,7 @@ void YouTubeLiveChat::start()
     this->seenMessageIds_.clear();
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
+    this->switchedToLiveChatView_ = false;
     this->activePollStreak_ = 0;
     this->consecutiveRecoveries_ = 0;
     this->pollRefreshFallbackCount_ = 0;
@@ -2359,6 +2360,9 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
                     : QString("Connecting to YouTube live chat (%1)...")
                           .arg(this->liveTitle_));
             this->skipInitialBacklog_ = skipInitialBacklog;
+            // A fresh watch-page bootstrap always lands on the default "Top
+            // chat" view; the first poll re-switches to "Live chat".
+            this->switchedToLiveChatView_ = false;
             this->poll();
             }))
         .onError(guardedCallback(
@@ -2841,6 +2845,31 @@ void YouTubeLiveChat::poll()
                 return;
             }
 
+            // YouTube defaults us to the curated "Top chat" view, which drops
+            // most messages (an active but smaller stream can poll forever with
+            // zero delivered). The first time the response's view selector
+            // hands us the unfiltered "Live chat" view's full continuation,
+            // move polling onto it and re-poll immediately. skipInitialBacklog_
+            // stays set so we don't dump that view's history in one burst.
+            if (!this->switchedToLiveChatView_)
+            {
+                const auto liveChatContinuation =
+                    extractUnselectedViewContinuation(continuation);
+                if (!liveChatContinuation.isEmpty())
+                {
+                    this->switchedToLiveChatView_ = true;
+                    this->continuation_ = liveChatContinuation;
+                    this->skipInitialBacklog_ = true;
+                    qCDebug(chatterinoYouTube).nospace()
+                        << "[" << this->streamUrl_
+                        << "] switching live-chat polling to the unfiltered "
+                           "Live chat view videoId="
+                        << this->videoId_;
+                    this->schedulePoll(0);
+                    return;
+                }
+            }
+
             auto actions = continuation["actions"].toArray();
             // YouTube no longer ships viewer count inside the live_chat
             // continuation (the field comes back null). The count lives on
@@ -3291,6 +3320,7 @@ void YouTubeLiveChat::waitForNextLive(QString text, int retryDelayMs)
     this->seenMessageIds_.clear();
     this->failureReported_ = false;
     this->skipInitialBacklog_ = false;
+    this->switchedToLiveChatView_ = false;
     this->activePollStreak_ = 0;
     this->consecutiveRecoveries_ = 0;
     this->pollRefreshFallbackCount_ = 0;
@@ -3767,6 +3797,58 @@ QString YouTubeLiveChat::extractLiveChatContinuation(
     }
 
     return {};
+}
+
+QString YouTubeLiveChat::extractUnselectedViewContinuation(
+    const QJsonObject &liveChatContinuation)
+{
+    // YouTube defaults live-chat polling to the "Top chat" view, whose
+    // continuation only yields the curated subset of messages it deems
+    // relevant -- on a smaller stream that view can stay (near) empty while the
+    // chat is busy. The get_live_chat response's own view selector exposes both
+    // views as full, pollable reload continuations (unlike the watch page,
+    // which only carries 32-char placeholder stubs), so the first time we see
+    // it we can move polling to the unselected, unfiltered "Live chat" view.
+    // The selected/unselected flag survives YouTube's UI localization where the
+    // "Live chat"/"Top chat" titles do not.
+    const auto subMenuItems =
+        liveChatContinuation["header"]
+            .toObject()["liveChatHeaderRenderer"]
+            .toObject()["viewSelector"]
+            .toObject()["sortFilterSubMenuRenderer"]
+            .toObject()["subMenuItems"]
+            .toArray();
+
+    // Only switch when both views are present and one is selected -- otherwise
+    // we can't tell "Live chat" apart from an unrelated single-item menu.
+    if (subMenuItems.size() < 2)
+    {
+        return {};
+    }
+
+    QString unselectedContinuation;
+    for (const auto &itemValue : subMenuItems)
+    {
+        const auto item = itemValue.toObject();
+        if (item["selected"].toBool())
+        {
+            continue;
+        }
+        const auto continuation =
+            item["continuation"]
+                .toObject()["reloadContinuationData"]
+                .toObject()["continuation"]
+                .toString()
+                .trimmed();
+        // A real continuation is a long base64 token; the watch page's 32-char
+        // stub is not pollable (the poll endpoint 400s on it).
+        if (continuation.size() > 64)
+        {
+            unselectedContinuation = continuation;
+        }
+    }
+
+    return unselectedContinuation;
 }
 
 QString YouTubeLiveChat::extractVideoChannelId(const QString &html)

@@ -1,69 +1,61 @@
 # Handoff
 
 ## Goal
-Make a tab's YouTube source stay the CHANNEL (user request: "UI always resolves
-the channel, under the hood fetch the latest/ongoing live stream") instead of
-decaying into an opaque resolved id that pins to an old video.
+Fix "YouTube doesn't work" -- toonyx (@toonyx4316) was live but showed no chat
+in Mergerino.
 
 ## Completed
-- [x] **Mapped the whole flow first** (workflow, 4 readers): SelectChannelDialog
-  normalizes input to @handle/UC-id; MergedChannel's `sourceResolved` write-back
-  overwrote the config with the resolved UC-id (shown verbatim on dialog reopen,
-  in "Waiting for UC... to go live" chat/status messages, and on the OBS overlay);
-  three state-machine defects could pin a tab to a dead video until the URL was
-  re-entered.
-- [x] **Channel-handle learning** (`21fca67`): new
-  `extractYouTubeChannelHandle(html, ownerScopedOnly)` in YouTubeParsing;
-  `YouTubeLiveChat` learns the vanity @handle (ctor seed from @-input; owner-
-  scoped patterns on watch pages; UC cross-check once resolved) and exposes
-  `displaySource()`. Waiting messages + browser URLs use it. MergedChannel
-  write-back persists upgrades only - never downgrades an @handle to a UC-id.
-- [x] **Stale-stream fixes** (same commit):
-  (1) missing-continuation + positively-not-live -> mark id, route to
-  verifySource (seamless back-to-back restream switch); verifySource can no
-  longer setLive(true) on a recently-failed id -> the infinite false-live loop
-  on a dead video is gone.
-  (2) `classifyLivenessFromNextResponse` (Live/NotLive/Unknown): only a positive
-  not-live signal poisons; transient garbled /next responses no longer lock a
-  live stream out (review finding).
-  (3) recently-failed streak resets when the videoId changes (a new id inherited
-  up to 60 min cooldown).
-  (4) probe chain: liveness-unvalidated /live-canonical + embed stages skip a
-  recently-failed id and fall through to marker-gated browse/streams probes.
-- [x] **Review workflow** (3 lenses + adversarial verify): 4 confirmed findings;
-  3 fixed, 1 accepted deliberately (see Key decisions).
-- [x] **Deployed + verified live**: PID 24000; all five persisted UC-id sources
-  in window-layout.json upgraded to @handles (@gevad1ch, @toonyx4316, @LEDOO_,
-  @TheBurntPeanut, @TheCoconutB) within one resolution cycle; the stale toonyx
-  waiting room still rejected. 694/694 ctest green (6 new YouTubeParsing tests).
+- [x] **Root-caused with debug logging** (`QT_LOGGING_RULES=chatterino.youtube.debug=true`):
+  the channel-source rework from last session is fine -- it correctly resolved
+  @toonyx4316 -> UCkc9c90rjpvJ3OBJvTAOKZg -> the live video ER15qGv_iuE and
+  polled `ok`. The real bug is one layer down: polling used YouTube's default
+  **"Top chat"** view, which drops most messages. On a ~40-viewer stream Top
+  chat stayed empty (`actions=0 delivered=0` on every poll for minutes) so the
+  tab looked dead though the stream was live and chatting.
+- [x] **Fix: switch to the unfiltered "Live chat" view.** The watch page only
+  exposes the two views as 32-char placeholder stubs (unpollable -- the poll
+  endpoint 400s on them), but the `get_live_chat` *response's* view selector
+  carries both as full 312-char reload continuations. New static helper
+  `YouTubeLiveChat::extractUnselectedViewContinuation()` reads the unselected
+  (Live chat) view's full token; `poll()` switches `continuation_` onto it once
+  per video (new `switchedToLiveChatView_` flag, reset on every watch-page
+  rebootstrap and in start()/waitForNextLive).
+- [x] **Verified live**: after deploy, log shows
+  `switching live-chat polling to the unfiltered Live chat view` and
+  `delivered` went from perpetually-0 to delivering real messages on toonyx.
 
 ## Key decisions
-- Persist the mutable @handle over the immutable UC-id (review flagged the
-  handle-recycle wrong-channel risk): ACCEPTED deliberately - Twitch/Kick/TikTok
-  tabs are all name-keyed with the identical risk, and the channel-visible field
-  is exactly what the user asked for.
-- NotLive requires a POSITIVE signal (explicit isLive:false, waiting/scheduled
-  markers, or a recognized watch page with no live flag); empty/unrecognized
-  JSON is Unknown and routes to verifySource (pre-existing behavior) so
-  transients never poison the recently-failed cache.
-- Internal `streamUrl_` stays the UC-id for API calls; only display/persistence
-  surfaces use the handle.
+- Switch at the poll RESPONSE, not the watch page: the watch page's subMenuItem
+  tokens are 32-char stubs that 400 (confirmed by a failed first attempt); the
+  get_live_chat response gives full pollable tokens for both views.
+- Pick the view by the `selected` flag (Top chat is selected by default), not by
+  the localized "Live chat"/"Top chat" title; require >64-char token and >=2
+  views so we never mistake an unrelated single-item menu.
+- `switchedToLiveChatView_` resets on every `fetchLiveChatPage` bootstrap
+  (always lands on Top chat) + session refresh; a re-switch each time is cheap.
+
+## Dead ends
+- Using the watch page's "Live chat" subMenuItem continuation directly: it's a
+  32-char stub, poll returns HTTP 400 x3 -> recoverLiveChat -> marks the video
+  recently-failed and locks the channel out. Reverted.
 
 ## Files changed
-- `src/providers/youtube/YouTubeParsing.{hpp,cpp}` - handle extractor + liveness tri-state
-- `src/providers/youtube/YouTubeLiveChat.{hpp,cpp}` - channelHandle_/displaySource, gate rework, streak fix, probe fall-through
-- `src/providers/merged/MergedChannel.cpp` - write-back guard, friendly browser URLs
-- `tests/src/YouTubeParsing.cpp` - 6 new tests (handle extraction, owner-scoped, liveness classify)
+- `src/providers/youtube/YouTubeLiveChat.cpp` (+82) -- `extractUnselectedViewContinuation`, the poll() view-switch, flag resets
+- `src/providers/youtube/YouTubeLiveChat.hpp` (+11) -- helper decl + `switchedToLiveChatView_`
+- `CHANGELOG.md` -- Bugfix bullet
 
 ## Current state
-- `main` = `21fca67`, pushed; CI re-triggered by the push (rolling release updates on Build success).
-- App running from the new build (PID 24000). Build green, 694/694 ctest.
-- Branches: `main` + held `review/keychain-ipc-auth` (SEC-G4 + SEC-02, NOT pushed, needs rebase + fresh-login/YouTube round-trip test + sign-off).
-- Plan files (`REMEDIATION-PLAN.md`, `REVIEW-PLAN.md`, `review/`) + scratch logs stay untracked, per instruction.
+- Build: passing (`.local-build.bat`, exit 0), deployed to `C:\Program Files\Mergerino`.
+- App running as the deployed fixed binary (debug logging on from testing; a
+  normal relaunch drops back to Warning-level -- the fix is in the binary).
+- Tests: NOT run this session (needs the test build + httpbox/pubsub services).
+- Branch: `main`. Held `review/keychain-ipc-auth` unchanged (SEC-G4 + SEC-02, unpushed).
 
 ## Next session
-1. Confirm main CI green + rolling release updated (/release-status).
-2. Watch a real stream-end/next-stream cycle on a YouTube tab: expect no
-   re-entering of the URL; log lines to grep: `probing for the channel's
-   current stream`, `probe skipping recently-failed`.
-3. Decide on `review/keychain-ipc-auth` (rebase, test, sign-off, push).
+1. Add a unit test for `extractUnselectedViewContinuation` in
+   `tests/src/YouTubeParsing.cpp` (pure JSON in/out, like
+   `classifyLivenessDistinguishesNotLiveFromUnknown`): two-view selector with a
+   full unselected token -> returns it; 32-char stub / single item -> empty.
+   Then `ctest` to confirm the suite is still green.
+2. Watch a Top-chat-heavy busy stream to confirm the switch also holds there
+   (grep `switching live-chat polling`).

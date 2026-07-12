@@ -93,6 +93,12 @@ public:
                                       std::function<void(QString)> onResolved);
     static QString extractLiveChatContinuation(
         const QJsonObject &liveChatRenderer);
+    // Returns the full, pollable continuation token for the unselected view in
+    // a get_live_chat response's view selector -- i.e. the unfiltered "Live
+    // chat" view when YouTube defaulted us to the curated "Top chat". Empty if
+    // no such view (or only a placeholder stub) is present.
+    static QString extractUnselectedViewContinuation(
+        const QJsonObject &liveChatContinuation);
     static QString extractLiveStreamTitle(const QJsonObject &nextResponse);
 
 private:
@@ -213,6 +219,11 @@ private:
     bool hasModeratorPrivileges_{false};
     bool failureReported_{false};
     bool skipInitialBacklog_{false};
+    // Set once we've moved this video's polling off YouTube's default (curated)
+    // "Top chat" view onto the unfiltered "Live chat" view. Reset every time we
+    // (re)bootstrap the chat from the watch page, which always lands on Top
+    // chat again. See poll() and fetchLiveChatPage().
+    bool switchedToLiveChatView_{false};
     int activePollStreak_{0};
     int pollRefreshFallbackCount_{0};
     // Recovery escalation: counts consecutive recoverLiveChat() calls since

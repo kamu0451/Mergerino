@@ -1,71 +1,69 @@
 # Handoff
 
 ## Goal
-Post-merge hygiene + a live bug: audit the repo for private/secret content,
-scrub a leaked personal email from history, clean up branches, and fix the
-"YouTube channel stays live after the stream ends" bug.
+Make a tab's YouTube source stay the CHANNEL (user request: "UI always resolves
+the channel, under the hood fetch the latest/ongoing live stream") instead of
+decaying into an opaque resolved id that pins to an old video.
 
 ## Completed
-- [x] **Privacy audit of tracked content**: plan files (`REMEDIATION-PLAN.md`,
-  `REVIEW-PLAN.md`, `review/`), scratch logs, and `.analyze_dump.py` confirmed
-  untracked; no secrets/keys/.env anywhere tracked. Removed the one personal
-  path (`C:\Users\Repe\...`) from a TikTokFrameDecoder comment.
-  `resources/kick_onboarding/client-credentials.png` shows a Kick Client ID --
-  user confirmed it is not theirs, left as-is.
-- [x] **Email scrub via history rewrite**: the PR #2 merge commit carried
-  `nappihaukka+aigit@gmail.com`. Rewrote main from the merge forward with
-  identical trees (merge is now `0fecf40`, GitHub GPG signature dropped),
-  force-pushed with lease. Old objects remain sha-addressable on GitHub until
-  GC; user should enable "Block command line pushes that expose my email".
-- [x] **Branch cleanup**: deleted `feat/hide-chat-bot-messages` (merged) and
-  `fix/crash-on-close` local+origin. Before deleting the latter, ported its
-  still-valid half to main as `3ad0e54` (shutdown guard in
-  `SplitHeader::updateIcons` -- use-after-free on quit); its RunGui half is
-  obsolete (that recovery block no longer exists on main).
-- [x] **YouTube stuck-live fix** (`352e273`): an ended stream can revert to a
-  scheduled *waiting room* whose `videoViewCountRenderer` still says
-  `isLive:true` AND whose chat serves get_live_chat continuations, so the
-  /next gate passed, the first poll succeeded, and the channel latched live
-  with a phantom "1 viewer" (really "1 waiting"). Confirmed by fetching the
-  real watch page of stuck videoId `0tBLmmIWrTQ` (`isUpcoming:true`,
-  `isLiveNow:false`, counter "1 waiting", dateText "Scheduled for ...").
-  `extractIsLiveFromNextResponse` (src/providers/youtube/YouTubeParsing.cpp)
-  now rejects "waiting" counter text, "Scheduled for" dateText, and
-  `videoDetails.isUpcoming`. Regression tests use the captured shape.
-- [x] **Deployed + verified live**: .dev-cycle.bat relaunched the app
-  (PID 928604); fresh log shows `fetchLiveChatPage rejecting non-live
-  videoId="0tBLmmIWrTQ"` while a genuinely-live channel still connects.
+- [x] **Mapped the whole flow first** (workflow, 4 readers): SelectChannelDialog
+  normalizes input to @handle/UC-id; MergedChannel's `sourceResolved` write-back
+  overwrote the config with the resolved UC-id (shown verbatim on dialog reopen,
+  in "Waiting for UC... to go live" chat/status messages, and on the OBS overlay);
+  three state-machine defects could pin a tab to a dead video until the URL was
+  re-entered.
+- [x] **Channel-handle learning** (`21fca67`): new
+  `extractYouTubeChannelHandle(html, ownerScopedOnly)` in YouTubeParsing;
+  `YouTubeLiveChat` learns the vanity @handle (ctor seed from @-input; owner-
+  scoped patterns on watch pages; UC cross-check once resolved) and exposes
+  `displaySource()`. Waiting messages + browser URLs use it. MergedChannel
+  write-back persists upgrades only - never downgrades an @handle to a UC-id.
+- [x] **Stale-stream fixes** (same commit):
+  (1) missing-continuation + positively-not-live -> mark id, route to
+  verifySource (seamless back-to-back restream switch); verifySource can no
+  longer setLive(true) on a recently-failed id -> the infinite false-live loop
+  on a dead video is gone.
+  (2) `classifyLivenessFromNextResponse` (Live/NotLive/Unknown): only a positive
+  not-live signal poisons; transient garbled /next responses no longer lock a
+  live stream out (review finding).
+  (3) recently-failed streak resets when the videoId changes (a new id inherited
+  up to 60 min cooldown).
+  (4) probe chain: liveness-unvalidated /live-canonical + embed stages skip a
+  recently-failed id and fall through to marker-gated browse/streams probes.
+- [x] **Review workflow** (3 lenses + adversarial verify): 4 confirmed findings;
+  3 fixed, 1 accepted deliberately (see Key decisions).
+- [x] **Deployed + verified live**: PID 24000; all five persisted UC-id sources
+  in window-layout.json upgraded to @handles (@gevad1ch, @toonyx4316, @LEDOO_,
+  @TheBurntPeanut, @TheCoconutB) within one resolution cycle; the stale toonyx
+  waiting room still rejected. 694/694 ctest green (6 new YouTubeParsing tests).
 
 ## Key decisions
-- History rewrite done with `git commit-tree` on identical trees (same
-  messages/dates), so content is byte-identical -- only identities changed.
-- Waiting-room detection uses en-locale strings ("waiting", "Scheduled for");
-  safe because the InnerTube context pins hl=en and headers pin en-US.
-- Left the 10-min `YOUTUBE_SESSION_REFRESH_MS` re-validation cadence: with the
-  gate fixed, an in-session zombie end clears within one refresh; the
-  stuck-forever behavior was the bug, not the lag.
+- Persist the mutable @handle over the immutable UC-id (review flagged the
+  handle-recycle wrong-channel risk): ACCEPTED deliberately - Twitch/Kick/TikTok
+  tabs are all name-keyed with the identical risk, and the channel-visible field
+  is exactly what the user asked for.
+- NotLive requires a POSITIVE signal (explicit isLive:false, waiting/scheduled
+  markers, or a recognized watch page with no live flag); empty/unrecognized
+  JSON is Unknown and routes to verifySource (pre-existing behavior) so
+  transients never poison the recently-failed cache.
+- Internal `streamUrl_` stays the UC-id for API calls; only display/persistence
+  surfaces use the handle.
 
-## Deliberately NOT fixed (upstream-inherited; forward to Fixlation)
-- CurrentUserBadges dead registry; StreamDatabase intro gated on hardcoded
-  "1.3.2"; CreatePollDialog dead icon fetch; 7TV badge-refresh no-op; anon
-  Helix credential fallback (TwitchAccountManager.cpp:469).
-
-## HELD FOR SIGN-OFF -- local branch `review/keychain-ipc-auth` (NOT pushed)
-- `5f2b0cb` SEC-G4 (IPC queue name + session secret), `efac95c` SEC-02
-  (tokens -> QtKeychain). Needs a rebase onto main and a fresh-login +
-  YouTube round-trip test before push.
+## Files changed
+- `src/providers/youtube/YouTubeParsing.{hpp,cpp}` - handle extractor + liveness tri-state
+- `src/providers/youtube/YouTubeLiveChat.{hpp,cpp}` - channelHandle_/displaySource, gate rework, streak fix, probe fall-through
+- `src/providers/merged/MergedChannel.cpp` - write-back guard, friendly browser URLs
+- `tests/src/YouTubeParsing.cpp` - 6 new tests (handle extraction, owner-scoped, liveness classify)
 
 ## Current state
-- Build: green (RelWithDebInfo, ninja). Tests: 688 green via ctest (17
-  YouTubeParsing incl. the new waiting-room case; standard 6 network skips).
-- `main` = `352e273`, pushed. App running from it (PID 928604).
-- Branches: only `main` + held `review/keychain-ipc-auth` remain.
-- CI on main re-triggered by the pushes; rolling `latest` release updates on
-  Build success (/release-status to confirm).
-- Plan files + `review/` + scratch logs remain untracked, per instruction.
+- `main` = `21fca67`, pushed; CI re-triggered by the push (rolling release updates on Build success).
+- App running from the new build (PID 24000). Build green, 694/694 ctest.
+- Branches: `main` + held `review/keychain-ipc-auth` (SEC-G4 + SEC-02, NOT pushed, needs rebase + fresh-login/YouTube round-trip test + sign-off).
+- Plan files (`REMEDIATION-PLAN.md`, `REVIEW-PLAN.md`, `review/`) + scratch logs stay untracked, per instruction.
 
 ## Next session
 1. Confirm main CI green + rolling release updated (/release-status).
-2. Decide on `review/keychain-ipc-auth`: rebase, test, sign-off, push.
-3. Watch whether any YouTube channel still latches live on a waiting room
-   (log line to grep: `rejecting non-live videoId`).
+2. Watch a real stream-end/next-stream cycle on a YouTube tab: expect no
+   re-entering of the URL; log lines to grep: `probing for the channel's
+   current stream`, `probe skipping recently-failed`.
+3. Decide on `review/keychain-ipc-auth` (rebase, test, sign-off, push).

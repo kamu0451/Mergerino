@@ -118,6 +118,51 @@ TEST(YouTubeParsing, extractIsLiveFromNextResponseRejectsWaitingRooms)
     EXPECT_FALSE(extractIsLiveFromNextResponse(upcomingDetails));
 }
 
+TEST(YouTubeParsing, classifyLivenessDistinguishesNotLiveFromUnknown)
+{
+    // An unrecognized response (consent/throttle page parsed to empty JSON,
+    // or a shape without any liveness signal) must be Unknown, not NotLive:
+    // callers penalize a videoId on NotLive and a transient garbage response
+    // must not lock a live stream out for the cooldown window.
+    EXPECT_EQ(classifyLivenessFromNextResponse(QJsonObject{}),
+              YouTubeLiveness::Unknown);
+    EXPECT_EQ(classifyLivenessFromNextResponse(
+                  parseObject(R"({"someUnrelatedShape": true})")),
+              YouTubeLiveness::Unknown);
+
+    // A recognized watch page whose view-count block has no live flag is a
+    // plain video / finished stream - positively NotLive.
+    const auto plainVideo = parseObject(R"({
+        "contents": {"twoColumnWatchNextResults": {"results": {"results": {
+            "contents": [{"videoPrimaryInfoRenderer": {
+                "viewCount": {"videoViewCountRenderer": {
+                    "viewCount": {"simpleText": "12,345 views"}}}}}]
+        }}}}
+    })");
+    EXPECT_EQ(classifyLivenessFromNextResponse(plainVideo),
+              YouTubeLiveness::NotLive);
+
+    // Explicit isLive false is positively NotLive.
+    const auto endedStream = parseObject(R"({
+        "contents": {"twoColumnWatchNextResults": {"results": {"results": {
+            "contents": [{"videoPrimaryInfoRenderer": {
+                "viewCount": {"videoViewCountRenderer": {"isLive": false}}}}]
+        }}}}
+    })");
+    EXPECT_EQ(classifyLivenessFromNextResponse(endedStream),
+              YouTubeLiveness::NotLive);
+
+    // An actively-broadcasting stream is Live.
+    const auto liveNow = parseObject(R"({
+        "contents": {"twoColumnWatchNextResults": {"results": {"results": {
+            "contents": [{"videoPrimaryInfoRenderer": {
+                "viewCount": {"videoViewCountRenderer": {"isLive": true}}}}]
+        }}}}
+    })");
+    EXPECT_EQ(classifyLivenessFromNextResponse(liveNow),
+              YouTubeLiveness::Live);
+}
+
 TEST(YouTubeParsing, parseYouTubeIsoDateTimeParsesValidTimestamps)
 {
     EXPECT_TRUE(parseYouTubeIsoDateTime("2026-01-15T12:00:00Z").isValid());
@@ -203,4 +248,82 @@ TEST(YouTubeParsing, youtubeNavigationEndpointUrlReturnsEmptyWhenNoEndpointPrese
     EXPECT_TRUE(
         youtubeNavigationEndpointUrl(parseObject(R"({"someOtherField": true})"))
             .isEmpty());
+}
+
+TEST(YouTubeParsing, extractYouTubeChannelHandleFindsEscapedJsonUrls)
+{
+    // ytInitialData / microformat JSON escapes slashes. The payloads live in
+    // locals because MSVC's stringization of raw strings inside the gtest
+    // macros re-reads \/ as an escape sequence (C4129).
+    const QString vanity =
+        R"("vanityChannelUrl":"http:\/\/www.youtube.com\/@gevad1ch")";
+    EXPECT_EQ(extractYouTubeChannelHandle(vanity), "@gevad1ch");
+    const QString owner =
+        R"("ownerProfileUrl":"http:\/\/www.youtube.com\/@SomeOwner")";
+    EXPECT_EQ(extractYouTubeChannelHandle(owner), "@SomeOwner");
+    const QString canonicalBase =
+        R"("canonicalBaseUrl":"\/@name.with-dots_ok")";
+    EXPECT_EQ(extractYouTubeChannelHandle(canonicalBase),
+              "@name.with-dots_ok");
+}
+
+TEST(YouTubeParsing, extractYouTubeChannelHandleFindsPageLevelTags)
+{
+    EXPECT_EQ(
+        extractYouTubeChannelHandle(
+            R"(<link rel="canonical" href="https://www.youtube.com/@gevad1ch">)"),
+        "@gevad1ch");
+    EXPECT_EQ(
+        extractYouTubeChannelHandle(
+            R"(<meta property="og:url" content="https://www.youtube.com/@gevad1ch">)"),
+        "@gevad1ch");
+    EXPECT_EQ(extractYouTubeChannelHandle(
+                  R"("channelHandleText":{"runs":[{"text":"@gevad1ch"}]})"),
+              "@gevad1ch");
+}
+
+TEST(YouTubeParsing, extractYouTubeChannelHandlePrefersOwnerOverBrowseEndpoints)
+{
+    // A watch page embeds other channels' browse endpoints (recommendations)
+    // after the owner metadata; the owner-specific patterns must win.
+    const QString html =
+        R"("ownerProfileUrl":"http:\/\/www.youtube.com\/@TheOwner")"
+        R"(..."canonicalBaseUrl":"\/@SomeRecommendedChannel")";
+    EXPECT_EQ(extractYouTubeChannelHandle(html), "@TheOwner");
+}
+
+TEST(YouTubeParsing, extractYouTubeChannelHandleReturnsEmptyWhenAbsent)
+{
+    EXPECT_TRUE(extractYouTubeChannelHandle({}).isEmpty());
+    EXPECT_TRUE(
+        extractYouTubeChannelHandle("<html><body>no handles here</body></html>")
+            .isEmpty());
+    // Watch-page canonical is a video URL, not a handle.
+    EXPECT_TRUE(
+        extractYouTubeChannelHandle(
+            R"(<link rel="canonical" href="https://www.youtube.com/watch?v=dQw4w9WgXcQ">)")
+            .isEmpty());
+    // Too short to be a valid handle (minimum 3 chars after the @).
+    const QString shortHandle = R"("canonicalBaseUrl":"\/@ab")";
+    EXPECT_TRUE(extractYouTubeChannelHandle(shortHandle).isEmpty());
+}
+
+TEST(YouTubeParsing, extractYouTubeChannelHandleOwnerScopedIgnoresFallbacks)
+{
+    // ownerScopedOnly is for watch pages where the generic fallbacks could
+    // name a recommended channel instead of the video's owner.
+    const QString recommendationOnly =
+        R"("canonicalBaseUrl":"\/@SomeRecommendedChannel")"
+        R"(..."channelHandleText":{"runs":[{"text":"@AnotherChannel"}]})";
+    EXPECT_TRUE(extractYouTubeChannelHandle(recommendationOnly,
+                                            /*ownerScopedOnly=*/true)
+                    .isEmpty());
+    EXPECT_EQ(extractYouTubeChannelHandle(recommendationOnly),
+              "@AnotherChannel");
+
+    const QString withOwner =
+        R"("ownerProfileUrl":"http:\/\/www.youtube.com\/@TheOwner")"
+        R"(..."canonicalBaseUrl":"\/@SomeRecommendedChannel")";
+    EXPECT_EQ(extractYouTubeChannelHandle(withOwner, /*ownerScopedOnly=*/true),
+              "@TheOwner");
 }

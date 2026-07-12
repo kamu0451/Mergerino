@@ -745,6 +745,14 @@ YouTubeLiveChat::YouTubeLiveChat(QString streamUrl)
     : streamUrl_(std::move(streamUrl))
     , lifetimeGuard_(std::make_shared<bool>(true))
 {
+    // A user-entered @handle is already the friendliest channel identity we
+    // could show; keep it before resolution replaces streamUrl_ with the
+    // opaque UC channel id.
+    const auto normalized = normalizeSource(this->streamUrl_);
+    if (normalized.startsWith('@'))
+    {
+        this->channelHandle_ = normalized;
+    }
 }
 
 YouTubeLiveChat::~YouTubeLiveChat()
@@ -1311,7 +1319,7 @@ void YouTubeLiveChat::resolveVideoId()
         }
 
         this->probeLiveVideoIdFromSource(
-            channelId, [this, channelId](QString videoId) {
+            channelId, [this](QString videoId) {
                 if (!this->running_)
                 {
                     return;
@@ -1321,7 +1329,7 @@ void YouTubeLiveChat::resolveVideoId()
                 {
                     this->waitForNextLive(
                         QString("Waiting for %1 to go live on YouTube.")
-                            .arg(channelId),
+                            .arg(this->displaySource()),
                         YOUTUBE_RECONNECT_DELAY_MS);
                     return;
                 }
@@ -1334,7 +1342,7 @@ void YouTubeLiveChat::resolveVideoId()
                         << videoId << " - treating as offline";
                     this->waitForNextLive(
                         QString("Waiting for %1 to go live on YouTube.")
-                            .arg(channelId),
+                            .arg(this->displaySource()),
                         YOUTUBE_RECONNECT_DELAY_MS);
                     return;
                 }
@@ -1358,6 +1366,63 @@ bool YouTubeLiveChat::videoIdRecentlyFailed(const QString &videoId) const
         recentlyFailedBaseWindowMs *
             (1LL << std::min(this->recentlyFailedStreak_ - 1, 8)));
     return this->recentlyFailedTimer_.elapsed() < cooldown;
+}
+
+void YouTubeLiveChat::markVideoIdRecentlyFailed()
+{
+    // The escalating cooldown ladder exists for a chronically-bogus id; a
+    // DIFFERENT id failing must restart at the base window, otherwise a
+    // fresh videoId (e.g. tomorrow's waiting room) inherits the 40-60 min
+    // cooldown a previous id earned and the genuinely-new stream is skipped
+    // for that long once it goes live.
+    if (this->recentlyFailedVideoId_ != this->videoId_ ||
+        this->recentlyFailedStreak_ < 1)
+    {
+        this->recentlyFailedStreak_ = 1;
+    }
+    this->recentlyFailedVideoId_ = this->videoId_;
+    this->recentlyFailedTimer_.restart();
+}
+
+void YouTubeLiveChat::setChannelHandle(QString handle)
+{
+    if (handle.isEmpty() || this->channelHandle_ == handle)
+    {
+        return;
+    }
+
+    this->channelHandle_ = std::move(handle);
+    qCDebug(chatterinoYouTube).nospace()
+        << "[" << this->streamUrl_ << "] learned channel handle "
+        << this->channelHandle_;
+    // Let MergedChannel persist the friendly form over a UC id / watch URL.
+    this->sourceResolved.invoke(this->channelHandle_);
+}
+
+void YouTubeLiveChat::maybeLearnChannelHandle(const QString &html,
+                                              bool ownerScopedOnly)
+{
+    if (!this->channelHandle_.isEmpty())
+    {
+        return;
+    }
+
+    const auto handle = extractYouTubeChannelHandle(html, ownerScopedOnly);
+    if (handle.isEmpty())
+    {
+        return;
+    }
+
+    // Once the source is resolved to a channel id, only trust pages that
+    // identify THIS channel - probe pages can embed other channels'
+    // endpoints (recommendations, related streams).
+    if (isLikelyChannelId(this->streamUrl_) &&
+        extractVideoChannelId(html) != this->streamUrl_)
+    {
+        return;
+    }
+
+    this->setChannelHandle(handle);
 }
 
 void YouTubeLiveChat::resolveChannelIdFromSource(
@@ -1445,6 +1510,8 @@ void YouTubeLiveChat::resolveChannelIdFromHandle(
             const auto channelId = extractVideoChannelId(html);
             if (!channelId.isEmpty())
             {
+                // The page resolved: the handle the user typed is real.
+                this->setChannelHandle(trimmed);
                 (*callback)(channelId);
                 return;
             }
@@ -1492,6 +1559,13 @@ void YouTubeLiveChat::resolveChannelIdFromVideoId(
             }
 
             const auto html = QString::fromUtf8(result.getData());
+            // A watch page's owner metadata names the channel this video
+            // belongs to - the channel we are about to resolve to. The UC
+            // cross-check isn't armed yet on this path (streamUrl_ is still
+            // the watch URL), so restrict matching to the owner-scoped
+            // patterns; the generic fallbacks could name a recommended
+            // channel on a degenerate page.
+            this->maybeLearnChannelHandle(html, /*ownerScopedOnly=*/true);
             (*callback)(extractVideoChannelId(html));
                                    }))
         .onError(guardedCallback(this->lifetimeGuard_,
@@ -1662,7 +1736,12 @@ void YouTubeLiveChat::probeLiveVideoIdFromSource(
                     return;
                 }
 
-                if (!videoId.isEmpty())
+                // The embed canonical has no liveness marker, so it can
+                // echo an id that fetchLiveChatPage already rejected; fall
+                // through to the marker-gated /streams probe instead of
+                // re-serving it.
+                if (!videoId.isEmpty() &&
+                    !this->videoIdRecentlyFailed(videoId))
                 {
                     (*callback)(std::move(videoId));
                     return;
@@ -1710,17 +1789,33 @@ void YouTubeLiveChat::probeLiveVideoIdFromSource(
         }
 
         this->probeLiveVideoIdFromPath(
-            livePath, [this, source, tryStreams, tryBrowse, callback](
-                          QString videoId) {
+            livePath, [this, source, livePath, tryStreams, tryBrowse,
+                       callback](QString videoId) {
                 if (!this->running_)
                 {
                     return;
                 }
 
-                if (!videoId.isEmpty())
+                // The /live page's canonical link tracks YouTube's redirect,
+                // which can lag on the previous (ended) stream while a newer
+                // one is already live. If the canonical id was recently
+                // rejected as non-live, fall through to the marker-gated
+                // browse/streams probes that only report active streams,
+                // instead of letting the stale redirect shadow them.
+                if (!videoId.isEmpty() &&
+                    !this->videoIdRecentlyFailed(videoId))
                 {
                     (*callback)(std::move(videoId));
                     return;
+                }
+
+                if (!videoId.isEmpty())
+                {
+                    qCDebug(chatterinoYouTube).nospace()
+                        << "[" << this->streamUrl_
+                        << "] probe skipping recently-failed videoId="
+                        << videoId << " from " << livePath
+                        << " - trying fallbacks";
                 }
 
                 if (isLikelyChannelId(source))
@@ -1806,6 +1901,9 @@ void YouTubeLiveChat::probeLiveVideoIdFromPath(
                 }
 
                 const auto html = QString::fromUtf8(result.getData());
+                // Channel /live and /streams pages (or the watch page they
+                // redirect to) carry the channel's vanity handle.
+                this->maybeLearnChannelHandle(html);
                 (*callback)(extractLiveVideoId(html, path.endsWith("/live")));
             }))
         .onError(guardedCallback(this->lifetimeGuard_,
@@ -2114,6 +2212,32 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
                     << this->shouldResolveLiveStreamFromSource();
                 if (this->shouldResolveLiveStreamFromSource())
                 {
+                    // No chat continuation AND the page POSITIVELY says the
+                    // video is not live: an ended stream (or a stale /live
+                    // redirect), not a live-but-chatless one. Mark it so
+                    // the liveness-unvalidated probe stages skip it, then
+                    // let verifySource look for the channel's current
+                    // stream right away - a back-to-back restream is picked
+                    // up seamlessly instead of blipping offline. Without
+                    // the marking, verifySource re-probes /live, gets the
+                    // same stale id back, and declares the tab live in an
+                    // endless loop - the "stuck on the old stream until the
+                    // URL is re-entered" failure. An Unknown read (consent/
+                    // throttle page, shape change) must NOT mark: penalizing
+                    // a genuinely-live id on a transient garbage response
+                    // would lock it out for the whole cooldown window.
+                    if (classifyLivenessFromNextResponse(json) ==
+                        YouTubeLiveness::NotLive)
+                    {
+                        qCWarning(chatterinoYouTube).nospace()
+                            << "[" << this->streamUrl_
+                            << "] fetchLiveChatPage no continuation and "
+                               "not live videoId="
+                            << this->videoId_
+                            << " - probing for the channel's current stream";
+                        this->markVideoIdRecentlyFailed();
+                    }
+
                     this->verifySourceLiveAfterMissingContinuation(
                         requestedVideoId, skipInitialBacklog);
                     return;
@@ -2186,12 +2310,7 @@ void YouTubeLiveChat::fetchLiveChatPage(bool skipInitialBacklog)
                     << "] fetchLiveChatPage rejecting non-live videoId="
                     << this->videoId_ << " title=\"" << this->liveTitle_
                     << "\"";
-                this->recentlyFailedVideoId_ = this->videoId_;
-                this->recentlyFailedTimer_.restart();
-                if (this->recentlyFailedStreak_ < 1)
-                {
-                    this->recentlyFailedStreak_ = 1;
-                }
+                this->markVideoIdRecentlyFailed();
                 this->waitForNextLive(
                     QStringLiteral("Waiting for a live YouTube stream."),
                     YOUTUBE_RECONNECT_DELAY_MS);
@@ -2627,6 +2746,17 @@ void YouTubeLiveChat::verifySourceLiveAfterMissingContinuation(
                 this->videoId_ = std::move(videoId);
                 this->seenMessageIds_.clear();
                 this->fetchLiveChatPage(skipInitialBacklog);
+                return;
+            }
+
+            // The probe handed back an id we positively know is not live
+            // (marked when its /next page said so). Declaring it live here
+            // would resurrect the stale-stream loop this marking exists to
+            // break - treat the channel as offline instead.
+            if (this->videoIdRecentlyFailed(requestedVideoId))
+            {
+                this->waitForNextLive("Waiting for a live YouTube stream.",
+                                      YOUTUBE_RECONNECT_DELAY_MS);
                 return;
             }
 
@@ -3379,6 +3509,17 @@ bool YouTubeLiveChat::shouldResolveLiveStreamFromSource() const
 QString YouTubeLiveChat::resolvedSource() const
 {
     return normalizeSource(this->streamUrl_);
+}
+
+QString YouTubeLiveChat::displaySource() const
+{
+    if (!this->channelHandle_.isEmpty())
+    {
+        return this->channelHandle_;
+    }
+
+    const auto normalized = normalizeSource(this->streamUrl_);
+    return normalized.isEmpty() ? this->streamUrl_ : normalized;
 }
 
 const EmoteMap &YouTubeLiveChat::customEmotes() const

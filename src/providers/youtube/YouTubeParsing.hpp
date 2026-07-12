@@ -37,6 +37,22 @@ QJsonObject extractLiveBroadcastDetails(const QJsonObject &nextResponse);
 bool isEndedOrOfflineLiveBroadcast(const QJsonObject &nextResponse);
 bool extractIsLiveFromNextResponse(const QJsonObject &json);
 
+// Three-way liveness read of an InnerTube /next response. NotLive requires a
+// POSITIVE signal (explicit isLive:false, a waiting-room/scheduled marker, or
+// a recognized watch page whose view-count block carries no live flag at
+// all); a response we can't recognize (consent/throttle page, empty JSON,
+// A/B shape change) is Unknown, NOT NotLive - callers that penalize a
+// videoId on NotLive must not do so on a transient garbage response.
+enum class YouTubeLiveness : std::uint8_t {
+    Live,
+    NotLive,
+    Unknown,
+};
+YouTubeLiveness classifyLivenessFromNextResponse(const QJsonObject &json);
+
+QString extractYouTubeChannelHandle(const QString &html,
+                                    bool ownerScopedOnly = false);
+
 bool containsActiveLiveMarker(const QString &text);
 bool jsonContainsLiveMarker(const QJsonValue &value);
 

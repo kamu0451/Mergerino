@@ -13,6 +13,7 @@
 #include <QUrlQuery>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 
 namespace chatterino {
@@ -680,6 +681,11 @@ QString flattenSimpleOrRunsText(const QJsonValue &value)
 // structure we don't recognise so we don't false-positive ended streams.
 bool extractIsLiveFromNextResponse(const QJsonObject &json)
 {
+    return classifyLivenessFromNextResponse(json) == YouTubeLiveness::Live;
+}
+
+YouTubeLiveness classifyLivenessFromNextResponse(const QJsonObject &json)
+{
     const auto contents = json["contents"]
                               .toObject()["twoColumnWatchNextResults"]
                               .toObject()["results"]
@@ -700,7 +706,7 @@ bool extractIsLiveFromNextResponse(const QJsonObject &json)
         {
             if (!renderer["isLive"].toBool(false))
             {
-                return false;
+                return YouTubeLiveness::NotLive;
             }
 
             const auto countText =
@@ -708,26 +714,78 @@ bool extractIsLiveFromNextResponse(const QJsonObject &json)
             if (countText.contains(QStringLiteral("waiting"),
                                    Qt::CaseInsensitive))
             {
-                return false;
+                return YouTubeLiveness::NotLive;
             }
 
             const auto dateText = flattenSimpleOrRunsText(primary["dateText"]);
-            return !dateText.startsWith(QStringLiteral("Scheduled for"),
-                                        Qt::CaseInsensitive);
+            return dateText.startsWith(QStringLiteral("Scheduled for"),
+                                       Qt::CaseInsensitive)
+                       ? YouTubeLiveness::NotLive
+                       : YouTubeLiveness::Live;
+        }
+        if (!renderer.isEmpty())
+        {
+            // A populated view-count block with no live flag at all is a
+            // recognized watch page for a plain video / finished stream.
+            return YouTubeLiveness::NotLive;
         }
     }
 
     const auto videoDetails = json["videoDetails"].toObject();
     if (videoDetails["isUpcoming"].toBool(false))
     {
-        return false;
+        return YouTubeLiveness::NotLive;
     }
     if (videoDetails.contains("isLive"))
     {
-        return videoDetails["isLive"].toBool(false);
+        return videoDetails["isLive"].toBool(false) ? YouTubeLiveness::Live
+                                                    : YouTubeLiveness::NotLive;
     }
 
-    return false;
+    return YouTubeLiveness::Unknown;
+}
+
+// Pulls the channel's vanity @handle out of page HTML. Channel pages carry
+// it in channelMetadataRenderer.vanityChannelUrl and the page-level
+// canonical/og:url tags; watch pages carry the video OWNER's handle in the
+// player microformat's ownerProfileUrl. The generic canonicalBaseUrl form is
+// tried last because watch pages also embed other channels' browse endpoints
+// (recommendations) further down the document - `ownerScopedOnly` restricts
+// matching to the owner/channel-metadata patterns for pages where those
+// fallbacks could name a different channel. URLs inside ytInitialData are
+// \/-escaped, page-level tags are not, so both spellings are matched.
+// Handles are 3-30 chars of [A-Za-z0-9_.-]; percent-encoded unicode handles
+// don't match and callers fall back to the UC channel id.
+QString extractYouTubeChannelHandle(const QString &html, bool ownerScopedOnly)
+{
+    static const std::array<QRegularExpression, 6> handlePatterns{
+        QRegularExpression(
+            R"yt("vanityChannelUrl":"https?:(?:\\/\\/|//)www\.youtube\.com(?:\\/|/)(@[A-Za-z0-9_.-]{3,30}))yt"),
+        QRegularExpression(
+            R"yt("ownerProfileUrl":"https?:(?:\\/\\/|//)www\.youtube\.com(?:\\/|/)(@[A-Za-z0-9_.-]{3,30}))yt"),
+        QRegularExpression(
+            R"yt(<link rel="canonical" href="https://www\.youtube\.com/(@[A-Za-z0-9_.-]{3,30}))yt"),
+        QRegularExpression(
+            R"yt(<meta property="og:url" content="https://www\.youtube\.com/(@[A-Za-z0-9_.-]{3,30}))yt"),
+        QRegularExpression(
+            R"yt("channelHandleText":\{"runs":\[\{"text":"(@[A-Za-z0-9_.-]{3,30}))yt"),
+        QRegularExpression(
+            R"yt("canonicalBaseUrl":"(?:\\/|/)(@[A-Za-z0-9_.-]{3,30}))yt"),
+    };
+    constexpr size_t ownerScopedPatternCount = 2;
+
+    const size_t patternCount =
+        ownerScopedOnly ? ownerScopedPatternCount : handlePatterns.size();
+    for (size_t i = 0; i < patternCount; i++)
+    {
+        const auto match = handlePatterns.at(i).match(html);
+        if (match.hasMatch())
+        {
+            return match.captured(1);
+        }
+    }
+
+    return {};
 }
 
 }  // namespace chatterino

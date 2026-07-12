@@ -750,7 +750,18 @@ QString MergedChannel::browserStreamUrl() const
                        videoId;
             }
         }
-        return this->config_.youtubeStreamUrl;
+        // No live video: point at the channel itself. The raw config value
+        // is a bare @handle / UC id, not an openable URL.
+        QString source;
+        if (this->youtubeLiveChat_)
+        {
+            source = this->youtubeLiveChat_->displaySource();
+        }
+        if (source.isEmpty())
+        {
+            source = this->config_.youtubeStreamUrl;
+        }
+        return youtubeChannelBrowserUrl(source).toString();
     };
     auto tiktokUrl = [this]() -> QString {
         QString name;
@@ -1015,7 +1026,7 @@ std::vector<MergedChannel::BrowserUrl> MergedChannel::channelBrowserUrls() const
         QString source;
         if (this->youtubeLiveChat_)
         {
-            source = this->youtubeLiveChat_->resolvedSource();
+            source = this->youtubeLiveChat_->displaySource();
         }
         if (source.isEmpty())
         {
@@ -1129,11 +1140,26 @@ void MergedChannel::initializeSources()
             });
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->sourceResolved, [this](const QString &source) {
-                if (!source.isEmpty())
+                if (source.isEmpty() ||
+                    source == this->config_.youtubeStreamUrl)
                 {
-                    this->config_.youtubeStreamUrl = source;
-                    getApp()->getWindows()->queueSave();
+                    return;
                 }
+                // The provider resolves any source down to a UC channel id
+                // and, once a page reveals it, back up to the vanity
+                // @handle. Persist upgrades only: a watch URL or UC id may
+                // be replaced by any channel-shaped form, but a
+                // user-readable @handle is never clobbered by the opaque
+                // channel id - the settings field keeps showing the channel
+                // the user typed while the current live stream is resolved
+                // under the hood.
+                if (this->config_.youtubeStreamUrl.trimmed().startsWith('@') &&
+                    !source.startsWith('@'))
+                {
+                    return;
+                }
+                this->config_.youtubeStreamUrl = source;
+                getApp()->getWindows()->queueSave();
             });
         this->youtubeConnections_.managedConnect(
             this->youtubeLiveChat_->systemMessageReceived, [this](const MessagePtr &message) {

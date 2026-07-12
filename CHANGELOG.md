@@ -2,6 +2,8 @@
 
 ## Unversioned
 
+- Major: A tab's YouTube source now stays the channel instead of decaying into an opaque resolved id. The settings field keeps (or upgrades to) the channel's @handle, "Open in browser" uses the friendly channel URL, and "Waiting for ... to go live" messages name the handle instead of a raw channel id. Under the hood the current live stream is re-resolved from the channel every time, so a new stream is picked up without re-entering the URL: an ended stream that YouTube keeps serving on the channel's /live redirect no longer pins the tab (it is marked and the probes fall through to the channel's browse/streams tabs, which only report actively-live videos), a back-to-back restream is switched to seamlessly, and a stream that ends with a missing chat continuation can no longer loop the tab live forever on the dead video.
+- Bugfix: A transiently garbled YouTube response can no longer lock a genuinely-live stream out for minutes -- only a positive "not live" signal penalizes a video id, and a new id no longer inherits the escalated retry cooldown an older id earned.
 - Bugfix: A YouTube channel no longer stays marked live (with a phantom "1 viewer") after the stream ends. Ended streams that revert to a scheduled waiting room were mistaken for live broadcasts because YouTube keeps their live flag set and their chat endpoint responsive; waiting rooms are now recognized and treated as offline.
 - Bugfix: Fixed a possible crash on exit when closing the window while a channel's header icons were refreshing.
 - Bugfix: Highlight sounds, window alerts, and /mentions entries from YouTube/TikTok messages no longer fire once per open tab when several merged tabs share the same stream.

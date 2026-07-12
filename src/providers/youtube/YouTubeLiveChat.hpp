@@ -61,6 +61,12 @@ public:
     QString previewThumbnailUrl() const;
     QString resolvedSource() const;
 
+    // Channel identity for user-facing surfaces (status messages, browser
+    // URLs, the persisted tab config): the vanity @handle when one has been
+    // learned, otherwise the normalized source (which after resolution is
+    // the opaque UC channel id). Internal API calls keep using streamUrl_.
+    QString displaySource() const;
+
     // Custom (channel/member) chat emoji seen in this source's live chat,
     // keyed by their :shortcut: name. Populated as messages are parsed (see
     // parseRendererMessage) so emote autocomplete can offer them. Standard
@@ -138,6 +144,10 @@ private:
     void fetchUpdatedMetadata();
     void scheduleUpdatedMetadata(int delayMs);
     bool videoIdRecentlyFailed(const QString &videoId) const;
+    void markVideoIdRecentlyFailed();
+    void maybeLearnChannelHandle(const QString &html,
+                                 bool ownerScopedOnly = false);
+    void setChannelHandle(QString handle);
     void recoverLiveChat(QString text, int retryDelayMs,
                          bool notifyAsSystemMessage = true);
     void waitForNextLive(QString text, int retryDelayMs);
@@ -178,6 +188,10 @@ private:
                                           EmoteMap *customEmoteSink = nullptr);
 
     QString streamUrl_;
+    // The channel's vanity @handle, learned once from a resolution/probe
+    // page that identifies this channel (or taken from the user's own
+    // @handle input). Display/persistence only - never used for API calls.
+    QString channelHandle_;
     QString videoId_;
     QString apiKey_;
     QString clientVersion_;

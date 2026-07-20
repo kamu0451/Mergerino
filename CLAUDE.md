@@ -29,9 +29,11 @@ Key CMake options (from `CMakeLists.txt`): `BUILD_TESTS`, `BUILD_BENCHMARKS`, `C
 
 ## Logging
 
-- **`--log-file <path>`** — tee every Qt log message to the given file with ISO-timestamp/level/category/message columns. Cleared on each run by `.dev-cycle.bat`. Intended for automated tooling and post-mortem review.
-- **`QT_LOGGING_RULES`** — runtime filter syntax, e.g. `chatterino.youtube.debug=true;chatterino.tiktok.*=true`. Category list is in `src/common/QLogging.hpp` (`Q_DECLARE_LOGGING_CATEGORY`). Mergerino-specific categories: `chatterino.youtube`, `chatterino.tiktok`, `chatterino.merged`, `chatterino.kick` (and the full upstream set). Default threshold is Warning in Release and Debug in Debug builds.
-- **`--verbose`** — attaches a console window on Windows so qDebug/qInfo show up even without `--log-file`.
+- **Always-on diagnostic log** — every launch without `--log-file` appends to `%APPDATA%\Mergerino\Logs\mergerino-diag.log` (32 MiB cap, single `.1` rollover; see `src/main.cpp`). While a file sink is attached the four Mergerino provider categories (`chatterino.youtube`, `chatterino.merged`, `chatterino.kick`, `chatterino.tiktok`) run at Debug and `chatterino.app` at Info, so "provider X didn't pick the stream up" reports are diagnosable post-mortem — check this log FIRST before restarting the app (a restart destroys the live reproduction state). `QT_LOGGING_RULES` still overrides.
+- **`--log-file <path>`** — tee every Qt log message to the given file instead of the default location, with ISO-timestamp/level/category/message columns. Cleared on each run by `.dev-cycle.bat`. Intended for automated tooling.
+- **`QT_LOGGING_RULES`** — runtime filter syntax, e.g. `chatterino.youtube.debug=true;chatterino.tiktok.*=true`. Category list is in `src/common/QLogging.hpp` (`Q_DECLARE_LOGGING_CATEGORY`). Default threshold is Warning in Release and Debug in Debug builds; the file-sink rules above are applied on top.
+- **`--verbose`** — attaches a console window on Windows so qDebug/qInfo show up even without a log file.
+- **Convention: anomalies at `qCWarning`, steady-state at `qCDebug`.** Skipping/rejecting/locking-out states (recently-failed skips, non-live rejections, watchdog trips) must log at Warning so they land in default-threshold captures; per-cycle narration (poll ok, offline wait) stays at Debug. A silent anomaly path cost a multi-hour undiagnosable incident on 2026-07-20.
 
 ## Tests
 
@@ -83,3 +85,9 @@ This is Chatterino2's architecture with Mergerino-specific additions. The big pi
 - `/build` — slash command wrapping `.dev-cycle.bat` (kill + build + relaunch) and `.local-build.bat` (build only).
 - `/release-status` — slash command for `gh run` / `gh release view` against this repo's three workflows.
 - `settings.local.json` in `.claude/` grants `gh run *` and a temp deploy path; it is gitignored.
+
+## Repo gotchas (relocated from global gotchas.md 2026-07-13)
+- `git commit`/`git add` here intermittently fails `fatal: Unable to create '.git/index.lock': File exists` with NO git process running (3x in one session, right after a graceful mergerino kill + build). It is a stale lock: confirm `Get-Process git` is empty, then `Remove-Item .git\index.lock -Force` and retry. Never force-remove the lock while a git process is live.
+- `cmd /c ".dev-cycle.bat > log"` from the PowerShell tool fails "'.dev-cycle.bat' is not recognized" even when cwd looks right — always give cmd /c the FULL path: `cmd /c "C:\...\Mergerino\.dev-cycle.bat > C:\...\log 2>&1"`.
+- A bare `cmake --build build` / `ninja` from a plain shell dies with `C1083: Cannot open include file: 'type_traits'` — no MSVC env. Use `.compile-only.bat [ninja targets...]` (repo root): it runs vcvars64 then ninja WITHOUT deploying, so it is safe while mergerino.exe is running (`.local-build.bat` refuses to run then). Pass `mergerino-lib` to skip the exe link, `mergerino.exe` for the app target; no args builds everything including tests.
+- clangd/`<new-diagnostics>` phantoms specific to this repo: after a `git switch`/`git branch -f` the block reports errors for symbols no longer in the working tree, and test TUs flag `mocks/BaseApplication.hpp file not found` / "Unknown type EmoteController" because clangd doesn't apply the TEST target's `-Imocks/include`. The `.local-build.bat` (ninja) build is ground truth — never act on an LSP error a fresh build contradicts.

@@ -1,61 +1,77 @@
 # Handoff
 
 ## Goal
-Fix "YouTube doesn't work" -- toonyx (@toonyx4316) was live but showed no chat
-in Mergerino.
+Diagnose why toonyx's YouTube chat didn't join when the channel went live
+(Twitch/Kick joined instantly), then bake in speed-ups for similar incidents.
 
 ## Completed
-- [x] **Root-caused with debug logging** (`QT_LOGGING_RULES=chatterino.youtube.debug=true`):
-  the channel-source rework from last session is fine -- it correctly resolved
-  @toonyx4316 -> UCkc9c90rjpvJ3OBJvTAOKZg -> the live video ER15qGv_iuE and
-  polled `ok`. The real bug is one layer down: polling used YouTube's default
-  **"Top chat"** view, which drops most messages. On a ~40-viewer stream Top
-  chat stayed empty (`actions=0 delivered=0` on every poll for minutes) so the
-  tab looked dead though the stream was live and chatting.
-- [x] **Fix: switch to the unfiltered "Live chat" view.** The watch page only
-  exposes the two views as 32-char placeholder stubs (unpollable -- the poll
-  endpoint 400s on them), but the `get_live_chat` *response's* view selector
-  carries both as full 312-char reload continuations. New static helper
-  `YouTubeLiveChat::extractUnselectedViewContinuation()` reads the unselected
-  (Live chat) view's full token; `poll()` switches `continuation_` onto it once
-  per video (new `switchedToLiveChatView_` flag, reset on every watch-page
-  rebootstrap and in start()/waitForNextLive).
-- [x] **Verified live**: after deploy, log shows
-  `switching live-chat polling to the unfiltered Live chat view` and
-  `delivered` went from perpetually-0 to delivering real messages on toonyx.
+- [x] **Root-caused the missed live pickup**: a pre-live waiting room earns the
+  upcoming videoId a recently-failed mark (5 min base / 60 min max cooldown,
+  `YouTubeLiveChat.hpp:248`), and `resolveVideoId()` then discarded even the
+  marker-gated browse/streams probes' confirmed-live results for that id --
+  stream stays unjoined until the cooldown expires or the instance is recreated
+  (app restart / re-adding the source, which is why both "fixed" it before).
+  Today: live at 14:08:40 (InnerTube /player startTimestamp), still unjoined at
+  14:12. Old process had no logging, so evidence was code + timeline.
+- [x] **Fix**: `YouTubeLiveChat.cpp` `resolveVideoId()` -- ids reaching the
+  outer callback during cooldown can ONLY come from the live-marker-gated
+  browse/streams probes (livePath/embed filter internally), so join instead of
+  skipping. Verified safe by a 3-lens opus workflow (invariant / regression /
+  state machine): all HOLDS -- no marker flicker, no announce spam (setLive
+  only fires after first successful poll), no sub-30s loop (waitForNextLive
+  clamps to 30s), poll success clears the recently-failed state.
+- [x] **Always-on diagnostic logging** (`src/main.cpp`): without `--log-file`,
+  logging defaults to `%APPDATA%\Mergerino\Logs\mergerino-diag.log` (append,
+  existing 32 MiB cap + `.1` rollover) and raises chatterino.youtube/merged/
+  kick/tiktok to Debug + chatterino.app to Info via setFilterRules
+  (QT_LOGGING_RULES still overrides). Gated OFF for the browser-extension-host
+  process and --version (single opus review caught the concurrent-writer +
+  rotation race; that was the only review finding).
+- [x] **`.compile-only.bat`** (repo root): vcvars64 + ninja without deploy,
+  safe while mergerino.exe runs. Documented in CLAUDE.md gotchas (bare
+  `cmake --build` dies with C1083 'type_traits' -- no MSVC env).
+- [x] CLAUDE.md: always-on log documented ("check this log FIRST before
+  restarting -- restart destroys the repro state"), anomalies-at-qCWarning
+  convention. Global ~/.claude/CLAUDE.md: verification fan-outs right-sized
+  (single opus reviewer for <~30-line diffs, even in ultracode).
+- [x] Verified live: deployed, plain launch (no flags), diag log shows session
+  marker + toonyx polling; earlier deploy verified the cooldown fix rejoin.
 
 ## Key decisions
-- Switch at the poll RESPONSE, not the watch page: the watch page's subMenuItem
-  tokens are 32-char stubs that 400 (confirmed by a failed first attempt); the
-  get_live_chat response gives full pollable tokens for both views.
-- Pick the view by the `selected` flag (Top chat is selected by default), not by
-  the localized "Live chat"/"Top chat" title; require >64-char token and >=2
-  views so we never mistake an unrelated single-item menu.
-- `switchedToLiveChatView_` resets on every `fetchLiveChatPage` bootstrap
-  (always lands on Top chat) + session refresh; a re-switch each time is cheap.
+- Trust marker-confirmed ids rather than deleting the recently-failed cache:
+  the cache still protects against the stale /live-canonical and embed echoes
+  (checked inside those probe callbacks); only the redundant outer re-check in
+  `resolveVideoId` was removed. Worst-case flap if a marker is wrong: one
+  /next fetch per 30s offline poll, self-limiting.
+- Default log lives in AppData (not %TEMP%): survives temp cleaners, sits next
+  to Settings for bug reports. Dev cycle keeps its explicit `--log-file`.
 
 ## Dead ends
-- Using the watch page's "Live chat" subMenuItem continuation directly: it's a
-  32-char stub, poll returns HTTP 400 x3 -> recoverLiveChat -> marks the video
-  recently-failed and locks the channel out. Reverted.
+- (Prior session, still valid) Watch-page subMenuItem continuations are
+  32-char stubs that 400 the poll endpoint -- never poll them directly.
 
 ## Files changed
-- `src/providers/youtube/YouTubeLiveChat.cpp` (+82) -- `extractUnselectedViewContinuation`, the poll() view-switch, flag resets
-- `src/providers/youtube/YouTubeLiveChat.hpp` (+11) -- helper decl + `switchedToLiveChatView_`
-- `CHANGELOG.md` -- Bugfix bullet
+- `src/providers/youtube/YouTubeLiveChat.cpp` -- resolveVideoId joins
+  marker-confirmed ids during cooldown (skip block removed)
+- `src/main.cpp` -- always-on default diag log + category filter rules
+- `.compile-only.bat` -- new; compile without deploy
+- `CLAUDE.md` -- logging section rewrite, WARN convention, C1083 gotcha
+- `CHANGELOG.md` -- two bullets (cooldown fix, always-on log)
 
 ## Current state
-- Build: passing (`.local-build.bat`, exit 0), deployed to `C:\Program Files\Mergerino`.
-- App running as the deployed fixed binary (debug logging on from testing; a
-  normal relaunch drops back to Warning-level -- the fix is in the binary).
-- Tests: NOT run this session (needs the test build + httpbox/pubsub services).
-- Branch: `main`. Held `review/keychain-ipc-auth` unchanged (SEC-G4 + SEC-02, unpushed).
+- Build: passing; deployed to `C:\Program Files\Mergerino`; app running it
+  (plain launch), toonyx joined, diag log active.
+- Tests: NOT run this session (compile-only + full ninja only).
+- Branch: `main`. Held `review/keychain-ipc-auth` unchanged (SEC-G4 + SEC-02,
+  unpushed).
 
 ## Next session
-1. Add a unit test for `extractUnselectedViewContinuation` in
-   `tests/src/YouTubeParsing.cpp` (pure JSON in/out, like
-   `classifyLivenessDistinguishesNotLiveFromUnknown`): two-view selector with a
-   full unselected token -> returns it; 32-char stub / single item -> empty.
-   Then `ctest` to confirm the suite is still green.
-2. Watch a Top-chat-heavy busy stream to confirm the switch also holds there
-   (grep `switching live-chat polling`).
+1. Still pending from last session: unit test for
+   `extractUnselectedViewContinuation` in `tests/src/YouTubeParsing.cpp`
+   (pure JSON in/out, like `classifyLivenessDistinguishesNotLiveFromUnknown`):
+   two-view selector with full unselected token -> returns it; 32-char stub /
+   single item -> empty. Could add a sibling for the marker-gating helpers
+   (`jsonContainsLiveMarker` waiting-room vs live fixtures). Then `ctest`.
+2. Next time toonyx (or anyone) streams: confirm pickup within ~30s of going
+   live with no restart -- grep the diag log for "joining marker-confirmed"
+   (fires only if a waiting room preceded the stream) and "setLive true".

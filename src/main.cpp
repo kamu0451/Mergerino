@@ -22,7 +22,9 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QDateTime>
+#include <QDir>
 #include <QFile>
+#include <QLoggingCategory>
 #include <QMessageBox>
 #include <QMutex>
 #include <QMutexLocker>
@@ -201,22 +203,56 @@ int main(int argc, char **argv)
 
     const Args args(a, *paths);
 
+    // Diagnostic file logging is always on: without an explicit --log-file
+    // (the dev cycle passes one) it defaults to a rotating log under the
+    // app-data directory, so a "provider X didn't pick the stream up" report
+    // is diagnosable post-mortem instead of needing a relaunch with special
+    // flags that destroys the live reproduction state.
+    // Only the GUI run gets the default sink: the browser-extension host is
+    // a second concurrent mergerino.exe process, and two writers on one
+    // append-mode file interleave and race the size-cap rotation on Windows.
+    QString logFilePath;
     if (args.logFile.has_value())
     {
-        auto *file = new QFile(*args.logFile);
+        logFilePath = *args.logFile;
+    }
+    else if (!args.shouldRunBrowserExtensionHost && !args.printVersion)
+    {
+        const QString logDir = paths->rootAppDataDirectory + "/Logs";
+        if (QDir().mkpath(logDir))
+        {
+            logFilePath = logDir + "/mergerino-diag.log";
+        }
+    }
+
+    if (!logFilePath.isEmpty())
+    {
+        auto *file = new QFile(logFilePath);
         if (file->open(QIODevice::WriteOnly | QIODevice::Append |
                        QIODevice::Text))
         {
             g_logFile = file;
-            g_logFilePath = *args.logFile;
+            g_logFilePath = logFilePath;
             g_prevMessageHandler = qInstallMessageHandler(fileLogMessageHandler);
+            // With a file sink attached, raise the Mergerino provider
+            // categories to Debug (their liveness/poll state machines only
+            // narrate at qCDebug) and chatterino.app to Info (session-start
+            // markers in the append-mode file). QT_LOGGING_RULES still
+            // overrides these: Qt applies env rules after API rules.
+            QLoggingCategory::setFilterRules(
+                QStringLiteral("chatterino.youtube.debug=true\n"
+                               "chatterino.merged.debug=true\n"
+                               "chatterino.kick.debug=true\n"
+                               "chatterino.tiktok.debug=true\n"
+                               "chatterino.app.info=true"));
             qCInfo(chatterinoApp).noquote()
-                << "Logging to file:" << *args.logFile;
+                << "Logging to file:" << logFilePath << "- Mergerino"
+                << CHATTERINO_VERSION;
         }
         else
         {
-            std::cerr << "Failed to open --log-file at "
-                      << args.logFile->toLocal8Bit().constData() << ": "
+            std::cerr << "Failed to open log file at "
+                      << logFilePath.toLocal8Bit().constData() << ": "
                       << file->errorString().toLocal8Bit().constData() << '\n';
             delete file;
         }

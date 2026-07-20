@@ -1337,15 +1337,21 @@ void YouTubeLiveChat::resolveVideoId()
 
                 if (this->videoIdRecentlyFailed(videoId))
                 {
+                    // Join anyway. The /live-canonical and embed probes drop
+                    // recently-failed ids internally, so an id arriving here
+                    // during its cooldown can only have come from the
+                    // marker-gated browse/streams probes, which report only
+                    // actively-live streams. Discarding it kept a genuinely
+                    // live stream unjoined for the rest of the cooldown its
+                    // waiting room had earned (5-60 min); only a restart or
+                    // re-adding the source escaped early. If the marker was
+                    // wrong, fetchLiveChatPage's liveness check re-marks the
+                    // id and we re-enter the offline wait -- one extra /next
+                    // fetch per offline poll, bounded and transient.
                     qCDebug(chatterinoYouTube).nospace()
                         << "[" << this->streamUrl_
-                        << "] resolveVideoId skipping recently-failed videoId="
-                        << videoId << " - treating as offline";
-                    this->waitForNextLive(
-                        QString("Waiting for %1 to go live on YouTube.")
-                            .arg(this->displaySource()),
-                        YOUTUBE_RECONNECT_DELAY_MS);
-                    return;
+                        << "] joining marker-confirmed live videoId="
+                        << videoId << " despite recently-failed cooldown";
                 }
 
                 this->videoId_ = std::move(videoId);

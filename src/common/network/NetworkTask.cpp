@@ -71,14 +71,23 @@ void NetworkTask::run()
     const auto &timeout = this->data_->timeout;
     if (timeout.has_value())
     {
+        // Arm the watchdog immediately, not on requestSent: a request that Qt
+        // assigns to an HTTP/2 connection mid-GOAWAY-teardown can emit
+        // neither requestSent nor finished nor any error (observed as
+        // qt.network.http2 "GOAWAY invalid stream/error code" CRITs, hourly
+        // against youtube.com), which left this task - and the caller's
+        // callback chain - alive forever with no timer running. Restart the
+        // timer once the request is actually on the wire so time spent queued
+        // behind connection limits doesn't eat the server-response budget.
+        this->timer_ = new QTimer(this);
+        this->timer_->setSingleShot(true);
+        QObject::connect(this->timer_, &QTimer::timeout, this,
+                         &NetworkTask::timeout);
+        this->timer_->start(timeout.value());
         QObject::connect(this->reply_, &QNetworkReply::requestSent, this,
                          [this]() {
-                             const auto &timeout = this->data_->timeout;
-                             this->timer_ = new QTimer(this);
-                             this->timer_->setSingleShot(true);
-                             this->timer_->start(timeout.value());
-                             QObject::connect(this->timer_, &QTimer::timeout,
-                                              this, &NetworkTask::timeout);
+                             this->requestSentSeen_ = true;
+                             this->timer_->start(this->data_->timeout.value());
                          });
     }
 
@@ -251,9 +260,21 @@ void NetworkTask::timeout()
                         &NetworkTask::finished);
     this->reply_->abort();
 
-    qCDebug(chatterinoHTTP).noquote()
-        << this->data_->typeString() << "[timed out]"
-        << this->data_->request.url().toString();
+    if (this->requestSentSeen_)
+    {
+        qCDebug(chatterinoHTTP).noquote()
+            << this->data_->typeString() << "[timed out]"
+            << this->data_->request.url().toString();
+    }
+    else
+    {
+        // The request never made it onto the wire - a zombie reply on a
+        // torn-down connection, not a slow server. Warn so it lands in the
+        // default-threshold diagnostic log.
+        qCWarning(chatterinoHTTP).noquote()
+            << this->data_->typeString() << "[timed out, never sent]"
+            << this->data_->request.url().toString();
+    }
 
     this->data_->emitError({NetworkResult::NetworkError::TimeoutError, {}, {}});
     this->data_->emitFinally();

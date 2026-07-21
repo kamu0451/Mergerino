@@ -45,6 +45,7 @@ private:
     std::shared_ptr<NetworkData> data_;
     QNetworkReply *reply_{};  // parent: default (accessManager)
     QTimer *timer_{};         // parent: this
+    bool requestSentSeen_{};
 
     // NOLINTNEXTLINE(readability-redundant-access-specifiers)
 private Q_SLOTS:

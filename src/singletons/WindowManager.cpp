@@ -807,6 +807,8 @@ std::set<QString> WindowManager::getVisibleChannelNames() const
 void WindowManager::encodeTab(SplitContainer *tab, bool isSelected,
                               QJsonObject &obj)
 {
+    obj.insert("uuid", tab->getTab()->uuid());
+
     // custom tab title
     if (tab->getTab()->hasCustomTitle())
     {
@@ -1203,6 +1205,11 @@ void WindowManager::applyWindowLayout(const WindowLayout &layout)
         for (const auto &tab : windowData.tabs_)
         {
             SplitContainer *page = window.getNotebook().addPage(false);
+
+            // restore the persistent tab identity (keeps saved overlay URLs
+            // pointing at this tab); absent in pre-uuid layouts, where the
+            // constructor-generated uuid stays
+            page->getTab()->setUuid(tab.uuid_);
 
             // set custom title
             if (!tab.customTitle_.isEmpty())

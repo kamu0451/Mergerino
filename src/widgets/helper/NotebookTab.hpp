@@ -39,6 +39,12 @@ public:
     const QString &getDefaultTitle() const;
     const QString &getTitle() const;
 
+    /// Stable identity for this tab, persisted in the window layout. Used by
+    /// external references (the OBS stream-overlay URL) so they survive tab
+    /// reorder, rename, and app restarts.
+    const QString &uuid() const;
+    void setUuid(const QString &uuid);
+
     bool isSelected() const;
     void setSelected(bool value);
     bool isBulkSelected() const;
@@ -156,6 +162,7 @@ private:
 
     QString customTitle_;
     QString defaultTitle_;
+    QString uuid_;
 
     bool selected_{};
     bool mouseOver_{};

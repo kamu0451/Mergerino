@@ -126,6 +126,7 @@ struct TabFolderDescriptor {
 struct TabDescriptor {
     static TabDescriptor loadFromJSON(const QJsonObject &root);
 
+    QString uuid_;
     QString customTitle_;
     QString folderId_;
     bool selected_{false};

@@ -453,9 +453,8 @@ ObsBrowserDockServer::ObsBrowserDockServer(QObject *parent)
         const auto query = QUrlQuery(requestUrl);
         const auto view =
             normalizedDockView(query.queryItemValue(QStringLiteral("view")));
-        bool hasRequestedTab = false;
-        const auto requestedTab = query.queryItemValue(QStringLiteral("tab"))
-                                      .toInt(&hasRequestedTab);
+        const auto requestedTab = this->resolveTabIndex(
+            query.queryItemValue(QStringLiteral("tab")));
 
         if (request.method.compare(QStringLiteral("GET"),
                                    Qt::CaseInsensitive) != 0)
@@ -487,8 +486,7 @@ ObsBrowserDockServer::ObsBrowserDockServer(QObject *parent)
         if (path == QStringLiteral("/obs-dock/state"))
         {
             return HttpServer::Response{
-                .body = this->dockStateJson(view,
-                                            hasRequestedTab ? requestedTab : -1),
+                .body = this->dockStateJson(view, requestedTab),
                 .contentType =
                     QByteArrayLiteral("application/json; charset=utf-8"),
             };
@@ -515,17 +513,51 @@ QString ObsBrowserDockServer::dockUrl(const QString &view, int tabIndex)
     return url;
 }
 
-QString ObsBrowserDockServer::overlayUrl(int tabIndex)
+QString ObsBrowserDockServer::overlayUrl(const QString &tabUuid)
 {
     auto url = QStringLiteral("http://127.0.0.1:%1/obs-overlay")
                    .arg(ObsBrowserDockServer::PORT);
 
-    if (tabIndex >= 0)
+    if (!tabUuid.isEmpty())
     {
-        url += QStringLiteral("?tab=%1").arg(tabIndex);
+        url += QStringLiteral("?tab=%1").arg(tabUuid);
     }
 
     return url;
+}
+
+int ObsBrowserDockServer::resolveTabIndex(const QString &tabParam) const
+{
+    if (tabParam.isEmpty())
+    {
+        return -1;
+    }
+
+    bool isIndex = false;
+    const int index = tabParam.toInt(&isIndex);
+    if (isIndex)
+    {
+        return index;
+    }
+
+    auto *window = this->dockWindow();
+    if (window == nullptr)
+    {
+        return -1;
+    }
+
+    auto &notebook = window->getNotebook();
+    for (int i = 0; i < notebook.getPageCount(); ++i)
+    {
+        auto *page = dynamic_cast<SplitContainer *>(notebook.getPageAt(i));
+        if (page != nullptr && page->getTab() != nullptr &&
+            page->getTab()->uuid() == tabParam)
+        {
+            return i;
+        }
+    }
+
+    return -1;
 }
 
 Window *ObsBrowserDockServer::dockWindow() const
@@ -1624,7 +1656,7 @@ QByteArray ObsBrowserDockServer::overlayPageHtml() const
     };
 
     const params = new URLSearchParams(window.location.search);
-    const tabParam = parseInt(params.get('tab') ?? '', 10);
+    const tabParam = (params.get('tab') ?? '').trim();
     const maxMessages = Math.max(1, parseInt(params.get('maxMessages') ?? '30', 10) || 30);
     const fadeAfter = Math.max(0, parseFloat(params.get('fadeAfter') ?? '0') || 0);
     const fontSize = parseInt(params.get('fontSize') ?? '18', 10);
@@ -1767,8 +1799,8 @@ QByteArray ObsBrowserDockServer::overlayPageHtml() const
     function stateUrl() {
       const qs = new URLSearchParams();
       qs.set('view', 'chat');
-      if (Number.isInteger(tabParam) && tabParam >= 0) {
-        qs.set('tab', String(tabParam));
+      if (tabParam) {
+        qs.set('tab', tabParam);
       }
       return `/obs-dock/state?${qs.toString()}`;
     }

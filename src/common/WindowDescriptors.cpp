@@ -367,6 +367,13 @@ void SplitDescriptor::loadFromJSON(SplitDescriptor &descriptor,
 TabDescriptor TabDescriptor::loadFromJSON(const QJsonObject &tabObj)
 {
     TabDescriptor tab;
+
+    QJsonValue uuidVal = tabObj.value("uuid");
+    if (uuidVal.isString())
+    {
+        tab.uuid_ = uuidVal.toString();
+    }
+
     // Load tab custom title
     QJsonValue titleVal = tabObj.value("title");
     if (titleVal.isString())

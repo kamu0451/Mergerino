@@ -35,6 +35,7 @@
 #include <QMimeData>
 #include <QPainter>
 #include <QTimer>
+#include <QUuid>
 
 #include <algorithm>
 
@@ -92,6 +93,7 @@ NotebookTab::NotebookTab(Notebook *notebook)
     : Button(notebook)
     , positionChangedAnimation_(this, "pos")
     , notebook_(notebook)
+    , uuid_(QUuid::createUuid().toString(QUuid::WithoutBraces))
     , menu_(this)
 {
     this->setContentCacheEnabled(false);
@@ -157,8 +159,7 @@ NotebookTab::NotebookTab(Notebook *notebook)
     });
 
     this->menu_.addAction("Copy Stream Overlay URL", [this]() {
-        const int tabIndex = this->notebook_->indexOf(this->page);
-        crossPlatformCopy(ObsBrowserDockServer::overlayUrl(tabIndex));
+        crossPlatformCopy(ObsBrowserDockServer::overlayUrl(this->uuid_));
     });
 
     this->highlightNewMessagesAction_ =
@@ -502,6 +503,19 @@ void NotebookTab::resetCustomTitle()
 bool NotebookTab::hasCustomTitle() const
 {
     return !this->customTitle_.isEmpty();
+}
+
+const QString &NotebookTab::uuid() const
+{
+    return this->uuid_;
+}
+
+void NotebookTab::setUuid(const QString &uuid)
+{
+    if (!uuid.isEmpty())
+    {
+        this->uuid_ = uuid;
+    }
 }
 
 void NotebookTab::setDefaultTitle(const QString &title)

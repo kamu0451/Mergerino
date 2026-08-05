@@ -8,6 +8,7 @@
 #include <pajlada/signals/signal.hpp>
 #include <QString>
 
+#include <map>
 #include <memory>
 
 class QJsonObject;
@@ -57,6 +58,19 @@ public:
     void start();
     void stop();
 
+    /// Sibling-platform live hint from a consuming MergedChannel, keyed by
+    /// consumer so multiple channels sharing this source aggregate by OR.
+    /// While any sibling (Twitch/Kick/YouTube) is live, the offline recheck
+    /// reloads on the fast cadence - the streamer is actively broadcasting,
+    /// so a TikTok live could start any moment. With nothing live anywhere
+    /// it drops to the idle cadence (channels virtually never go live on
+    /// TikTok alone). A false->true aggregate transition also pokes an
+    /// immediate recheck so TikTok is joined within seconds of the sibling
+    /// going live instead of a full interval later.
+    void setSiblingLiveHint(const void *consumer, bool siblingLive);
+    /// Forgets a consumer's hint; call when the MergedChannel goes away.
+    void removeSiblingLiveHint(const void *consumer);
+
     bool isLive() const;
     const QString &roomId() const;
     const QString &username() const;
@@ -88,10 +102,22 @@ private:
 
     std::shared_ptr<bool> lifetimeGuard_;
 
+    // Per-consumer sibling-live hints; aggregate is OR. Lives on the outer
+    // object (not Impl) so it survives stop()/start() cycles.
+    std::map<const void *, bool> siblingLiveHints_;
+
     void setStatusText(QString text, bool notifyAsSystemMessage = false);
     void setLive(bool live);
     void setViewerCount(unsigned count);
     void armOfflineRecheck();
+    bool anySiblingLive() const;
+    void refreshOfflineRecheckCadence(bool siblingNowLive);
+    void performOfflineRecheckReload();
+    /// (Re-)registers the image/media/font + CDN-segment WebResourceRequested
+    /// filters and the blocking handler. Idempotent: safe to call after
+    /// promoteToLoginHost() detached the handler or after a login-mode start
+    /// that never installed it.
+    void installResourceBlocking();
     void handleWebMessage(const QString &json);
     void handleRoomInfo(const QJsonObject &root);
     void emitSystemMessage(const QString &text);

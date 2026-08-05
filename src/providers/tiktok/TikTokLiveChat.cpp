@@ -455,10 +455,28 @@ struct TikTokLiveChat::Impl {
     // TikTok's webapp on the /@user/live page doesn't repoll, so the tab
     // would sit on "is not live" forever. Reload the page periodically
     // while not live so TikTok re-issues room/info -- catches the user
-    // coming online within `offlineRecheckIntervalMs`. The hidden 1x1
-    // host with image/media/font/CDN blocking makes each reload cheap.
+    // coming online within the recheck interval. Each reload still costs
+    // the hidden renderer a multi-second CPU burst (full SPA teardown +
+    // rebuild), so the cadence is gated on the sibling-live hint: fast
+    // while any sibling platform (Twitch/Kick/YouTube) is live, idle when
+    // nothing is live anywhere (channels virtually never go live on
+    // TikTok alone - the rising-edge poke in
+    // refreshOfflineRecheckCadence() covers the moment a sibling goes
+    // live).
     QTimer offlineRecheckTimer;
     static constexpr int offlineRecheckIntervalMs = 90000;
+    static constexpr int offlineRecheckIdleIntervalMs = 10 * 60 * 1000;
+    // Stamped on every recheck reload AND every NavigationCompleted; the
+    // rising-edge sibling poke only fires when at least the fast interval
+    // has passed since then. A tighter gap would let sibling live-status
+    // flapping produce MORE reloads than the flat 90s cadence this change
+    // replaces, and could abort a still-loading page mid-answer.
+    qint64 lastOfflineReloadMs{0};
+
+    // Back-pointer to the owning TikTokLiveChat; Impl methods need it to
+    // reach outer-class helpers (installResourceBlocking). Set right after
+    // construction in start(), never null while Impl is alive.
+    TikTokLiveChat *owner{nullptr};
 
     // Set once check_alive (or the inline `alive` field) has returned a
     // definitive live/offline answer for this session. While false, the
@@ -602,6 +620,23 @@ void TikTokLiveChat::Impl::autoHideLoginHost(const QString &username)
     qCDebug(chatterinoTikTok).nospace()
         << "[" << username << "] login-mode auto-hide engaged";
 
+    // Re-arm the resource blocker for the now-hidden host: login-mode
+    // startup skipped it entirely and promoteToLoginHost() detached it, so
+    // without this the hidden renderer keeps downloading and CPU-decoding
+    // TikTok's video segments forever - the exact high-CPU condition the
+    // blocker exists to prevent. Reload afterwards so the already-running
+    // MSE player doesn't sit there retrying 403'd live segments; the host
+    // is hidden at this point, and the reloaded page starts blocked-clean
+    // like a normal hidden session.
+    if (this->owner != nullptr)
+    {
+        this->owner->installResourceBlocking();
+        if (this->webview)
+        {
+            this->webview->Reload();
+        }
+    }
+
     // First-tab-confirms-login broadcast: hide every other login-mode
     // host process-wide. Offline streamers / login-walled tabs never see
     // real chat or pin a roomId on their own, so without this they'd
@@ -617,7 +652,10 @@ void TikTokLiveChat::Impl::autoHideLoginHost(const QString &username)
     }
     for (const auto &other : others)
     {
-        if (!other || other->impl_.get() == this)
+        // Null impl_ is reachable: getOrCreateShared() inserts into the
+        // registry before start(), and start() can bail without creating
+        // an Impl (empty normalized source, CreateWindowExW failure).
+        if (!other || !other->impl_ || other->impl_.get() == this)
         {
             continue;
         }
@@ -637,6 +675,11 @@ void TikTokLiveChat::Impl::autoHideLoginHost(const QString &username)
             other->impl_->controller->put_IsVisible(FALSE);
             RECT bounds{0, 0, 1, 1};
             other->impl_->controller->put_Bounds(bounds);
+        }
+        other->installResourceBlocking();
+        if (other->impl_->webview)
+        {
+            other->impl_->webview->Reload();
         }
         qCDebug(chatterinoTikTok).nospace()
             << "[" << other->username_
@@ -696,6 +739,71 @@ void TikTokLiveChat::Impl::promoteToLoginHost(const QString &username)
 
     qCDebug(chatterinoTikTok).nospace()
         << "[" << username << "] promoted host to login window (auth expired)";
+}
+
+void TikTokLiveChat::installResourceBlocking()
+{
+    if (!this->impl_ || !this->impl_->webview)
+    {
+        return;
+    }
+    auto &webview = this->impl_->webview;
+    struct FilterSpec
+    {
+        const wchar_t *uri;
+        COREWEBVIEW2_WEB_RESOURCE_CONTEXT context;
+    };
+    // Beyond IMAGE/MEDIA/FONT, also block CDN-hosted video segments fetched
+    // via Fetch/XHR: TikTok delivers live HLS through MSE, which bypasses
+    // the MEDIA resource type. Each segment we drop is ~50-200KB of video
+    // data we'd otherwise CPU-decode for nothing - the host is hidden 1x1,
+    // no human ever sees it.
+    static constexpr FilterSpec filters[] = {
+        {L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE},
+        {L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MEDIA},
+        {L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FONT},
+        {L"*tiktokcdn*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH},
+        {L"*tiktokcdn*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST},
+        {L"*tiktokv.com/aweme*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH},
+        {L"*tiktokv.com/aweme*",
+         COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST},
+    };
+    // Remove-then-add keeps the filter list exact regardless of which path
+    // led here: promoteToLoginHost() leaves registrations in place (it only
+    // detaches the handler), while a login-mode start never registered
+    // them. Removing an unregistered filter just returns a failure HRESULT.
+    for (const auto &filter : filters)
+    {
+        webview->RemoveWebResourceRequestedFilter(filter.uri, filter.context);
+    }
+    for (const auto &filter : filters)
+    {
+        webview->AddWebResourceRequestedFilter(filter.uri, filter.context);
+    }
+    if (this->impl_->resReqToken.value == 0)
+    {
+        auto guard = std::weak_ptr<bool>(this->lifetimeGuard_);
+        webview->add_WebResourceRequested(
+            Callback<ICoreWebView2WebResourceRequestedEventHandler>(
+                [this, guard](ICoreWebView2 *,
+                              ICoreWebView2WebResourceRequestedEventArgs *args)
+                    -> HRESULT {
+                    if (guard.expired() || !this->impl_ || !this->impl_->env)
+                    {
+                        return S_OK;
+                    }
+                    ComPtr<ICoreWebView2WebResourceResponse> resp;
+                    this->impl_->env->CreateWebResourceResponse(
+                        nullptr, 403, L"Blocked", L"", &resp);
+                    if (resp)
+                    {
+                        args->put_Response(resp.Get());
+                    }
+                    return S_OK;
+                })
+                .Get(),
+            &this->impl_->resReqToken);
+    }
 }
 
 void TikTokLiveChat::releaseSharedEnvironment()
@@ -760,6 +868,7 @@ void TikTokLiveChat::start()
 
     ensureWindowClass();
     this->impl_ = std::make_unique<Impl>();
+    this->impl_->owner = this;
     this->impl_->likeTimer.setSingleShot(true);
     this->impl_->likeTimer.setInterval(1000);
     this->impl_->joinTimer.setSingleShot(true);
@@ -840,30 +949,8 @@ void TikTokLiveChat::start()
     this->impl_->offlineRecheckTimer.setSingleShot(false);
     this->impl_->offlineRecheckTimer.setInterval(
         Impl::offlineRecheckIntervalMs);
-    QObject::connect(
-        &this->impl_->offlineRecheckTimer, &QTimer::timeout, [this]() {
-            if (!this->running_ || this->live_ || !this->impl_ ||
-                !this->impl_->webview)
-            {
-                return;
-            }
-            // Skip while a login window is showing: a reload here would
-            // wipe the user's in-progress sign-in. Once autoHideLoginHost
-            // latches loginAutoHidden=true, reloads are safe again.
-            if (this->impl_->loginVisible && !this->impl_->loginAutoHidden)
-            {
-                return;
-            }
-            // Wipe per-session state so the auth-vs-offline discriminator
-            // in handleRoomInfo (which keys on checkAliveSeen + roomId_)
-            // treats the next prompts response as a fresh offline check,
-            // not as auth expiry from a prior session.
-            this->roomId_.clear();
-            this->impl_->checkAliveSeen = false;
-            qCDebug(chatterinoTikTok)
-                << "offline recheck: reloading" << this->username_;
-            this->impl_->webview->Reload();
-        });
+    QObject::connect(&this->impl_->offlineRecheckTimer, &QTimer::timeout,
+                     [this]() { this->performOfflineRecheckReload(); });
     // TIKTOK_LOGIN_MODE=1 in env: open a visible WebView so the user can
     // sign in to TikTok. Cookies persist in the user-data-dir, so a
     // single one-time login carries over to subsequent hidden runs.
@@ -1011,11 +1098,24 @@ void TikTokLiveChat::launchControllerCreate()
                             // for the user to sign in. Otherwise, hidden 1x1
                             // host with image/media/font blocking to drop
                             // idle CPU from ~14% per tab to <1%.
+                            //
+                            // Branch on the latched login-host state, not the
+                            // raw env var: another instance's auto-hide
+                            // broadcast may have latched loginAutoHidden on
+                            // us while our controller create was still
+                            // queued. Branching on the env var alone would
+                            // then make this controller visible-but-unshown
+                            // and skip resource blocking forever (the
+                            // auto-hide path already ran and can't re-run).
                             const bool loginModeRuntime =
                                 qEnvironmentVariableIsSet("TIKTOK_LOGIN_MODE") &&
                                 qEnvironmentVariable("TIKTOK_LOGIN_MODE") !=
                                     QStringLiteral("0");
-                            if (loginModeRuntime)
+                            const bool loginHostActive =
+                                loginModeRuntime &&
+                                this->impl_->loginVisible &&
+                                !this->impl_->loginAutoHidden;
+                            if (loginHostActive)
                             {
                                 controller->put_IsVisible(TRUE);
                                 RECT rb{0, 0, 1280, 800};
@@ -1031,65 +1131,28 @@ void TikTokLiveChat::launchControllerCreate()
                             {
                                 webview8->put_IsMuted(TRUE);
                             }
-
-                            // In login mode, don't block image/media/font so
-                            // the login UI renders properly.
-                            if (!loginModeRuntime)
+                            // Memory-only lever, officially safe for hidden-
+                            // but-running views: scripts and the websocket
+                            // keep running, the browser just drops caches and
+                            // swaps more aggressively (~560MB tree today).
+                            // QI fails harmlessly on runtimes older than the
+                            // pinned 147.
+                            ComPtr<ICoreWebView2_19> webview19;
+                            if (SUCCEEDED(
+                                    this->impl_->webview.As(&webview19)) &&
+                                webview19)
                             {
-                                this->impl_->webview->AddWebResourceRequestedFilter(
-                                    L"*",
-                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE);
-                                this->impl_->webview->AddWebResourceRequestedFilter(
-                                    L"*",
-                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_MEDIA);
-                                this->impl_->webview->AddWebResourceRequestedFilter(
-                                    L"*",
-                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FONT);
-                                // Also block CDN-hosted video segments fetched
-                                // via Fetch/XHR (TikTok delivers live HLS
-                                // through MSE, which bypasses the MEDIA
-                                // resource type). Each segment we drop is
-                                // ~50-200KB of video data we'd otherwise
-                                // CPU-decode for nothing - the host is
-                                // hidden 1x1, no human ever sees it.
-                                this->impl_->webview->AddWebResourceRequestedFilter(
-                                    L"*tiktokcdn*",
-                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH);
-                                this->impl_->webview->AddWebResourceRequestedFilter(
-                                    L"*tiktokcdn*",
-                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST);
-                                this->impl_->webview->AddWebResourceRequestedFilter(
-                                    L"*tiktokv.com/aweme*",
-                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_FETCH);
-                                this->impl_->webview->AddWebResourceRequestedFilter(
-                                    L"*tiktokv.com/aweme*",
-                                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_XML_HTTP_REQUEST);
-                                this->impl_->webview->add_WebResourceRequested(
-                                    Callback<
-                                        ICoreWebView2WebResourceRequestedEventHandler>(
-                                        [this, guard](
-                                            ICoreWebView2 *,
-                                            ICoreWebView2WebResourceRequestedEventArgs
-                                                *args) -> HRESULT {
-                                            if (guard.expired() || !this->impl_ ||
-                                                !this->impl_->env)
-                                            {
-                                                return S_OK;
-                                            }
-                                            ComPtr<ICoreWebView2WebResourceResponse>
-                                                resp;
-                                            this->impl_->env
-                                                ->CreateWebResourceResponse(
-                                                    nullptr, 403, L"Blocked", L"",
-                                                    &resp);
-                                            if (resp)
-                                            {
-                                                args->put_Response(resp.Get());
-                                            }
-                                            return S_OK;
-                                        })
-                                        .Get(),
-                                    &this->impl_->resReqToken);
+                                webview19->put_MemoryUsageTargetLevel(
+                                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
+                            }
+
+                            // While a login window is active, don't block
+                            // image/media/font so the login UI renders
+                            // properly; autoHideLoginHost() installs the
+                            // blocking once the login is confirmed done.
+                            if (!loginHostActive)
+                            {
+                                this->installResourceBlocking();
                             }
 
                             // NavigationCompleted: detect page load state
@@ -1103,6 +1166,22 @@ void TikTokLiveChat::launchControllerCreate()
                                         if (guard.expired())
                                         {
                                             return S_OK;
+                                        }
+                                        if (this->impl_)
+                                        {
+                                            // Any completed navigation counts
+                                            // as a fresh liveness answer for
+                                            // the rising-edge poke min-gap:
+                                            // without this, the initial
+                                            // Navigate/login reloads don't
+                                            // stamp the clock and a sibling
+                                            // going live seconds after page
+                                            // load triggers a pointless
+                                            // reload of a page that just
+                                            // answered.
+                                            this->impl_->lastOfflineReloadMs =
+                                                QDateTime::
+                                                    currentMSecsSinceEpoch();
                                         }
                                         BOOL ok = FALSE;
                                         args->get_IsSuccess(&ok);
@@ -1453,7 +1532,103 @@ void TikTokLiveChat::armOfflineRecheck()
     {
         return;
     }
+    this->impl_->offlineRecheckTimer.setInterval(
+        this->anySiblingLive() ? Impl::offlineRecheckIntervalMs
+                               : Impl::offlineRecheckIdleIntervalMs);
     this->impl_->offlineRecheckTimer.start();
+}
+
+bool TikTokLiveChat::anySiblingLive() const
+{
+    for (const auto &[_, live] : this->siblingLiveHints_)
+    {
+        if (live)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void TikTokLiveChat::setSiblingLiveHint(const void *consumer, bool siblingLive)
+{
+    const bool before = this->anySiblingLive();
+    this->siblingLiveHints_[consumer] = siblingLive;
+    const bool after = this->anySiblingLive();
+    if (before != after)
+    {
+        this->refreshOfflineRecheckCadence(after);
+    }
+}
+
+void TikTokLiveChat::removeSiblingLiveHint(const void *consumer)
+{
+    const bool before = this->anySiblingLive();
+    this->siblingLiveHints_.erase(consumer);
+    const bool after = this->anySiblingLive();
+    if (before != after)
+    {
+        this->refreshOfflineRecheckCadence(after);
+    }
+}
+
+void TikTokLiveChat::refreshOfflineRecheckCadence(bool siblingNowLive)
+{
+    // Only an armed timer needs retuning: if we're live the poller is
+    // stopped, and between navigation and the first offline decision the
+    // in-flight page load will produce fresher data than a reload would.
+    if (!this->running_ || !this->impl_ || this->live_ ||
+        !this->impl_->offlineRecheckTimer.isActive())
+    {
+        return;
+    }
+    qCDebug(chatterinoTikTok).nospace()
+        << "[" << this->username_ << "] offline recheck cadence -> "
+        << (siblingNowLive ? "fast (sibling live)" : "idle (no sibling live)");
+    // setInterval on a running timer restarts it with the new interval.
+    this->impl_->offlineRecheckTimer.setInterval(
+        siblingNowLive ? Impl::offlineRecheckIntervalMs
+                       : Impl::offlineRecheckIdleIntervalMs);
+    if (siblingNowLive)
+    {
+        // Rising edge: the streamer just went live somewhere, so a TikTok
+        // live is likely starting too - recheck now instead of waiting out
+        // the interval. The min gap (see lastOfflineReloadMs) guards
+        // against live-status flapping chaining reloads and against
+        // aborting a navigation that just answered.
+        const auto now = QDateTime::currentMSecsSinceEpoch();
+        if (now - this->impl_->lastOfflineReloadMs >=
+            Impl::offlineRecheckIntervalMs)
+        {
+            this->performOfflineRecheckReload();
+        }
+    }
+}
+
+void TikTokLiveChat::performOfflineRecheckReload()
+{
+    if (!this->running_ || this->live_ || !this->impl_ ||
+        !this->impl_->webview)
+    {
+        return;
+    }
+    // Skip while a login window is showing: a reload here would wipe the
+    // user's in-progress sign-in. Once autoHideLoginHost latches
+    // loginAutoHidden=true, reloads are safe again.
+    if (this->impl_->loginVisible && !this->impl_->loginAutoHidden)
+    {
+        return;
+    }
+    // Wipe per-session state so the auth-vs-offline discriminator in
+    // handleRoomInfo (which keys on checkAliveSeen + roomId_) treats the
+    // next prompts response as a fresh offline check, not as auth expiry
+    // from a prior session.
+    this->roomId_.clear();
+    this->impl_->checkAliveSeen = false;
+    this->impl_->lastOfflineReloadMs = QDateTime::currentMSecsSinceEpoch();
+    qCDebug(chatterinoTikTok)
+        << "offline recheck: reloading" << this->username_;
+    this->impl_->webview->Reload();
 }
 
 void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
@@ -1904,9 +2079,24 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
     if (kind == QStringLiteral("room-info"))
     {
         const auto data = obj.value(QStringLiteral("data")).toObject();
-        qCDebug(chatterinoTikTok).nospace()
-            << "room-info: "
-            << QJsonDocument(data).toJson(QJsonDocument::Compact);
+        // Truncated dump: these arrive every ~6s (check_alive batches) and
+        // room/enter payloads run to ~52KB - unbounded they were 61MB of
+        // diag log per week. The head carries what diagnosis needs
+        // (status_code, message/prompts, the first rooms' alive flags);
+        // typical check_alive batches fit whole.
+        const QByteArray json =
+            QJsonDocument(data).toJson(QJsonDocument::Compact);
+        constexpr qsizetype maxLoggedBytes = 500;
+        if (json.size() <= maxLoggedBytes)
+        {
+            qCDebug(chatterinoTikTok).nospace() << "room-info: " << json;
+        }
+        else
+        {
+            qCDebug(chatterinoTikTok).nospace()
+                << "room-info (" << json.size() << " bytes, first "
+                << maxLoggedBytes << "): " << json.left(maxLoggedBytes);
+        }
         this->handleRoomInfo(data);
         return;
     }

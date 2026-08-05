@@ -163,6 +163,11 @@ private:
                               const QString &announcedSessionId,
                               const QString &title);
     void refreshStatusText();
+    /// Forwards this channel's "any sibling platform live" aggregate
+    /// (Twitch/Kick/YouTube) to the shared TikTok provider, which gates its
+    /// offline-recheck reload cadence on it. Called from every site that
+    /// updates twitchLive_/kickLive_/youtubeLive_.
+    void updateTikTokSiblingLiveHint();
 
     static QColor platformAccent(MessagePlatform platform);
 

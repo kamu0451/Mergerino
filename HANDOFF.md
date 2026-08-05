@@ -1,74 +1,78 @@
 # Handoff
 
 ## Goal
-"Copy Stream Overlay URL" embedded the tab's notebook index, so reordering /
-adding / removing tabs silently pointed the OBS overlay at a different tab's
-chat. User proposed a name-derived uuid; implemented a stored per-tab uuid
-instead (names collide and break on rename).
+User reported WebView2 sometimes eating CPU. Attributed it to Mergerino's
+hidden TikTok host: the offline-recheck loop full-page-reloaded
+tiktok.com/@user/live every ~156s around the clock (794 reloads in one diag
+log, 15-35%-of-a-core burst for ~20s each). Fixed by tying the cadence to
+sibling-platform live status (user's idea: channels virtually never go live
+on TikTok alone).
 
 ## Completed
-- [x] **Persistent tab uuid**: `NotebookTab` generates a QUuid (WithoutBraces)
-  in its constructor; `uuid()`/`setUuid()` accessors (`setUuid` ignores empty,
-  so pre-uuid layouts keep the fresh one). Saved via
-  `WindowManager::encodeTab` ("uuid" key), read in
-  `TabDescriptor::loadFromJSON`, applied in the layout-restore path.
-  Duplicate Tab / popup / drag paths copy splits only -- uuids stay unique.
-- [x] **Overlay URL + resolution**: `ObsBrowserDockServer::overlayUrl` now
-  takes the uuid; new `resolveTabIndex(tabParam)` resolves the `?tab=` query
-  centrally -- empty -> -1 (active tab), integer -> legacy index (old copied
-  URLs keep working), otherwise uuid lookup over the main-window notebook,
-  unresolvable -> -1 fallback. Overlay page JS forwards the raw string
-  instead of parseInt.
-- [x] **Adversarial review (single opus): HOLDS.** Handler runs on the GUI
-  thread (same as pre-existing dockStateJson); no duplicate-uuid path; QUuid
-  hyphens can never parse as the integer branch; no autosave churn; popup
-  round-trip never applies uuid.
-- [x] Built clean, deployed via `.dev-cycle.bat`, relaunched (PID 19624,
-  08:34). Live-verified end-to-end: real uuids resolved to indices 0 and 2,
-  bogus uuid + no-param fell back to active tab, legacy `?tab=0/1` pinned.
-- [x] **GOAWAY fix acid test PASSED** (yesterday's d5fb6b0, next-session item
-  1): all four hourly GOAWAYs in the 18:18-22:2x session logged
-  `[timed out, never sent]` WARNs and youtube poll lines continued at a
-  steady ~600/half-hour through every one. Poll loops self-heal in prod.
+- [x] **Sibling-gated offline recheck**: `TikTokLiveChat` keeps per-consumer
+  live hints (`setSiblingLiveHint(consumer, bool)` keyed by MergedChannel
+  pointer, OR-aggregated, survives stop/start). Fast 90s cadence while any
+  sibling (Twitch/Kick/YouTube) is live, idle 10 min when none. Rising edge
+  pokes an immediate recheck (min-gap = fast interval, stamped by every
+  NavigationCompleted, guards flapping + mid-load aborts). `MergedChannel`
+  votes from every twitchLive_/kickLive_/youtubeLive_ site, seeds after
+  creating the provider, removes its vote in the destructor. TikTok-only
+  tabs vote "live" (no signal to wait on) so they keep the fast cadence.
+- [x] **Resource-blocker re-arm**: filter+handler registration factored into
+  `installResourceBlocking()` (remove-then-add filters, handler gated on
+  resReqToken==0), called from controller-create AND `autoHideLoginHost`
+  (self via new `Impl::owner` back-pointer + propagated hosts), followed by
+  a Reload so the running MSE player can't retry-storm 403s. Previously any
+  login episode left the hidden renderer decoding TikTok video forever.
+  Controller-create now branches on latched login state, not the env var
+  (auto-hide broadcast can latch before controller create completes).
+- [x] **Opus review (1 agent): 3 defects + 4 nits, all fixed** (TikTok-only
+  idle pinning; login-mode race; null impl_ deref in propagate loop; poke
+  gap; navigation stamping; mid-playback 403 hedge).
+- [x] **MemoryUsageTargetLevel Low** via ICoreWebView2_19 QI at controller
+  create (memory lever only, officially safe for hidden-running views).
+- [x] **room-info log truncation**: dumps capped at 500 bytes (were 61MB of
+  diag log/week; check_alive batches ~306 chars still log whole).
+- [x] Deployed (PID 12332) and live-verified: first offline reload came
+  exactly 600s after watchdog arm (03:04:40), vs old 156s rhythm.
 
 ## Key decisions
-- Stored random uuid, not name-derived: names collide across tabs and break
-  on rename; a constructor-generated uuid survives reorder/rename/restart.
-- Kept the numeric `?tab=N` index fallback (one toInt branch) so existing OBS
-  browser sources keep working until re-copied.
-- Did NOT expose uuids in the dock state JSON; the interactive dock keeps
-  using live indices (self-refreshing), only the pinned overlay URL needed
-  stable identity.
+- Interval values: fast 90000 / idle 600000 (`Impl::offlineRecheck*Ms`).
+  Effective periods include the +66s stuck-timer dance (156s / 666s).
+- YouTube counts as a sibling signal (only ever speeds scanning up).
+- Did NOT touch: UI-thread webcast frame decode (previous QtConcurrent
+  offload broke delivery on some rooms - only revisit on visible stutter),
+  dead handleWebMessage branches + unused decodePool (cleanup only),
+  IntersectionObserver/visibility spoof (breaking it breaks the scrape).
+- Ruled out by docs research: TrySuspend (kills JS/WS), --disable-gpu,
+  EcoQoS/priority hacks (unsupported, heartbeat risk).
 
 ## Dead ends
-- (Prior sessions, still valid) Watch-page subMenuItem continuations are
-  32-char stubs that 400 the poll endpoint -- never poll them directly.
+- (Prior sessions) Watch-page subMenuItem continuations are 32-char stubs
+  that 400 the poll endpoint - never poll them directly.
 
 ## Files changed
-- `src/widgets/helper/NotebookTab.{hpp,cpp}` -- uuid member + accessors, menu
-  copies overlayUrl(uuid)
-- `src/common/WindowDescriptors.{hpp,cpp}` -- TabDescriptor::uuid_ + load
-- `src/singletons/WindowManager.cpp` -- encodeTab writes uuid, restore applies
-- `src/util/ObsBrowserDockServer.{hpp,cpp}` -- overlayUrl(QString),
-  resolveTabIndex, overlay JS passes string through
-- `CHANGELOG.md` -- one bullet (overlay URL pins tab, not position)
+- `src/providers/tiktok/TikTokLiveChat.{hpp,cpp}` - sibling hints, cadence,
+  poke, installResourceBlocking, Impl::owner, mem target, log truncation
+- `src/providers/merged/MergedChannel.{hpp,cpp}` - updateTikTokSiblingLiveHint
+  + call sites, destructor vote removal
+- `CHANGELOG.md` - 3 bullets (cadence major, blocker bugfix, mem/log minor)
 
 ## Current state
-- Build: passing; deployed to `C:\Program Files\Mergerino`; app running
-  (PID 19624, launched 08:34 via dev-cycle, logging to
-  `%TEMP%\mergerino-dev.log`); window-layout.json already saved with uuids.
-- USER ACTION pending: re-copy "Copy Stream Overlay URL" on the stream chat
-  tab and update the OBS browser source once (current OBS URL is still the
-  positional `?tab=N` form).
-- Tests: NOT run for three sessions. `BatchedTimeouts`
-  (tests/src/NetworkRequest.cpp:305) is the one to watch (timing-sensitive
-  since d5fb6b0).
-- Branch: `main`. Held `review/keychain-ipc-auth` unchanged (SEC-G4 + SEC-02,
-  unpushed).
+- Build passing, deployed to `C:\Program Files\Mergerino`, app running
+  (PID 12332, 03:20, logging to `%TEMP%\mergerino-dev.log`). wash_fps
+  offline; idle cadence confirmed live.
+- NOT yet exercised in prod: fast-path rising edge (sibling goes live ->
+  `recheck cadence -> fast` debug line + immediate reload) and the login
+  re-arm path. Watch the diag log next time the streamer goes live.
+- Tests: NOT run for four sessions. `BatchedTimeouts`
+  (tests/src/NetworkRequest.cpp:305) is the one to watch.
+- Branch `main`. Held `review/keychain-ipc-auth` unchanged (unpushed).
 
 ## Next session
-1. Run `ctest` -- watch `BatchedTimeouts`.
-2. Still pending: unit test for `extractUnselectedViewContinuation` in
-   `tests/src/YouTubeParsing.cpp` (two-view selector with full unselected
-   token -> returns it; 32-char stub / single item -> empty); optional sibling
-   for `jsonContainsLiveMarker` waiting-room vs live fixtures.
+1. Check diag log for the first real sibling-go-live: expect cadence->fast
+   line, immediate TikTok recheck, and Joined within ~30-60s of Twitch/Kick.
+2. Run `ctest` - watch `BatchedTimeouts`.
+3. Still pending: unit test for `extractUnselectedViewContinuation`
+   (tests/src/YouTubeParsing.cpp); optional `jsonContainsLiveMarker`
+   waiting-room fixtures.

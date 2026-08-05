@@ -403,7 +403,16 @@ MergedChannel::MergedChannel(MergedChannelConfig config)
     this->refreshStatusText();
 }
 
-MergedChannel::~MergedChannel() = default;
+MergedChannel::~MergedChannel()
+{
+    // The shared TikTok provider outlives this channel (registry holds a
+    // strong ref); drop our sibling-live vote so a destroyed channel can't
+    // keep its fast recheck cadence pinned.
+    if (this->tiktokLiveChat_)
+    {
+        this->tiktokLiveChat_->removeSiblingLiveHint(this);
+    }
+}
 
 const MergedChannelConfig &MergedChannel::config() const
 {
@@ -1190,6 +1199,7 @@ void MergedChannel::initializeSources()
                     // to the same videoId.
                     this->youtubeAnnouncedVideoId_.clear();
                 }
+                this->updateTikTokSiblingLiveHint();
                 this->refreshStatusText();
                 this->streamStatusChanged.invoke();
             });
@@ -1268,6 +1278,9 @@ void MergedChannel::initializeSources()
                 this->streamStatusChanged.invoke();
             });
         this->tiktokLiveChat_->start();
+        // Seed our sibling-live vote now that the provider exists; the
+        // Twitch/Kick/YouTube blocks above already set their bools.
+        this->updateTikTokSiblingLiveHint();
         // Late-joining a shared instance: seed our derived state and announce
         // if already live (see equivalent block for YouTube above).
         this->tiktokLive_ = this->tiktokLiveChat_->isLive();
@@ -1335,6 +1348,7 @@ void MergedChannel::connectSourceSignals(
             {
                 this->twitchLiveJoinAnnounced_ = false;
             }
+            this->updateTikTokSiblingLiveHint();
             this->refreshStatusText();
             this->streamStatusChanged.invoke();
         });
@@ -1355,6 +1369,7 @@ void MergedChannel::connectSourceSignals(
             {
                 this->kickLiveJoinAnnounced_ = false;
             }
+            this->updateTikTokSiblingLiveHint();
             this->refreshStatusText();
             this->streamStatusChanged.invoke();
         });
@@ -1363,6 +1378,22 @@ void MergedChannel::connectSourceSignals(
             this->streamStatusChanged.invoke();
         });
     }
+}
+
+void MergedChannel::updateTikTokSiblingLiveHint()
+{
+    if (!this->tiktokLiveChat_)
+    {
+        return;
+    }
+    // A TikTok-only merged tab has no sibling sources at all - there is no
+    // signal to wait on, so vote "live" to keep the fast recheck cadence
+    // instead of pinning the tab to the idle interval forever.
+    const bool noSiblings = !this->twitchChannel_ && !this->kickChannel_ &&
+                            !this->youtubeLiveChat_;
+    this->tiktokLiveChat_->setSiblingLiveHint(
+        this, noSiblings || this->twitchLive_ || this->kickLive_ ||
+                  this->youtubeLive_);
 }
 
 void MergedChannel::appendInitialMessages(const ChannelPtr &source,

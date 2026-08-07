@@ -473,6 +473,27 @@ struct TikTokLiveChat::Impl {
     // replaces, and could abort a still-loading page mid-answer.
     qint64 lastOfflineReloadMs{0};
 
+    // Disconnect-announce debounce. TikTok's webcast server drops the
+    // socket (1006, no close handshake) minutes into an otherwise healthy
+    // session; the offline recheck rejoins within ~90s, but announcing
+    // "disconnected" on every drop while the rejoin stays silent (the
+    // Joined announce is latched per roomId) spammed the chat with
+    // disconnects during a stream that was working the whole time. So a
+    // ws-close on a live session only *starts* this timer; the announce
+    // fires when it expires with live_ still false. Grace covers one full
+    // fast recheck cycle (90s timer + page load + the 60s stuck-connection
+    // window), so one failed rejoin attempt is what makes a drop "real".
+    QTimer disconnectAnnounceTimer;
+    static constexpr int disconnectAnnounceGraceMs = 3 * 60 * 1000;
+    // True after the grace expired and "disconnected" was actually pushed
+    // to chat. A later same-room rejoin then announces "reconnected" (the
+    // MergedChannel Joined announce is latched per roomId, so a same-room
+    // recovery is otherwise invisible). Cleared by every branch that
+    // announces a definitive verdict ("ended" / "is not live" /
+    // watchdog), so a NEW session after a real end says "Joined", not
+    // "reconnected".
+    bool disconnectAnnounced{false};
+
     // Back-pointer to the owning TikTokLiveChat; Impl methods need it to
     // reach outer-class helpers (installResourceBlocking). Set right after
     // construction in start(), never null while Impl is alive.
@@ -918,6 +939,13 @@ void TikTokLiveChat::start()
                                      "(no response from room)"),
                                  true);
                          }
+                         if (this->impl_)
+                         {
+                             // This watchdog just announced its own verdict;
+                             // a pending disconnect-announce would repeat it.
+                             this->impl_->disconnectAnnounceTimer.stop();
+                             this->impl_->disconnectAnnounced = false;
+                         }
                          this->setLive(false);
                          this->armOfflineRecheck();
                      });
@@ -951,6 +979,29 @@ void TikTokLiveChat::start()
         Impl::offlineRecheckIntervalMs);
     QObject::connect(&this->impl_->offlineRecheckTimer, &QTimer::timeout,
                      [this]() { this->performOfflineRecheckReload(); });
+    this->impl_->disconnectAnnounceTimer.setSingleShot(true);
+    this->impl_->disconnectAnnounceTimer.setInterval(
+        Impl::disconnectAnnounceGraceMs);
+    QObject::connect(
+        &this->impl_->disconnectAnnounceTimer, &QTimer::timeout, [this]() {
+            if (!this->running_ || this->live_)
+            {
+                return;
+            }
+            qCWarning(chatterinoTikTok).nospace()
+                << "[" << this->username_
+                << "] webcast did not reconnect within the grace period, "
+                   "announcing disconnect";
+            this->setStatusText(
+                QStringLiteral("TikTok live chat disconnected"), true);
+            if (this->impl_)
+            {
+                this->impl_->disconnectAnnounced = true;
+            }
+            // The forced-fast rejoin window is over; recompute the recheck
+            // cadence from the sibling votes (ws-close pinned it fast).
+            this->armOfflineRecheck();
+        });
     // TIKTOK_LOGIN_MODE=1 in env: open a visible WebView so the user can
     // sign in to TikTok. Cookies persist in the user-data-dir, so a
     // single one-time login carries over to subsequent hidden runs.
@@ -1131,20 +1182,12 @@ void TikTokLiveChat::launchControllerCreate()
                             {
                                 webview8->put_IsMuted(TRUE);
                             }
-                            // Memory-only lever, officially safe for hidden-
-                            // but-running views: scripts and the websocket
-                            // keep running, the browser just drops caches and
-                            // swaps more aggressively (~560MB tree today).
-                            // QI fails harmlessly on runtimes older than the
-                            // pinned 147.
-                            ComPtr<ICoreWebView2_19> webview19;
-                            if (SUCCEEDED(
-                                    this->impl_->webview.As(&webview19)) &&
-                                webview19)
-                            {
-                                webview19->put_MemoryUsageTargetLevel(
-                                    COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
-                            }
+                            // MemoryUsageTargetLevel LOW was set here
+                            // briefly (2026-08-06) but is reverted as an A/B:
+                            // the first live session after it landed had the
+                            // webcast socket dropped (1006) every ~2-3 min.
+                            // Re-add via ICoreWebView2_19 only if drops
+                            // continue without it.
 
                             // While a login window is active, don't block
                             // image/media/font so the login UI renders
@@ -1491,6 +1534,29 @@ void TikTokLiveChat::setLive(bool live)
     }
     else if (this->impl_)
     {
+        if (this->impl_->disconnectAnnounceTimer.isActive())
+        {
+            // Rejoined before the disconnect-announce grace expired: the
+            // drop stays invisible to the user. Warning so Release
+            // captures show the ws-close WARN paired with its resolution.
+            this->impl_->disconnectAnnounceTimer.stop();
+            qCWarning(chatterinoTikTok).nospace()
+                << "[" << this->username_
+                << "] webcast reconnected within the grace period, "
+                   "disconnect not announced";
+            this->setStatusText(QStringLiteral("Connected to TikTok"),
+                                false);
+        }
+        if (this->impl_->disconnectAnnounced)
+        {
+            // The grace expired and "disconnected" was pushed to chat, but
+            // this same-room recovery is invisible to the MergedChannel
+            // Joined latch (keyed on roomId). Pair the announce here so
+            // the user's last word isn't "disconnected" while chat flows.
+            this->impl_->disconnectAnnounced = false;
+            this->setStatusText(
+                QStringLiteral("TikTok live chat reconnected"), true);
+        }
         // Seed the evidence clock so the watchdog grace period starts
         // from the transition to live, not from the previous session.
         this->impl_->lastLiveEvidenceMs =
@@ -1582,6 +1648,16 @@ void TikTokLiveChat::refreshOfflineRecheckCadence(bool siblingNowLive)
     {
         return;
     }
+    // While a disconnect-announce grace is pending, keep the forced fast
+    // cadence regardless of sibling votes: the rejoin attempt is the whole
+    // point of the grace window, and a sibling falling edge here would
+    // convert the pending 90s reload into a 10-min wait that the grace
+    // then reports as a disconnect without a single rejoin attempt. The
+    // grace-expiry handler re-arms with the normal sibling-vote cadence.
+    if (!siblingNowLive && this->impl_->disconnectAnnounceTimer.isActive())
+    {
+        return;
+    }
     qCDebug(chatterinoTikTok).nospace()
         << "[" << this->username_ << "] offline recheck cadence -> "
         << (siblingNowLive ? "fast (sibling live)" : "idle (no sibling live)");
@@ -1660,6 +1736,52 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         roomEntries = dataObj.value(QStringLiteral("data")).toArray();
     }
 
+    // Detect TikTok's "this room has ended" notice (status_code 30003 or
+    // data.message == "room has finished") and lock live=false. This must
+    // run BEFORE the prompts branch below: the real end-of-stream payload
+    // is { message: "room has finished", prompts: "This LIVE has ended" }
+    // with no room/id_str, which the prompts condition also matches - and
+    // that branch would answer the generic "is not live" (and leave a
+    // pending disconnect-announce grace running) instead of the definitive
+    // "ended".
+    const auto statusCode = root.value(QStringLiteral("status_code")).toInt(0);
+    const auto roomFinishedMsg =
+        dataObj.value(QStringLiteral("message")).toString();
+    if (statusCode == 30003 ||
+        roomFinishedMsg.contains(QStringLiteral("room has finished"),
+                                 Qt::CaseInsensitive) ||
+        roomFinishedMsg.contains(QStringLiteral("LIVE has ended"),
+                                 Qt::CaseInsensitive))
+    {
+        const bool wasLive = this->live_;
+        const bool gracePending =
+            this->impl_ && this->impl_->disconnectAnnounceTimer.isActive();
+        if (this->impl_)
+        {
+            this->impl_->stuckConnectionTimer.stop();
+            this->impl_->checkAliveSeen = true;
+            this->impl_->disconnectAnnounceTimer.stop();
+            // A definitive verdict supersedes any announced disconnect; a
+            // later (new-session) join must say "Joined", not
+            // "reconnected".
+            this->impl_->disconnectAnnounced = false;
+        }
+        this->setLive(false);
+        this->armOfflineRecheck();
+        if (wasLive || gracePending)
+        {
+            // Definitive end of a session the user saw as live (or one
+            // whose ws-close is still inside the announce grace): say so
+            // now instead of letting the grace timer report a generic
+            // "disconnected" later.
+            this->setStatusText(QStringLiteral("TikTok live chat ended"),
+                                true);
+        }
+        // The object-form "finished" response carries no room data, no
+        // viewer count, and no title - nothing else worth processing.
+        return;
+    }
+
     // Login wall: for some streamers (typically high-viewer ones) TikTok
     // refuses to serve room info to anonymous WebView2 sessions and
     // returns { data: { prompts: [..login UI..] } } with no room and no
@@ -1686,6 +1808,10 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         if (this->impl_)
         {
             this->impl_->stuckConnectionTimer.stop();
+            // This branch announces its own verdict below; a pending
+            // disconnect-announce grace would repeat it 3 minutes later.
+            this->impl_->disconnectAnnounceTimer.stop();
+            this->impl_->disconnectAnnounced = false;
             if (authLikelyExpired)
             {
                 // Auto-prompt: surface the WebView2 host so the user can
@@ -1736,31 +1862,6 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
     // includes a room_id_str if we don't already know it (TikTok queries
     // our room individually before the recommendation batches).
     //
-    // Also detect TikTok's "this room has ended" notice (status_code 30003
-    // or data.message == "room has finished") and lock live=false. Those
-    // arrive on the OBJECT-form enter/info response and are the most
-    // direct signal that gevad1ch's room is over.
-    const auto statusCode = root.value(QStringLiteral("status_code")).toInt(0);
-    const auto roomFinishedMsg =
-        dataObj.value(QStringLiteral("message")).toString();
-    if (statusCode == 30003 ||
-        roomFinishedMsg.contains(QStringLiteral("room has finished"),
-                                 Qt::CaseInsensitive) ||
-        roomFinishedMsg.contains(QStringLiteral("LIVE has ended"),
-                                 Qt::CaseInsensitive))
-    {
-        if (this->impl_)
-        {
-            this->impl_->stuckConnectionTimer.stop();
-            this->impl_->checkAliveSeen = true;
-        }
-        this->setLive(false);
-        this->armOfflineRecheck();
-        // The object-form "finished" response carries no room data, no
-        // viewer count, and no title - nothing else worth processing.
-        return;
-    }
-
     // Per-room entries: TikTok has used two shapes historically -
     //   older: { "alive_state": N }  where N == 2 means live, else ended
     //   newer: { "alive": true|false, "room_id_str": "..." }
@@ -1821,6 +1922,10 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
         // when the room is actually open.
         if (sawAliveField && haveOurRoomId && sawOurRoom)
         {
+            const bool wasLive = this->live_;
+            const bool gracePending =
+                this->impl_ &&
+                this->impl_->disconnectAnnounceTimer.isActive();
             if (this->impl_)
             {
                 this->impl_->stuckConnectionTimer.stop();
@@ -1836,7 +1941,21 @@ void TikTokLiveChat::handleRoomInfo(const QJsonObject &root)
             this->setLive(anyRoomLive);
             if (!anyRoomLive)
             {
+                if (this->impl_)
+                {
+                    this->impl_->disconnectAnnounceTimer.stop();
+                    this->impl_->disconnectAnnounced = false;
+                }
                 this->armOfflineRecheck();
+                if (wasLive || gracePending)
+                {
+                    // Authoritative live->offline (or an end arriving
+                    // while a ws-close grace is pending): announce here.
+                    // The ws-close that follows sees live_ already false
+                    // and stays silent.
+                    this->setStatusText(
+                        QStringLiteral("TikTok live chat ended"), true);
+                }
             }
         }
     }
@@ -2061,7 +2180,15 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         // pages too. Wait for alive_state == 2 from check_alive or an
         // actual decoded chat event before treating the room as live.
         qCDebug(chatterinoTikTok) << "ws-open for" << this->username_;
-        this->setStatusText(QStringLiteral("Connected to TikTok"));
+        if (this->statusText_ == QStringLiteral("Connecting to TikTok..."))
+        {
+            // Only the initial connect transitions the status here.
+            // Recheck-cycle ws-opens on an offline page would otherwise
+            // reset the text-change dedupe in setStatusText and re-announce
+            // "is not live" every cycle, and mid-grace reloads would
+            // clobber "reconnecting...".
+            this->setStatusText(QStringLiteral("Connected to TikTok"));
+        }
         if (this->impl_ && !this->live_)
         {
             // The 60s grace period only applies to the initial connect.
@@ -2109,14 +2236,35 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         qCWarning(chatterinoTikTok).nospace()
             << "[" << this->username_ << "] websocket closed unexpectedly, "
             << "code=" << obj.value(QStringLiteral("code")).toInt();
+        const bool wasLive = this->live_;
         if (this->impl_)
         {
             this->impl_->stuckConnectionTimer.stop();
         }
         this->setLive(false);
         this->armOfflineRecheck();
-        this->setStatusText(QStringLiteral("TikTok live chat disconnected"),
-                            true);
+        if (wasLive && this->impl_)
+        {
+            // Don't announce yet: the recheck usually rejoins within ~90s
+            // (TikTok drops healthy webcast sockets minutes into a
+            // session). The grace timer announces only if the rejoin
+            // fails; setLive(true) cancels it. See Impl field comment.
+            this->setStatusText(
+                QStringLiteral("TikTok live chat reconnecting..."), false);
+            this->impl_->disconnectAnnounceTimer.start();
+            // A session that was live seconds ago is itself proof the
+            // streamer is broadcasting - force the fast rejoin cadence
+            // even if no sibling platform votes live (Twitch-offline +
+            // TikTok-live tabs would otherwise wait the 10-min idle
+            // interval while the 3-min grace announces a disconnect that
+            // never got a rejoin attempt). The grace-expiry handler
+            // re-arms with the normal sibling-vote cadence.
+            this->impl_->offlineRecheckTimer.setInterval(
+                Impl::offlineRecheckIntervalMs);
+        }
+        // Closes while not live are sidebar/preview sockets on an offline
+        // page -- announcing those produced spurious "disconnected"
+        // messages with no session to disconnect from.
         return;
     }
     if (kind == QStringLiteral("ws-error"))
@@ -2128,6 +2276,14 @@ void TikTokLiveChat::handleWebMessage(const QString &json)
         if (this->impl_)
         {
             this->impl_->stuckConnectionTimer.stop();
+            if (this->impl_->disconnectAnnounceTimer.isActive())
+            {
+                // A ws-close already put this drop inside the announce
+                // grace (observed order: close -> error -> close within
+                // 10ms); announcing "error" here would defeat the
+                // debounce. The grace flow owns the messaging now.
+                return;
+            }
         }
         this->setStatusText(QStringLiteral("TikTok live chat error"), true);
         return;

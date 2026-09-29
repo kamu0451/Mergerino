@@ -11,6 +11,9 @@
 
 #include <boost/asio.hpp>
 
+// No IAudioClient3 low-latency shared stream: it pins the device's engine period at 480 frames
+// for as long as the engine lives, locking out anything that wants a smaller period.
+#define MA_WASAPI_NO_LOW_LATENCY_SHARED_MODE
 #define MINIAUDIO_IMPLEMENTATION
 #include <miniaudio.h>
 #include <QFile>

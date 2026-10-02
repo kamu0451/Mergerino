@@ -1858,10 +1858,15 @@ void UserInfoPopup::updateKickUserData()
     auto onChannelFetched = [](UserInfoPopup *self,
                                const KickPrivateChannelInfo &channel) {
         // Correct for when being opened with ID
+        // Older users can have a hyphenated slug for a name with underscores.
+        if (!channel.slug.isEmpty())
+        {
+            self->kickUserSlug_ = channel.slug;
+        }
+
         if (self->userName_.isEmpty())
         {
             self->userName_ = channel.user.username;
-            self->kickUserSlug_ = channel.slug;
             self->ui_.nameLabel->setText(channel.user.username);
             self->updateLogUserButton();
 
@@ -1997,9 +2002,15 @@ void UserInfoPopup::updateKickUserData()
                 onChannelFetchFailed(self.get());
             }
         });
+    // The channel's slug can differ from its name in the same way.
+    auto channelSlug = this->underlyingChannel_->getName();
+    if (auto *kickChannel =
+            dynamic_cast<KickChannel *>(this->underlyingChannel_.get()))
+    {
+        channelSlug = kickChannel->slug();
+    }
     KickApi::privateUserInChannelInfo(
-        this->userName_, this->underlyingChannel_->getName(),
-        [self = QPointer(this)](const auto &res) {
+        this->userName_, channelSlug, [self = QPointer(this)](const auto &res) {
             if (!self || !res)
             {
                 return;

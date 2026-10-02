@@ -56,7 +56,7 @@ have been removed from this repository". There is no `benchmarks/` directory - d
 ## CI / Release pipeline
 
 - `.github/workflows/build.yml` — builds the Windows x64 package on every push/PR to `main`, uploads `Mergerino.zip` as an artifact. `.CI/deploy-crt.ps1` pulls in the MSVC runtime DLLs.
-- `.github/workflows/release.yml` — triggered by `workflow_run` on a successful Build. Force-updates the `latest` tag to the new head SHA and replaces the single asset on the `Latest` GitHub release. This is a **rolling release** — there is no per-version tagging flow. The artifact filename is version-less (`Mergerino.zip`); `CMakeLists.txt`'s `project(... VERSION 1.5.0 ...)` flows into `src/common/Version.hpp` via `configure_file`, so a version bump only needs the `project()` VERSION edit.
+- `.github/workflows/release.yml` — triggered by `workflow_run` on a successful Build. Force-updates the `latest` tag to the new head SHA and replaces the single asset on the `Latest` GitHub release. This is a **rolling release** — there is no per-version tagging flow. The artifact filename is version-less (`Mergerino.zip`); `CMakeLists.txt`'s `project(... VERSION 1.6.0 ...)` flows into `src/common/Version.hpp` via `configure_file`. PATCH is `git rev-list --count HEAD` minus `MERGERINO_VERSION_BASE_COUNT` (set right below `project()`; `cmake/GIT.cmake` and the release name in `release.yml` both use it). Each version part must stay at or below 255 - the updater's semver library stores them in 8 bits, and 1.5.256+ broke the update check - so a MINOR bump also sets the base to the current commit count.
 - `.github/workflows/test-windows.yml` — runs the GoogleTest suite against `windows-latest` + Qt 6.9.3.
 
 ## Architecture

@@ -90,9 +90,10 @@ if(DEFINED ENV{GIT_RELEASE})
     set(GIT_RELEASE "$ENV{GIT_RELEASE}")
 endif()
 
-# Auto-bump PATCH from the total commit count so every push monotonically
-# advances the displayed version without a manual edit. MAJOR.MINOR stay
-# under intentional control via the top-level project() call.
+# Auto-bump PATCH from the commit count since MERGERINO_VERSION_BASE_COUNT so
+# every push monotonically advances the displayed version without a manual
+# edit. MAJOR.MINOR stay under intentional control via the top-level project()
+# call.
 if(GIT_EXECUTABLE AND GIT_REPOSITORY_FOUND)
     execute_process(
         COMMAND ${GIT_EXECUTABLE} rev-list --count HEAD
@@ -102,9 +103,21 @@ if(GIT_EXECUTABLE AND GIT_REPOSITORY_FOUND)
         ERROR_QUIET
     )
     if(GIT_COMMIT_COUNT MATCHES "^[0-9]+$")
-        set(PROJECT_VERSION_PATCH "${GIT_COMMIT_COUNT}")
+        set(_VERSION_PATCH 0)
+        if(GIT_COMMIT_COUNT GREATER MERGERINO_VERSION_BASE_COUNT)
+            math(EXPR _VERSION_PATCH
+                 "${GIT_COMMIT_COUNT} - ${MERGERINO_VERSION_BASE_COUNT}")
+        endif()
+        # The update check parses versions with a semver library that stores
+        # each part in 8 bits.
+        if(_VERSION_PATCH GREATER 255)
+            message(WARNING "Version patch ${_VERSION_PATCH} is above 255 and "
+                "will not parse: bump MINOR in project() and set "
+                "MERGERINO_VERSION_BASE_COUNT to ${GIT_COMMIT_COUNT}.")
+        endif()
+        set(PROJECT_VERSION_PATCH "${_VERSION_PATCH}")
         set(PROJECT_VERSION
-            "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${GIT_COMMIT_COUNT}")
+            "${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${_VERSION_PATCH}")
         message(STATUS "Auto-version: ${PROJECT_VERSION} (commit count ${GIT_COMMIT_COUNT})")
     endif()
 

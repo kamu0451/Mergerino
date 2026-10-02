@@ -2,6 +2,7 @@
 
 ## Unversioned
 
+- Bugfix: The version number moves to 1.6 and counts up from there. Builds past 1.5.255 had a version the update check could not read.
 - Bugfix: Messages deleted by moderators on Twitch or Kick are now greyed out in merged tabs too, not only in the platform's own tab.
 - Bugfix: Fixed a freeze when Twitch badge icons were requested before the global badges finished loading.
 - Bugfix: Kick channels whose name contains an underscore now load chat, emotes and channel info again.

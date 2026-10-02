@@ -70,9 +70,14 @@ if(BUILD_TESTS)
 endif()
 
 project(mergerino
-    VERSION 1.5.0
+    VERSION 1.6.0
     DESCRIPTION "Merged streamer chat client for Twitch, Kick, and YouTube"
 )
+
+# PATCH is `git rev-list --count HEAD` minus this base (cmake/GIT.cmake, and
+# the release name in .github/workflows/release.yml). Each version part must
+# stay at or below 255, so when bumping MINOR set this to the current count.
+set(MERGERINO_VERSION_BASE_COUNT 267)
 
 if(NOT WIN32)
     message(FATAL_ERROR "Mergerino currently supports Windows only.")

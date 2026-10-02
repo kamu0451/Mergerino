@@ -128,9 +128,10 @@ jobs:
           git push origin latest --force
 
       # Compute the version string the build embedded (MAJOR.MINOR baked from
-      # CMakeLists.txt project(...) plus PATCH = `git rev-list --count HEAD`).
+      # CMakeLists.txt project(...) plus PATCH = `git rev-list --count HEAD`
+      # minus MERGERINO_VERSION_BASE_COUNT, as in cmake/GIT.cmake).
       # Used below as the release name so mergerino's update check can show
-      # "1.5.137 -> 1.5.138" instead of opaque commit hashes.
+      # "1.6.7 -> 1.6.8" instead of opaque commit hashes.
       - name: Compute release version
         id: version
         env:
@@ -141,7 +142,9 @@ jobs:
             echo "Failed to parse MAJOR.MINOR from CMakeLists.txt project(VERSION ...)"
             exit 1
           fi
-          PATCH=$(git rev-list --count "$HEAD_SHA")
+          BASE=$(awk 'match($0, /^set\(MERGERINO_VERSION_BASE_COUNT[[:space:]]+([0-9]+)\)/, m) { print m[1]; exit }' CMakeLists.txt)
+          COUNT=$(git rev-list --count "$HEAD_SHA")
+          PATCH=$(( COUNT > ${BASE:-0} ? COUNT - ${BASE:-0} : 0 ))
           VERSION="$MAJOR_MINOR.$PATCH"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Release version: $VERSION"

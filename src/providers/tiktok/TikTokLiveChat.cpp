@@ -642,16 +642,20 @@ std::shared_ptr<TikTokLiveChat> TikTokLiveChat::getOrCreateShared(
     const QString &source)
 {
     const QString key = TikTokLiveChat::normalizeSource(source);
-    std::lock_guard<std::mutex> lock(g_tiktokRegistryMutex);
-
-    auto it = g_tiktokRegistry.find(key);
-    if (it != g_tiktokRegistry.end())
+    std::shared_ptr<TikTokLiveChat> shared;
     {
-        return it->second;
+        std::lock_guard<std::mutex> lock(g_tiktokRegistryMutex);
+        auto it = g_tiktokRegistry.find(key);
+        if (it != g_tiktokRegistry.end())
+        {
+            return it->second;
+        }
+        shared = std::make_shared<TikTokLiveChat>(source);
+        g_tiktokRegistry.emplace(key, shared);
     }
-
-    auto shared = std::make_shared<TikTokLiveChat>(source);
-    g_tiktokRegistry.emplace(key, shared);
+    // Outside the lock: WebView2 can run the env-created handler
+    // synchronously inside start(), and that handler takes the lock
+    // (releaseIdleEnvironment).
     shared->start();
     return shared;
 }

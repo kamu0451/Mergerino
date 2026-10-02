@@ -154,6 +154,7 @@ private:
     void maybeLearnChannelHandle(const QString &html,
                                  bool ownerScopedOnly = false);
     void setChannelHandle(QString handle);
+    void invalidateLiveChatSession();
     void recoverLiveChat(QString text, int retryDelayMs,
                          bool notifyAsSystemMessage = true);
     void waitForNextLive(QString text, int retryDelayMs);
@@ -226,6 +227,12 @@ private:
     bool switchedToLiveChatView_{false};
     int activePollStreak_{0};
     int pollRefreshFallbackCount_{0};
+    // Bumped whenever a chat session (one continuation chain) begins or is
+    // abandoned. Poll, page-fetch and retry callbacks capture it and drop
+    // their result if it changed, so a reply still in flight from an old
+    // session can't apply its continuation or live state to the new one or
+    // fork a second poll loop. lifetimeGuard_ only covers stop()/start().
+    uint64_t chatSessionGeneration_{0};
     // Recovery escalation: counts consecutive recoverLiveChat() calls since
     // the last successful poll. Reset by poll success and waitForNextLive.
     // After hitting the escalation threshold we promote to waitForNextLive

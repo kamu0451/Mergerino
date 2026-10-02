@@ -653,17 +653,17 @@ int Application::run()
         [this] {
             this->twitch->reloadAllBTTVChannelEmotes();
         },
-        false);
+        this->settingConnections_, false);
     getSettings()->enableFFZChannelEmotes.connect(
         [this] {
             this->twitch->reloadAllFFZChannelEmotes();
         },
-        false);
+        this->settingConnections_, false);
     getSettings()->enableSevenTVChannelEmotes.connect(
         [this] {
             this->twitch->reloadAllSevenTVChannelEmotes();
         },
-        false);
+        this->settingConnections_, false);
 
     QTimer::singleShot(0, [this] {
         this->twitch->connect();

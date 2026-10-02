@@ -4,10 +4,12 @@
 
 #pragma once
 
+#include <pajlada/signals/scoped-connection.hpp>
 #include <QString>
 
 #include <cassert>
 #include <memory>
+#include <vector>
 
 namespace chatterino {
 
@@ -262,6 +264,8 @@ private:
     std::unique_ptr<NativeMessagingServer> nmServer;
     Updates &updates;
     QString previousVersionForPatchNotes_;
+    std::vector<std::unique_ptr<pajlada::Signals::ScopedConnection>>
+        settingConnections_;
 
     bool initialized{false};
 };

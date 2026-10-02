@@ -361,6 +361,15 @@ void Updates::checkForUpdates()
             // SHA-mismatch = UpdateAvailable.
             if (!remoteVersion.isEmpty())
             {
+                // The rolling release's target_commitish is never updated
+                // after the release is first created, so the SHA check above
+                // misses the current build; the same version is up to date.
+                if (remoteVersion == this->currentVersion_)
+                {
+                    this->setStatus_(NoUpdateAvailable);
+                    return;
+                }
+
                 this->isDowngrade_ = Updates::isDowngradeOf(
                     remoteVersion, this->currentVersion_);
                 if (this->isDowngrade_)

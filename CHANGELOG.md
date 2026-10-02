@@ -3,6 +3,7 @@
 ## Unversioned
 
 - Bugfix: The version number moves to 1.6 and counts up from there. Builds past 1.5.255 had a version the update check could not read.
+- Bugfix: The update check no longer offers an update when you already run the latest release.
 - Bugfix: Messages from a user who was timed out or banned, and messages removed by a chat clear, are now greyed out in merged tabs too.
 - Bugfix: Fixed a possible crash when a Twitch tab was closed while a moderation, AutoMod or suspicious-user event for it was still being processed.
 - Bugfix: The Kick user card's follow and subscription info and its channel link now work for users and channels whose Kick address uses hyphens in place of underscores.

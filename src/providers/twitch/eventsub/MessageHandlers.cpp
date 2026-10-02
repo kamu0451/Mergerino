@@ -23,7 +23,13 @@ void handleModerateMessage(
     const lib::payload::channel_moderate::v2::Event &event,
     const lib::payload::channel_moderate::v2::Clear & /*action*/)
 {
-    runInGuiThread([chan, actor{event.moderatorUserLogin.qt()}, time] {
+    runInGuiThread([weak = chan->weak_from_this(),
+                    actor{event.moderatorUserLogin.qt()}, time] {
+        auto chan = weak.lock();
+        if (!chan)
+        {
+            return;
+        }
         chan->addOrReplaceClearChat(
             MessageBuilder::makeClearChatMessage(time, actor), time);
         if (getSettings()->hideModerated)
@@ -127,8 +133,11 @@ void handleModerateMessage(
     builder->timeoutUser = action.userLogin.qt();
 
     auto msg = builder.release();
-    runInGuiThread([chan, msg, time] {
-        chan->addOrReplaceTimeout(msg, time);
+    runInGuiThread([weak = chan->weak_from_this(), msg, time] {
+        if (auto chan = weak.lock())
+        {
+            chan->addOrReplaceTimeout(msg, time);
+        }
     });
 }
 
@@ -173,8 +182,11 @@ void handleModerateMessage(
     builder->timeoutUser = action.userLogin.qt();
 
     auto msg = builder.release();
-    runInGuiThread([chan, msg, time] {
-        chan->addOrReplaceTimeout(msg, time);
+    runInGuiThread([weak = chan->weak_from_this(), msg, time] {
+        if (auto chan = weak.lock())
+        {
+            chan->addOrReplaceTimeout(msg, time);
+        }
     });
 }
 

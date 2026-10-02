@@ -203,7 +203,12 @@ void Connection::onChannelModerate(
                 builder->loginName = payload.event.moderatorUserLogin.qt();
                 makeModerateMessage(builder, payload.event, action);
                 auto msg = builder.release();
-                runInGuiThread([channel, msg] {
+                runInGuiThread([weak = channel->weak_from_this(), msg] {
+                    auto channel = weak.lock();
+                    if (!channel)
+                    {
+                        return;
+                    }
                     if (!msg->id.isEmpty())
                     {
                         if (auto existing = channel->findMessageByID(msg->id))
@@ -249,13 +254,19 @@ void Connection::onAutomodMessageHold(
     auto messageText = payload.event.message.text.qt();
     auto userLogin = payload.event.userLogin.qt();
 
-    runInGuiThread([channel, messageText, userLogin, header, body] {
+    runInGuiThread([weak = channel->weak_from_this(), messageText, userLogin,
+                    header, body] {
+        auto channel = weak.lock();
+        if (!channel)
+        {
+            return;
+        }
         auto [highlighted, highlightResult] = getApp()->getHighlights()->check(
             {}, {}, userLogin, messageText, body->flags);
         if (highlighted)
         {
             MessageBuilder::triggerHighlights(
-                channel,
+                channel.get(),
                 {
                     .customSound =
                         highlightResult.customSoundUrl.value_or<QUrl>({}),
@@ -301,8 +312,11 @@ void Connection::onAutomodMessageUpdate(
     // Gray out approve/deny button upon "ALLOWED" and "DENIED" statuses
     // They are versions of automod_message_(denied|approved) but for mods.
     auto id = "automod_" + payload.event.messageID.qt();
-    runInGuiThread([channel, id] {
-        channel->disableMessage(id);
+    runInGuiThread([weak = channel->weak_from_this(), id] {
+        if (auto channel = weak.lock())
+        {
+            channel->disableMessage(id);
+        }
     });
 }
 
@@ -337,9 +351,12 @@ void Connection::onChannelSuspiciousUserMessage(
     auto header = makeSuspiciousUserMessageHeader(channel, time, payload.event);
     auto body = makeSuspiciousUserMessageBody(channel, time, payload.event);
 
-    runInGuiThread([channel, header, body] {
-        channel->addMessage(header, MessageContext::Original);
-        channel->addMessage(body, MessageContext::Original);
+    runInGuiThread([weak = channel->weak_from_this(), header, body] {
+        if (auto channel = weak.lock())
+        {
+            channel->addMessage(header, MessageContext::Original);
+            channel->addMessage(body, MessageContext::Original);
+        }
     });
 }
 
@@ -363,8 +380,11 @@ void Connection::onChannelSuspiciousUserUpdate(
     auto time = chronoToQDateTime(metadata.messageTimestamp);
     auto message = makeSuspiciousUserUpdate(channel, time, payload.event);
 
-    runInGuiThread([channel, message] {
-        channel->addMessage(message, MessageContext::Original);
+    runInGuiThread([weak = channel->weak_from_this(), message] {
+        if (auto channel = weak.lock())
+        {
+            channel->addMessage(message, MessageContext::Original);
+        }
     });
 }
 
@@ -388,8 +408,11 @@ void Connection::onChannelChatUserMessageHold(
     auto time = chronoToQDateTime(metadata.messageTimestamp);
     auto message = makeUserMessageHeldMessage(channel, time, payload.event);
 
-    runInGuiThread([channel, message] {
-        channel->addMessage(message, MessageContext::Original);
+    runInGuiThread([weak = channel->weak_from_this(), message] {
+        if (auto channel = weak.lock())
+        {
+            channel->addMessage(message, MessageContext::Original);
+        }
     });
 }
 
@@ -414,8 +437,11 @@ void Connection::onChannelChatUserMessageUpdate(
     auto time = chronoToQDateTime(metadata.messageTimestamp);
     auto message = makeUserMessageUpdateMessage(channel, time, payload.event);
 
-    runInGuiThread([channel, message] {
-        channel->addMessage(message, MessageContext::Original);
+    runInGuiThread([weak = channel->weak_from_this(), message] {
+        if (auto channel = weak.lock())
+        {
+            channel->addMessage(message, MessageContext::Original);
+        }
     });
 }
 

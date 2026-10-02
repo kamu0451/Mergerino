@@ -233,6 +233,10 @@ private:
     // session can't apply its continuation or live state to the new one or
     // fork a second poll loop. lifetimeGuard_ only covers stop()/start().
     uint64_t chatSessionGeneration_{0};
+    // Bumped by setLive(true), which starts the viewer-count loop. The loop's
+    // timer and replies capture it, so a loop left over from before a quick
+    // offline/online flip stops instead of running beside the new one.
+    uint64_t viewerCountGeneration_{0};
     // Recovery escalation: counts consecutive recoverLiveChat() calls since
     // the last successful poll. Reset by poll success and waitForNextLive.
     // After hitting the escalation threshold we promote to waitForNextLive

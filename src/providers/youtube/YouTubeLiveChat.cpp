@@ -3144,14 +3144,17 @@ void YouTubeLiveChat::scheduleResolve(int delayMs)
 
 void YouTubeLiveChat::scheduleUpdatedMetadata(int delayMs)
 {
-    QTimer::singleShot(delayMs,
-                       guardedCallback(this->lifetimeGuard_, [this] {
-                           if (!this->running_ || !this->live_)
-                           {
-                               return;
-                           }
-                           this->fetchUpdatedMetadata();
-                       }));
+    QTimer::singleShot(
+        delayMs,
+        guardedCallback(this->lifetimeGuard_,
+                        [this, generation = this->viewerCountGeneration_] {
+                            if (!this->running_ || !this->live_ ||
+                                generation != this->viewerCountGeneration_)
+                            {
+                                return;
+                            }
+                            this->fetchUpdatedMetadata();
+                        }));
 }
 
 void YouTubeLiveChat::fetchUpdatedMetadata()
@@ -3170,6 +3173,7 @@ void YouTubeLiveChat::fetchUpdatedMetadata()
     }
 
     const auto requestedVideoId = this->videoId_;
+    const auto generation = this->viewerCountGeneration_;
     const auto url =
         QString("https://www.youtube.com/youtubei/v1/updated_metadata"
                 "?prettyPrint=false&key=%1")
@@ -3197,8 +3201,9 @@ void YouTubeLiveChat::fetchUpdatedMetadata()
     std::move(request)
         .onSuccess(guardedCallback(
             this->lifetimeGuard_,
-            [this, requestedVideoId](const NetworkResult &result) {
-                if (!this->running_ || this->videoId_ != requestedVideoId)
+            [this, requestedVideoId, generation](const NetworkResult &result) {
+                if (!this->running_ || this->videoId_ != requestedVideoId ||
+                    generation != this->viewerCountGeneration_)
                 {
                     return;
                 }
@@ -3239,11 +3244,16 @@ void YouTubeLiveChat::fetchUpdatedMetadata()
                     YOUTUBE_VIEWER_COUNT_REFRESH_MS);
             }))
         .onError(guardedCallback(
-            this->lifetimeGuard_, [this](const NetworkResult &result) {
+            this->lifetimeGuard_,
+            [this, generation](const NetworkResult &result) {
                 qCDebug(chatterinoYouTube).nospace()
                     << "[" << this->streamUrl_
                     << "] updated_metadata error status="
                     << result.status().value_or(-1);
+                if (generation != this->viewerCountGeneration_)
+                {
+                    return;
+                }
                 this->scheduleUpdatedMetadata(
                     YOUTUBE_VIEWER_COUNT_REFRESH_MS);
             }))
@@ -3554,6 +3564,7 @@ void YouTubeLiveChat::setLive(bool live)
     this->liveStatusChanged.invoke();
     if (live)
     {
+        ++this->viewerCountGeneration_;
         this->fetchUpdatedMetadata();
     }
 }

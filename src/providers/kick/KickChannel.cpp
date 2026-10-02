@@ -1091,25 +1091,33 @@ void KickChannel::cacheOwnIdentityFromUserInfo(
     getApp()->getKickChatServer()->requestSeventvCosmetics(
         ownUserID, identity.displayName);
 
-    bool hasMod = false;
+    bool hasMod = info.isModerator;
     bool hasVip = false;
     bool hasSubscriberBadge = false;
     std::vector<std::unique_ptr<MessageElement>> levelBadges;
     for (const auto &badge : info.badges)
     {
-        if (!badge.active || !badge.selected)
+        if (!badge.active)
         {
             continue;
         }
 
+        // A role holds even when the user hid its badge; only the badges
+        // shown on our own messages follow the user's badge selection.
         const auto type = badge.type.toLower();
-        if (type == u"moderator"_s)
+        if (type == u"moderator"_s || type == u"lead_moderator"_s ||
+            type == u"lead-moderator"_s)
         {
             hasMod = true;
         }
         else if (type == u"vip"_s)
         {
             hasVip = true;
+        }
+
+        if (!badge.selected)
+        {
+            continue;
         }
 
         if (isKickLevelBadge(badge))

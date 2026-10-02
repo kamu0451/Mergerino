@@ -312,6 +312,8 @@ KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
 KickPrivateUserInChannelInfo::KickPrivateUserInChannelInfo(BoostJsonObject obj)
     : userID(obj["id"].toUint64())
     , username(obj["username"].toQString())
+    , isModerator(obj["is_moderator"].toBool())
+    , isChannelOwner(obj["is_channel_owner"].toBool())
 
 {
     auto badgesV2 = obj["badges_v2"].toArray();

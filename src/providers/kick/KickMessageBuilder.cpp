@@ -644,6 +644,16 @@ std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
         }
 
         auto ty = badgeTypeFromObject(obj);
+        // Roles count even when we have no image to draw for the badge.
+        if (ty == "moderator" || ty == "lead_moderator" ||
+            ty == "lead-moderator")
+        {
+            hasMod = true;
+        }
+        else if (ty == "vip")
+        {
+            hasVip = true;
+        }
         if (isKickLevelBadgeObject(obj, ty))
         {
             if (!levelBadge)
@@ -673,15 +683,7 @@ std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
             continue;
         }
 
-        if (ty == "moderator")
-        {
-            hasMod = true;
-        }
-        else if (ty == "vip")
-        {
-            hasVip = true;
-        }
-        else if (ty == "bot")
+        if (ty == "bot")
         {
             builder->flags.set(MessageFlag::ChatBot);
         }
@@ -693,8 +695,17 @@ std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
                   getApp()->getAccounts()->kick.current()->username();
     if (updateSelfState && isSelf)
     {
-        builder.channel()->setMod(hasMod);
-        builder.channel()->setVip(hasVip);
+        // A message payload is not guaranteed to contain every role badge.
+        // Let it confirm privileges, but leave removals to the authoritative
+        // user-in-channel refresh.
+        if (hasMod)
+        {
+            builder.channel()->setMod(true);
+        }
+        if (hasVip)
+        {
+            builder.channel()->setVip(true);
+        }
     }
     return levelBadge;
 }

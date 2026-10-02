@@ -101,14 +101,7 @@ public:
 protected:
     void showPopup() override
     {
-        this->resetPopupView();
         QComboBox::showPopup();
-        this->resetPopupView();
-    }
-
-    void hidePopup() override
-    {
-        QComboBox::hidePopup();
         this->resetPopupView();
     }
 

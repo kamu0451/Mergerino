@@ -26,6 +26,13 @@ void handleModerateMessage(
     const lib::payload::channel_moderate::v2::Event &event,
     const lib::payload::channel_moderate::v2::Clear &action);
 
+/// Greys out the deleted message. The "<MODERATOR> deleted message from"
+/// notice is built separately by makeModerateMessage.
+void handleModerateMessage(
+    TwitchChannel *chan, const QDateTime &time,
+    const lib::payload::channel_moderate::v2::Event &event,
+    const lib::payload::channel_moderate::v2::Delete &action);
+
 /// <MODERATOR> timed out <USER> for <DURATION>[ in <CHANNEL>]: <REASON>
 void handleModerateMessage(
     TwitchChannel *chan, const QDateTime &time,

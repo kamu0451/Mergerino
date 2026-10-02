@@ -668,7 +668,8 @@ void IrcMessageHandler::handleClearMessageMessage(Communi::IrcMessage *message)
 
     QString targetID = tags.value("target-msg-id").toString();
 
-    auto msg = chan->findMessageByID(targetID);
+    // disableMessage also notifies merged tabs, which hold their own copy.
+    auto msg = chan->disableMessage(targetID, MessageFlag::InvalidReplyTarget);
     if (msg == nullptr)
     {
         return;
@@ -677,8 +678,6 @@ void IrcMessageHandler::handleClearMessageMessage(Communi::IrcMessage *message)
     const auto deletionNoticeId =
         MessageBuilder::makeDeletionNoticeMessageId(targetID);
 
-    msg->flags.set(MessageFlag::Disabled);
-    msg->flags.set(MessageFlag::InvalidReplyTarget);
     // Always added; hidden at layout time when hideDeletionActions is
     // enabled, so toggling the setting reveals past deletions.
     if (chan->findMessageByID(deletionNoticeId) == nullptr)
@@ -692,6 +691,10 @@ void IrcMessageHandler::handleClearMessageMessage(Communi::IrcMessage *message)
         // XXX: This is expensive. We could use a layout request if the layout
         //      would store the previous message flags.
         getApp()->getWindows()->forceLayoutChannelViews();
+    }
+    else
+    {
+        getApp()->getWindows()->repaintVisibleChatWidgets();
     }
 }
 

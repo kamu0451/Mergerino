@@ -1342,8 +1342,10 @@ void MergedChannel::connectSourceSignals(
 
     connections.managedConnect(
         source->messageAppended,
-        [this, platform](MessagePtr &message, std::optional<MessageFlags>) {
-            this->appendMergedMessage(message, platform);
+        [this, platform](MessagePtr &message,
+                         std::optional<MessageFlags> overridingFlags) {
+            this->appendMergedMessage(message, platform,
+                                      std::move(overridingFlags));
         });
     connections.managedConnect(
         source->messagesAddedAtStart,
@@ -1364,6 +1366,30 @@ void MergedChannel::connectSourceSignals(
     connections.managedConnect(source->messagesCleared, [this, platform] {
         this->clearMirrorsForPlatform(platform);
     });
+    // Mirrors are clones, so a deletion in the source channel (which only
+    // flips flags on its own copy) has to be copied over by hand.
+    connections.managedConnect(
+        Channel::messageFlagsChanged,
+        [this, sourceChannel = source.get(), platform](
+            Channel *changedChannel, const MessagePtr &message) {
+            if (changedChannel != sourceChannel)
+            {
+                return;
+            }
+
+            const auto it =
+                this->mirroredMessages_.find(messageKey(message, platform));
+            if (it == this->mirroredMessages_.end())
+            {
+                return;
+            }
+
+            it->second->flags.set(MessageFlag::Disabled,
+                                  message->flags.has(MessageFlag::Disabled));
+            it->second->flags.set(
+                MessageFlag::InvalidReplyTarget,
+                message->flags.has(MessageFlag::InvalidReplyTarget));
+        });
 
     if (auto *twitch = dynamic_cast<TwitchChannel *>(source.get()))
     {
@@ -1496,8 +1522,9 @@ void MergedChannel::fillInMergedMessages(
     }
 }
 
-void MergedChannel::appendMergedMessage(const MessagePtr &source,
-                                        MessagePlatform platform)
+void MergedChannel::appendMergedMessage(
+    const MessagePtr &source, MessagePlatform platform,
+    std::optional<MessageFlags> overridingFlags)
 {
     auto merged = this->createAndTrackMergedMessage(source, platform);
     if (!merged)
@@ -1524,7 +1551,8 @@ void MergedChannel::appendMergedMessage(const MessagePtr &source,
         }
     }
 
-    this->addMessage(merged, MessageContext::Repost);
+    this->addMessage(merged, MessageContext::Repost,
+                     std::move(overridingFlags));
 }
 
 void MergedChannel::replaceMergedMessage(const MessagePtr &previous,

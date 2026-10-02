@@ -16,6 +16,7 @@
 #include "providers/seventv/SeventvEventAPI.hpp"
 #include "providers/twitch/TwitchIrcServer.hpp"
 #include "singletons/Settings.hpp"
+#include "singletons/WindowManager.hpp"
 #include "util/BoostJsonWrap.hpp"
 #include "util/PostToThread.hpp"
 
@@ -394,17 +395,27 @@ void KickChatServer::onMessageDeleted(KickChannel *channel,
                                       BoostJsonObject data)
 {
     auto messageID = data["message"]["id"].toQString();
-    auto msg = channel->findMessageByID(messageID);
+    // disableMessage also notifies merged tabs, which hold their own copy.
+    auto msg =
+        channel->disableMessage(messageID, MessageFlag::InvalidReplyTarget);
     if (!msg)
     {
         return;
     }
 
-    msg->flags.set(MessageFlag::Disabled, MessageFlag::InvalidReplyTarget);
     if (!getSettings()->hideDeletionActions)
     {
         channel->addMessage(MessageBuilder::makeDeletionMessageFromIRC(msg),
                             MessageContext::Original);
+    }
+
+    if (getSettings()->hideModerated)
+    {
+        getApp()->getWindows()->forceLayoutChannelViews();
+    }
+    else
+    {
+        getApp()->getWindows()->repaintVisibleChatWidgets();
     }
 }
 

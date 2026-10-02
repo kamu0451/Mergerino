@@ -143,7 +143,9 @@ private:
                                   MessagePlatform platform);
     void fillInMergedMessages(const std::vector<MessagePtr> &messages,
                               MessagePlatform platform);
-    void appendMergedMessage(const MessagePtr &source, MessagePlatform platform);
+    void appendMergedMessage(
+        const MessagePtr &source, MessagePlatform platform,
+        std::optional<MessageFlags> overridingFlags = std::nullopt);
     void replaceMergedMessage(const MessagePtr &previous,
                               const MessagePtr &replacement,
                               MessagePlatform platform);

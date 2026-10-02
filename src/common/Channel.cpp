@@ -101,6 +101,9 @@ namespace chatterino {
 //
 // Channel
 //
+pajlada::Signals::Signal<Channel *, const MessagePtr &>
+    Channel::messageFlagsChanged;
+
 Channel::Channel(const QString &name, Type type)
     : completionModel(new TabCompletionModel(*this, nullptr))
     , lastDate_(QDate::currentDate())
@@ -462,13 +465,17 @@ void Channel::replaceMessage(size_t hint, const MessagePtr &message,
     }
 }
 
-void Channel::disableMessage(const QString &messageID)
+MessagePtr Channel::disableMessage(const QString &messageID,
+                                   MessageFlags additionalFlags)
 {
     auto msg = this->findMessageByID(messageID);
     if (msg != nullptr)
     {
         msg->flags.set(MessageFlag::Disabled);
+        msg->flags.set(additionalFlags);
+        Channel::messageFlagsChanged.invoke(this, msg);
     }
+    return msg;
 }
 
 void Channel::clearMessages()

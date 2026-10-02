@@ -74,6 +74,12 @@ public:
     /// (index, prev-message, replacement)
     pajlada::Signals::Signal<size_t, const MessagePtr &, const MessagePtr &>
         messageReplaced;
+    /// Invoked when a message's flags were changed in place (see
+    /// #disableMessage), so a MergedChannel can copy them onto its mirrored
+    /// copy. Static: listeners filter on the channel argument.
+    /// (channel, message)
+    static pajlada::Signals::Signal<Channel *, const MessagePtr &>
+        messageFlagsChanged;
     /// Invoked when some number of messages were filled in using time received
     pajlada::Signals::Signal<const std::vector<MessagePtr> &> filledInMessages;
     pajlada::Signals::NoArgSignal displayNameChanged;
@@ -124,7 +130,11 @@ public:
     void replaceMessage(size_t index, const MessagePtr &replacement);
     void replaceMessage(size_t hint, const MessagePtr &message,
                         const MessagePtr &replacement);
-    void disableMessage(const QString &messageID);
+    /// Sets Disabled plus @a additionalFlags on the message with the given ID
+    /// and invokes #messageFlagsChanged. Returns the message, or nullptr if
+    /// no message has that ID.
+    MessagePtr disableMessage(const QString &messageID,
+                              MessageFlags additionalFlags = {});
 
     /// Removes all messages from this channel and invokes #messagesCleared
     void clearMessages();

@@ -2,6 +2,15 @@
 
 ## Unversioned
 
+- Bugfix: Messages deleted by moderators on Twitch or Kick are now greyed out in merged tabs too, not only in the platform's own tab.
+- Bugfix: Fixed a freeze when Twitch badge icons were requested before the global badges finished loading.
+- Bugfix: Kick channels whose name contains an underscore now load chat, emotes and channel info again.
+- Bugfix: Kick moderators and lead moderators are recognised as moderators even when their mod badge is hidden, and sending a message no longer drops mod status.
+- Bugfix: The duration picked in the Create Poll and Create Prediction dialogs is no longer reset to the previous value.
+- Bugfix: YouTube chat no longer picks up stale replies after a reconnect or stream switch, which could start duplicate polling or restore an old live state.
+- Bugfix: Fixed a possible crash and misplaced emotes when 7TV personal emotes were applied to a user's last message.
+- Minor: The BTTV/FFZ/7TV channel emote settings no longer stay connected to the app after it shuts down.
+- Minor: Added the Microsoft Edge WebView2 SDK license to the About page.
 - Major: New "Enable TikTok chat" setting (Settings > General > Chat). Turning it off disconnects TikTok in every merged tab and closes the hidden Microsoft Edge WebView2 browsers TikTok chat runs in; turning it back on reconnects. Per-tab TikTok sources are kept.
 - Bugfix: Closing a tab (or removing its TikTok source) now closes that TikTok source's hidden WebView2 browser a few seconds later, once no other tab uses it. They used to keep running -- and eating CPU and memory -- until the app was restarted, even with every TikTok tab gone.
 - Bugfix: TikTok chat no longer spams "disconnected" during a working stream. TikTok's servers drop the chat connection minutes into a healthy session; the app rejoins on its own within ~90 seconds, but every drop was announced in chat while the silent rejoin never was -- so a live TikTok chat read as an endless string of disconnects. A drop now waits out a 3-minute grace period first: if the rejoin succeeds (the usual case) nothing is announced at all, and only a drop that stays down is announced. A genuine end of stream is announced promptly as "TikTok live chat ended", a recovery after an announced disconnect is announced as "reconnected", and the rejoin attempt always runs at the fast cadence even when the channel's other platforms are offline. Also removed spurious "disconnected" messages from connection closes on pages with no live session, and "is not live" is no longer re-announced on every recheck cycle of an offline channel.

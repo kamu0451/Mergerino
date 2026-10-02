@@ -672,6 +672,12 @@ void Channel::upsertPersonalSeventvEmotes(
     // added emotes are inserted where appropriate.
 
     assertInGuiThread();
+    // An empty login would match system messages, which have no loginName.
+    if (userLogin.isEmpty() || !emoteMap)
+    {
+        return;
+    }
+
     auto snapshot = this->getMessageSnapshot(5);
     if (snapshot.empty())
     {
@@ -688,6 +694,10 @@ void Channel::upsertPersonalSeventvEmotes(
         for (qsizetype i = size - 1; i >= end; i--)
         {
             const auto &message = snapshot[i];
+            if (!message)
+            {
+                continue;
+            }
             if (message->loginName == userLogin)
             {
                 return message;
@@ -698,7 +708,7 @@ void Channel::upsertPersonalSeventvEmotes(
     };
 
     const auto message = findMessage();
-    if (!message)
+    if (!message || !*message)
     {
         return;
     }
@@ -714,10 +724,13 @@ void Channel::upsertPersonalSeventvEmotes(
         bool anyChange = false;
 
         /// Appends a text element with the pending @a words
-        /// and clears the vector.
-        ///
-        /// @pre @a words must not be empty
+        /// and clears the vector. No-op if @a words is empty (the text
+        /// starts or ends with an emote, or two emotes are adjacent).
         const auto flush = [&]() {
+            if (words.empty())
+            {
+                return;
+            }
             elements.emplace_back(std::make_unique<TextElement>(
                 std::move(words), textElement->getFlags(), textElement->color(),
                 textElement->fontStyle()));
@@ -776,7 +789,7 @@ void Channel::upsertPersonalSeventvEmotes(
         for (const auto &word : prevWords)
         {
             auto emoteIt = emoteMap->find(EmoteName{word});
-            if (emoteIt == emoteMap->end())
+            if (emoteIt == emoteMap->end() || !emoteIt->second)
             {
                 words.emplace_back(word);
                 continue;

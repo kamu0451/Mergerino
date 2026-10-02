@@ -229,6 +229,16 @@ void KickChannel::initialize(const UserInit &init)
 {
     this->setUserInfo(init);
     this->resolveChannelInfo();
+
+    this->signalHolder_.managedConnect(
+        getApp()->getAccounts()->kick.currentUserChanged, [this] {
+            // Roles belong to the previous account until Kick confirms them
+            // for the new one.
+            this->ownIdentity_.reset();
+            this->setMod(false);
+            this->setVip(false);
+            this->refreshOwnIdentity();
+        });
     // Recent-message history is loaded from setUserInfo's roomID-resolution
     // path (loadRecentMessages(onDone)); no separate call is needed here.
 }
@@ -1066,6 +1076,17 @@ void KickChannel::refreshOwnIdentity()
             }
             self->cacheOwnIdentityFromUserInfo(*res);
         });
+}
+
+void KickChannel::recheckOwnRoles()
+{
+    auto now = std::chrono::steady_clock::now();
+    if (now - this->lastOwnRolesCheck_ < 60s)
+    {
+        return;
+    }
+    this->lastOwnRolesCheck_ = now;
+    this->refreshOwnIdentity();
 }
 
 void KickChannel::cacheOwnIdentityFromUserInfo(

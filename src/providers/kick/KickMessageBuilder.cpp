@@ -706,6 +706,11 @@ std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
         {
             builder.channel()->setVip(true);
         }
+        if ((!hasMod && builder.channel()->isMod()) ||
+            (!hasVip && builder.channel()->isVip()))
+        {
+            builder.channel()->recheckOwnRoles();
+        }
     }
     return levelBadge;
 }

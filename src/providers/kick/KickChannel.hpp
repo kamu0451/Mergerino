@@ -7,6 +7,7 @@
 #include "util/RateLimiter.hpp"
 
 #include <pajlada/signals/signal.hpp>
+#include <pajlada/signals/signalholder.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -140,6 +141,10 @@ public:
     bool isVip() const;
     void setVip(bool vip);
 
+    /// Re-reads our own roles from Kick, at most once a minute. Used when one
+    /// of our messages arrives without a role badge we think we hold.
+    void recheckOwnRoles();
+
     bool isBroadcaster() const override;
     bool hasModRights() const override;
     bool hasHighRateLimit() const override;
@@ -254,6 +259,8 @@ private:
     };
     std::deque<PendingSentMessage> pendingSentMessages_;
     std::optional<CachedOwnIdentity> ownIdentity_;
+    std::chrono::steady_clock::time_point lastOwnRolesCheck_;
+    pajlada::Signals::SignalHolder signalHolder_;
 
     QTimer sendWaitTimer_;
     // Timepoint at which the user can send messages again

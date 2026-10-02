@@ -75,8 +75,9 @@ public:
     pajlada::Signals::Signal<size_t, const MessagePtr &, const MessagePtr &>
         messageReplaced;
     /// Invoked when a message's flags were changed in place (see
-    /// #disableMessage), so a MergedChannel can copy them onto its mirrored
-    /// copy. Static: listeners filter on the channel argument.
+    /// #disableMessage, #addOrReplaceTimeout and #disableAllMessages), so a
+    /// MergedChannel can copy them onto its mirrored copy. Static: listeners
+    /// filter on the channel argument.
     /// (channel, message)
     static pajlada::Signals::Signal<Channel *, const MessagePtr &>
         messageFlagsChanged;

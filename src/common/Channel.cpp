@@ -255,8 +255,10 @@ void Channel::addSystemMessage(const QString &contents)
 
 void Channel::addOrReplaceTimeout(MessagePtr message, const QDateTime &now)
 {
+    const auto snapshot = this->getMessageSnapshot();
+    const auto timeoutUser = message->timeoutUser;
     addOrReplaceChannelTimeout(
-        this->getMessageSnapshot(), std::move(message), now,
+        snapshot, std::move(message), now,
         [this](auto /*idx*/, auto msg, auto replacement) {
             this->replaceMessage(msg, replacement);
         },
@@ -264,6 +266,15 @@ void Channel::addOrReplaceTimeout(MessagePtr message, const QDateTime &now)
             this->addMessage(msg, MessageContext::Original);
         },
         true);
+
+    for (const auto &msg : snapshot)
+    {
+        if (msg->loginName == timeoutUser &&
+            msg->flags.has(MessageFlag::Disabled))
+        {
+            Channel::messageFlagsChanged.invoke(this, msg);
+        }
+    }
 }
 
 void Channel::addOrReplaceClearChat(MessagePtr message, const QDateTime &now)
@@ -289,6 +300,7 @@ void Channel::disableAllMessages()
         }
 
         message->flags.set(MessageFlag::Disabled);
+        Channel::messageFlagsChanged.invoke(this, message);
     }
 }
 

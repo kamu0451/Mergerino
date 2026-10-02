@@ -707,7 +707,7 @@ void TikTokLiveChat::releaseUnusedSoon()
         }
         for (const auto &chat : unused)
         {
-            qCInfo(chatterinoTikTok).nospace()
+            qCDebug(chatterinoTikTok).nospace()
                 << "[" << chat->username()
                 << "] no tab uses this source anymore, closing its WebView2";
         }

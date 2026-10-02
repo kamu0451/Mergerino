@@ -37,6 +37,9 @@ const QString KICK_CLOUDFLARE_CHALLENGE_MESSAGE =
     u"Kick is currently blocking automated requests (Cloudflare challenge); "
     "Kick chat may be unavailable until it clears."_s;
 
+// The public API answers a lookup that matched nothing with an empty list.
+const QString KICK_NOT_FOUND_MESSAGE = u"Not found (no item returned)"_s;
+
 bool isCloudflareChallenge(const NetworkResult &res)
 {
     auto status = res.status();
@@ -115,7 +118,7 @@ void callDeserialize(auto &&cb, BoostJsonValue data)
         auto arr = data.toArray();
         if (arr.empty())
         {
-            cb(makeUnexpected(u"Not found (no item returned)"_s));
+            cb(makeUnexpected(KICK_NOT_FOUND_MESSAGE));
             return;
         }
         if (!arr[0].isObject())
@@ -470,10 +473,33 @@ void KickApi::privateUserInChannelInfo(
     const QString &userUsername, const QString &channelUsername,
     Callback<KickPrivateUserInChannelInfo> cb)
 {
+    const auto userSlug = slugify(userUsername);
+    const auto urlFor = [channelSlug = slugify(channelUsername)](
+                            const QString &user) -> QString {
+        return u"https://kick.com/api/v2/channels/" % channelSlug % "/users/" %
+               user;
+    };
+    if (!userSlug.contains('_'))
+    {
+        getJsonNoAuth<KickPrivateUserInChannelInfo>(urlFor(userSlug),
+                                                    std::move(cb));
+        return;
+    }
+
+    // Same fallback as privateChannelInfo, for the user's own slug.
     getJsonNoAuth<KickPrivateUserInChannelInfo>(
-        u"https://kick.com/api/v2/channels/" % slugify(channelUsername) %
-            "/users/" % slugify(userUsername),
-        std::move(cb));
+        urlFor(userSlug), [userSlug, urlFor, cb = std::move(cb)](
+                              ExpectedStr<KickPrivateUserInChannelInfo> res) {
+            if (res || res.error() != u"404"_s)
+            {
+                cb(std::move(res));
+                return;
+            }
+
+            auto hyphenated = userSlug;
+            hyphenated.replace('_', '-');
+            getJsonNoAuth<KickPrivateUserInChannelInfo>(urlFor(hyphenated), cb);
+        });
 }
 
 void KickApi::privateEmotesInChannel(
@@ -622,9 +648,30 @@ void KickApi::getChannels(std::span<uint64_t> userIDs,
 void KickApi::getChannelByName(const QString &usernameOrSlug,
                                Callback<KickChannelInfo> cb)
 {
-    QString path =
-        u"channels?slug=" % QUrl::toPercentEncoding(slugify(usernameOrSlug));
-    this->getJson(path, std::move(cb));
+    const auto slug = slugify(usernameOrSlug);
+    QString path = u"channels?slug=" % QUrl::toPercentEncoding(slug);
+    if (!slug.contains('_'))
+    {
+        this->getJson(path, std::move(cb));
+        return;
+    }
+
+    // Same fallback as privateChannelInfo; this endpoint answers an unknown
+    // slug with an empty list instead of a 404.
+    this->getJson<KickChannelInfo>(path, [this, slug, cb = std::move(cb)](
+                                             ExpectedStr<KickChannelInfo> res) {
+        if (res || res.error() != KICK_NOT_FOUND_MESSAGE)
+        {
+            cb(std::move(res));
+            return;
+        }
+
+        auto hyphenated = slug;
+        hyphenated.replace('_', '-');
+        QString retryPath =
+            u"channels?slug=" % QUrl::toPercentEncoding(hyphenated);
+        this->getJson(retryPath, cb);
+    });
 }
 
 void KickApi::banUser(uint64_t broadcasterUserID, uint64_t userID,

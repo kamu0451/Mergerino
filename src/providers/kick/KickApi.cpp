@@ -423,9 +423,8 @@ KickApi *KickApi::instance()
 
 QString KickApi::slugify(const QString &usernameOrSlug)
 {
-    auto slugified = usernameOrSlug;
-    slugified.replace('_', '-');
-    return slugified;
+    // Kick slugs can contain underscores, so preserve the exact channel name.
+    return usernameOrSlug;
 }
 
 bool KickApi::isCloudflareChallengeError(const QString &errorMessage)
@@ -436,9 +435,33 @@ bool KickApi::isCloudflareChallengeError(const QString &errorMessage)
 void KickApi::privateChannelInfo(const QString &username,
                                  Callback<KickPrivateChannelInfo> cb)
 {
+    const auto slug = slugify(username);
+    if (!slug.contains('_'))
+    {
+        getJsonNoAuth<KickPrivateChannelInfo>(
+            u"https://kick.com/api/v2/channels/" % slug, std::move(cb));
+        return;
+    }
+
+    // Older channels kept the slug Kick derived by turning the username's
+    // underscores into hyphens. If the exact name is not found, retry once
+    // with that form; callers pick up the real slug from the response.
     getJsonNoAuth<KickPrivateChannelInfo>(
-        u"https://kick.com/api/v2/channels/" % slugify(username),
-        std::move(cb));
+        u"https://kick.com/api/v2/channels/" % slug,
+        [slug, cb = std::move(cb)](ExpectedStr<KickPrivateChannelInfo> res) {
+            if (res || res.error() != u"404"_s)
+            {
+                cb(std::move(res));
+                return;
+            }
+
+            auto hyphenated = slug;
+            hyphenated.replace('_', '-');
+            qCDebug(chatterinoKick) << "Kick channel" << slug
+                                    << "not found, retrying as" << hyphenated;
+            getJsonNoAuth<KickPrivateChannelInfo>(
+                u"https://kick.com/api/v2/channels/" % hyphenated, cb);
+        });
 }
 
 void KickApi::privateUserInChannelInfo(

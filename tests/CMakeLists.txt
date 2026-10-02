@@ -74,6 +74,7 @@ set(test_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/src/EmoteFetchRetry.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/YouTubeParsing.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/RateLimiter.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/src/KickApi.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/KickMessageBuilder.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/ProtobufReader.cpp
     ${CMAKE_CURRENT_LIST_DIR}/src/LoggedUsers.cpp

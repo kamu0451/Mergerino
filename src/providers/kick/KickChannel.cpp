@@ -1057,7 +1057,7 @@ void KickChannel::refreshOwnIdentity()
 
     auto weak = this->weakFromThis();
     KickApi::privateUserInChannelInfo(
-        account->username(), this->getName(),
+        account->username(), this->slug_,
         [weak](const ExpectedStr<KickPrivateUserInChannelInfo> &res) {
             auto self = weak.lock();
             if (!self || !res)

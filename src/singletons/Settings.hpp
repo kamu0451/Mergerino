@@ -366,6 +366,9 @@ public:
     BoolSetting activityShowRaids = {"/mergerino/activity/raids", true};
     BoolSetting activityShowWatchStreaks = {
         "/mergerino/activity/watchStreaks", true};
+    // Master switch for the TikTok provider. Off: merged tabs skip their
+    // TikTok source and every hidden WebView2 host is torn down.
+    BoolSetting enableTikTok = {"/mergerino/tiktok/enabled", true};
     BoolSetting findAllUsernames = {"/appearance/messages/findAllUsernames",
                                     false};
     // BoolSetting customizable splitheader

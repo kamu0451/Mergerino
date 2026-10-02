@@ -199,6 +199,28 @@ bool isAllowedTikTokUrl(const QString &url)
            host.endsWith(QStringLiteral(".tiktok.com"));
 }
 
+// Process-wide registry. WebView2 hosts are expensive (each is a chromium
+// renderer); MergedChannels with the same TikTok username share one. Keyed by
+// the normalized username so different forms (`@user`, `user`, the full live
+// URL) all collapse onto the same instance.
+//
+// Holds STRONG references on purpose: the layout-restore path creates and
+// destroys throwaway MergedChannels in rapid succession (probing what each
+// "merged" descriptor resolves to), and a weak_ptr-only registry would let
+// the instance die between the throwaway MergedChannel dropping it and the
+// real one picking it up. Three controller-create attempts per source result
+// (each from a fresh Impl with a different host HWND), and the racy ones get
+// E_ABORT from WebView2. Strong-ref keeps the instance alive across the
+// churn; entries nobody else references are dropped by the delayed sweep in
+// releaseUnusedSoon(), well after that churn has settled.
+std::mutex g_tiktokRegistryMutex;
+std::unordered_map<QString, std::shared_ptr<TikTokLiveChat>> g_tiktokRegistry;
+
+// Delay between a consumer letting go of a source and the sweep that
+// destroys it. Long enough to outlast the layout-restore churn above.
+constexpr int kReleaseSweepDelayMs = 3000;
+bool g_releaseSweepScheduled{false};
+
 // One ICoreWebView2Environment is reusable across many controllers; sharing
 // is also REQUIRED, because two concurrent CreateCoreWebView2EnvironmentWith-
 // Options calls against the same userDataDir race and the loser's controller
@@ -218,6 +240,8 @@ ComPtr<ICoreWebView2Environment> g_env;
 HRESULT g_envHr{S_OK};
 std::vector<std::function<void(HRESULT, ICoreWebView2Environment *)>>
     g_envWaiters;
+
+void releaseIdleEnvironment();
 
 void requestSharedEnvironment(
     const std::wstring &userDataDirW,
@@ -317,6 +341,9 @@ void requestSharedEnvironment(
                         {
                             w(envHr, env);
                         }
+                        // Every requester may have been released while
+                        // the env was still being created.
+                        releaseIdleEnvironment();
                         return S_OK;
                     })
                     .Get());
@@ -400,6 +427,31 @@ void processNextController()
                 return S_OK;
             })
             .Get());
+}
+
+// Drops the shared environment once no TikTok source is left. The env ref
+// alone keeps the msedgewebview2 browser/GPU/utility processes running even
+// with zero controllers, so it has to go for them to exit. A later source
+// recreates it through requestSharedEnvironment().
+void releaseIdleEnvironment()
+{
+    {
+        std::lock_guard<std::mutex> lock(g_tiktokRegistryMutex);
+        if (!g_tiktokRegistry.empty())
+        {
+            return;
+        }
+    }
+    if (g_envState != EnvState::Ready)
+    {
+        // Creating: the completion handler calls back in here.
+        return;
+    }
+    qCDebug(chatterinoTikTok)
+        << "no TikTok sources left, releasing the WebView2 environment";
+    g_controllerQueue.clear();
+    g_env.Reset();
+    g_envState = EnvState::NotStarted;
 }
 
 }  // namespace
@@ -535,6 +587,12 @@ struct TikTokLiveChat::Impl {
 
     ~Impl()
     {
+        // A queued request would hand the destroyed host HWND to
+        // CreateCoreWebView2Controller.
+        std::erase_if(g_controllerQueue,
+                      [this](const PendingControllerRequest &request) {
+                          return request.host == this->host;
+                      });
         if (webview)
         {
             if (navToken.value != 0)
@@ -580,27 +638,6 @@ TikTokLiveChat::~TikTokLiveChat()
     this->stop();
 }
 
-namespace {
-
-// Process-wide registry. WebView2 hosts are expensive (each is a chromium
-// renderer); MergedChannels with the same TikTok username share one. Keyed by
-// the normalized username so different forms (`@user`, `user`, the full live
-// URL) all collapse onto the same instance.
-//
-// Holds STRONG references on purpose: the layout-restore path creates and
-// destroys throwaway MergedChannels in rapid succession (probing what each
-// "merged" descriptor resolves to), and a weak_ptr-only registry would let
-// the instance die between the throwaway MergedChannel dropping it and the
-// real one picking it up. Three controller-create attempts per source result
-// (each from a fresh Impl with a different host HWND), and the racy ones get
-// E_ABORT from WebView2. Strong-ref keeps the instance alive across the
-// churn; a unique TikTok source produces exactly one Impl for the app's
-// lifetime.
-std::mutex g_tiktokRegistryMutex;
-std::unordered_map<QString, std::shared_ptr<TikTokLiveChat>> g_tiktokRegistry;
-
-}  // namespace
-
 std::shared_ptr<TikTokLiveChat> TikTokLiveChat::getOrCreateShared(
     const QString &source)
 {
@@ -617,6 +654,45 @@ std::shared_ptr<TikTokLiveChat> TikTokLiveChat::getOrCreateShared(
     g_tiktokRegistry.emplace(key, shared);
     shared->start();
     return shared;
+}
+
+void TikTokLiveChat::releaseUnusedSoon()
+{
+    if (g_releaseSweepScheduled)
+    {
+        return;
+    }
+    g_releaseSweepScheduled = true;
+    QTimer::singleShot(kReleaseSweepDelayMs, [] {
+        g_releaseSweepScheduled = false;
+        std::vector<std::shared_ptr<TikTokLiveChat>> unused;
+        {
+            std::lock_guard<std::mutex> lock(g_tiktokRegistryMutex);
+            for (auto it = g_tiktokRegistry.begin();
+                 it != g_tiktokRegistry.end();)
+            {
+                if (it->second.use_count() == 1)
+                {
+                    unused.push_back(std::move(it->second));
+                    it = g_tiktokRegistry.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
+        }
+        for (const auto &chat : unused)
+        {
+            qCInfo(chatterinoTikTok).nospace()
+                << "[" << chat->username()
+                << "] no tab uses this source anymore, closing its WebView2";
+        }
+        // Destroying outside the lock: ~Impl closes the controller and
+        // destroys the host window.
+        unused.clear();
+        releaseIdleEnvironment();
+    });
 }
 
 void TikTokLiveChat::Impl::autoHideLoginHost(const QString &username)

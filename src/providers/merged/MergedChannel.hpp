@@ -129,6 +129,12 @@ public:
 
 private:
     void initializeSources();
+    /// Binds the shared TikTok provider if this tab has a TikTok source and
+    /// the global enableTikTok setting is on; no-op when already bound.
+    void attachTikTok();
+    /// Unbinds the TikTok provider and schedules the registry sweep that
+    /// closes its WebView2 once no other tab uses the source.
+    void detachTikTok();
     void connectSourceSignals(const ChannelPtr &source, MessagePlatform platform,
                               pajlada::Signals::SignalHolder &connections);
     void appendInitialMessages(const ChannelPtr &source,
@@ -192,6 +198,7 @@ private:
     pajlada::Signals::SignalHolder kickConnections_;
     pajlada::Signals::SignalHolder youtubeConnections_;
     pajlada::Signals::SignalHolder tiktokConnections_;
+    pajlada::Signals::SignalHolder settingConnections_;
 
     std::unordered_map<QString, MessagePtr> mirroredMessages_;
     std::deque<QString> mirroredOrder_;

@@ -554,6 +554,16 @@ void GeneralPage::initLayout(GeneralPageView &layout)
             "yours is successfully sent in the matching channel.")
         ->addTo(layout);
 
+    SettingWidget::checkbox("Enable TikTok chat", s.enableTikTok)
+        ->setTooltip(
+            "TikTok chat is read through a hidden Microsoft Edge WebView2 "
+            "browser per TikTok source. Turning this off disconnects TikTok "
+            "in every merged tab and closes those browser processes; turning "
+            "it back on reconnects. Per-tab TikTok settings are kept.")
+        ->addKeywords({"tiktok", "webview", "webview2", "edge", "browser",
+                       "cpu", "memory"})
+        ->addTo(layout);
+
     layout.addTitle("Messages");
 
     SettingWidget::checkbox("Separate with lines", s.separateMessages)

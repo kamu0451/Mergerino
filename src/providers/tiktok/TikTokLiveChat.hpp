@@ -48,6 +48,11 @@ public:
     static std::shared_ptr<TikTokLiveChat> getOrCreateShared(
         const QString &source);
 
+    /// Schedules a sweep that destroys every shared instance no consumer
+    /// holds anymore (closing its WebView2), then releases the shared
+    /// environment if none are left. Call after dropping a reference.
+    static void releaseUnusedSoon();
+
     /// Drops the registry strong refs and releases the process-wide shared
     /// `ICoreWebView2Environment`. Call from Application::aboutToQuit() so
     /// the env is released while Qt's event loop and the WebView2 message

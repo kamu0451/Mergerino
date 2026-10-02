@@ -401,17 +401,26 @@ MergedChannel::MergedChannel(MergedChannelConfig config)
     this->platform_ = "merged";
     this->initializeSources();
     this->refreshStatusText();
+
+    getSettings()->enableTikTok.connect(
+        [this](bool enabled) {
+            if (enabled)
+            {
+                this->attachTikTok();
+            }
+            else
+            {
+                this->detachTikTok();
+            }
+            this->refreshStatusText();
+            this->streamStatusChanged.invoke();
+        },
+        this->settingConnections_, false);
 }
 
 MergedChannel::~MergedChannel()
 {
-    // The shared TikTok provider outlives this channel (registry holds a
-    // strong ref); drop our sibling-live vote so a destroyed channel can't
-    // keep its fast recheck cadence pinned.
-    if (this->tiktokLiveChat_)
-    {
-        this->tiktokLiveChat_->removeSiblingLiveHint(this);
-    }
+    this->detachTikTok();
 }
 
 const MergedChannelConfig &MergedChannel::config() const
@@ -1227,71 +1236,96 @@ void MergedChannel::initializeSources()
         }
     }
 
-    if (this->config_.tiktokEnabled &&
-        !this->config_.tiktokUsername.trimmed().isEmpty())
+    this->attachTikTok();
+}
+
+void MergedChannel::attachTikTok()
+{
+    if (this->tiktokLiveChat_ || !getSettings()->enableTikTok ||
+        !this->config_.tiktokEnabled ||
+        this->config_.tiktokUsername.trimmed().isEmpty())
     {
-        this->tiktokLiveChat_ =
-            TikTokLiveChat::getOrCreateShared(this->config_.tiktokUsername);
-        this->tiktokConnections_.managedConnect(
-            this->tiktokLiveChat_->messageReceived,
-            [this](const MessagePtr &message) {
-                this->appendMergedMessage(message, MessagePlatform::TikTok);
-            });
-        this->tiktokConnections_.managedConnect(
-            this->tiktokLiveChat_->sourceResolved,
-            [this](const QString &username) {
-                if (!username.isEmpty())
-                {
-                    this->config_.tiktokUsername = username;
-                }
-            });
-        this->tiktokConnections_.managedConnect(
-            this->tiktokLiveChat_->systemMessageReceived,
-            [this](const MessagePtr &message) {
-                this->addSystemStatusMessage(message);
-                this->refreshStatusText();
-            });
-        this->tiktokConnections_.managedConnect(
-            this->tiktokLiveChat_->liveStatusChanged, [this] {
-                this->tiktokLive_ = this->tiktokLiveChat_->isLive();
-                if (this->tiktokLive_)
-                {
-                    // Announce only when a different room is now live.
-                    // TikTok has multiple transient setLive(false) sites
-                    // (check_alive timeout, ws-reconnect, EOF watchdog);
-                    // a bool latch reset on offline re-announced on every
-                    // recovery. Per-roomId comparison alone gates this:
-                    // transient drops keep the same roomId so they no
-                    // longer re-fire the "Joined" message.
-                    this->announceIfNewSession(
-                        MessagePlatform::TikTok,
-                        this->tiktokLiveChat_->roomId(),
-                        this->tiktokAnnouncedRoomId_,
-                        this->tiktokLiveChat_->liveTitle());
-                }
-                this->refreshStatusText();
-                this->streamStatusChanged.invoke();
-            });
-        this->tiktokConnections_.managedConnect(
-            this->tiktokLiveChat_->viewerCountChanged, [this] {
-                this->refreshStatusText();
-                this->streamStatusChanged.invoke();
-            });
-        this->tiktokLiveChat_->start();
-        // Seed our sibling-live vote now that the provider exists; the
-        // Twitch/Kick/YouTube blocks above already set their bools.
-        this->updateTikTokSiblingLiveHint();
-        // Late-joining a shared instance: seed our derived state and announce
-        // if already live (see equivalent block for YouTube above).
-        this->tiktokLive_ = this->tiktokLiveChat_->isLive();
-        if (this->tiktokLive_)
-        {
-            this->announceIfNewSession(MessagePlatform::TikTok,
-                                       this->tiktokLiveChat_->roomId(),
-                                       this->tiktokAnnouncedRoomId_,
-                                       this->tiktokLiveChat_->liveTitle());
-        }
+        return;
     }
+
+    this->tiktokLiveChat_ =
+        TikTokLiveChat::getOrCreateShared(this->config_.tiktokUsername);
+    this->tiktokConnections_.managedConnect(
+        this->tiktokLiveChat_->messageReceived,
+        [this](const MessagePtr &message) {
+            this->appendMergedMessage(message, MessagePlatform::TikTok);
+        });
+    this->tiktokConnections_.managedConnect(
+        this->tiktokLiveChat_->sourceResolved, [this](const QString &username) {
+            if (!username.isEmpty())
+            {
+                this->config_.tiktokUsername = username;
+            }
+        });
+    this->tiktokConnections_.managedConnect(
+        this->tiktokLiveChat_->systemMessageReceived,
+        [this](const MessagePtr &message) {
+            this->addSystemStatusMessage(message);
+            this->refreshStatusText();
+        });
+    this->tiktokConnections_.managedConnect(
+        this->tiktokLiveChat_->liveStatusChanged, [this] {
+            this->tiktokLive_ = this->tiktokLiveChat_->isLive();
+            if (this->tiktokLive_)
+            {
+                // Announce only when a different room is now live.
+                // TikTok has multiple transient setLive(false) sites
+                // (check_alive timeout, ws-reconnect, EOF watchdog);
+                // a bool latch reset on offline re-announced on every
+                // recovery. Per-roomId comparison alone gates this:
+                // transient drops keep the same roomId so they no
+                // longer re-fire the "Joined" message.
+                this->announceIfNewSession(
+                    MessagePlatform::TikTok, this->tiktokLiveChat_->roomId(),
+                    this->tiktokAnnouncedRoomId_,
+                    this->tiktokLiveChat_->liveTitle());
+            }
+            this->refreshStatusText();
+            this->streamStatusChanged.invoke();
+        });
+    this->tiktokConnections_.managedConnect(
+        this->tiktokLiveChat_->viewerCountChanged, [this] {
+            this->refreshStatusText();
+            this->streamStatusChanged.invoke();
+        });
+    this->tiktokLiveChat_->start();
+    // Seed our sibling-live vote now that the provider exists;
+    // initializeSources() already set the Twitch/Kick/YouTube bools.
+    this->updateTikTokSiblingLiveHint();
+    // Late-joining a shared instance: seed our derived state and announce
+    // if already live (see equivalent block for YouTube in
+    // initializeSources()).
+    this->tiktokLive_ = this->tiktokLiveChat_->isLive();
+    if (this->tiktokLive_)
+    {
+        this->announceIfNewSession(MessagePlatform::TikTok,
+                                   this->tiktokLiveChat_->roomId(),
+                                   this->tiktokAnnouncedRoomId_,
+                                   this->tiktokLiveChat_->liveTitle());
+    }
+}
+
+void MergedChannel::detachTikTok()
+{
+    if (!this->tiktokLiveChat_)
+    {
+        return;
+    }
+    this->tiktokConnections_.clear();
+    // Other tabs (or the registry, until the release sweep) can keep the
+    // shared provider alive; drop our sibling-live vote so a detached channel
+    // can't keep its fast recheck cadence pinned.
+    this->tiktokLiveChat_->removeSiblingLiveHint(this);
+    this->tiktokLiveChat_.reset();
+    this->tiktokLive_ = false;
+    // A re-attach is a fresh join; let it announce even for the same room.
+    this->tiktokAnnouncedRoomId_.clear();
+    TikTokLiveChat::releaseUnusedSoon();
 }
 
 void MergedChannel::connectSourceSignals(
@@ -1790,7 +1824,7 @@ void MergedChannel::refreshStatusText()
                 : 0U;
         lines.append(formatLine("YouTube", this->youtubeLive_, viewers));
     }
-    if (this->config_.tiktokEnabled)
+    if (this->config_.tiktokEnabled && getSettings()->enableTikTok)
     {
         const unsigned viewers =
             (this->tiktokLive_ && this->tiktokLiveChat_)

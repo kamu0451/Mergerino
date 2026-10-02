@@ -199,28 +199,6 @@ bool isAllowedTikTokUrl(const QString &url)
            host.endsWith(QStringLiteral(".tiktok.com"));
 }
 
-// Process-wide registry. WebView2 hosts are expensive (each is a chromium
-// renderer); MergedChannels with the same TikTok username share one. Keyed by
-// the normalized username so different forms (`@user`, `user`, the full live
-// URL) all collapse onto the same instance.
-//
-// Holds STRONG references on purpose: the layout-restore path creates and
-// destroys throwaway MergedChannels in rapid succession (probing what each
-// "merged" descriptor resolves to), and a weak_ptr-only registry would let
-// the instance die between the throwaway MergedChannel dropping it and the
-// real one picking it up. Three controller-create attempts per source result
-// (each from a fresh Impl with a different host HWND), and the racy ones get
-// E_ABORT from WebView2. Strong-ref keeps the instance alive across the
-// churn; entries nobody else references are dropped by the delayed sweep in
-// releaseUnusedSoon(), well after that churn has settled.
-std::mutex g_tiktokRegistryMutex;
-std::unordered_map<QString, std::shared_ptr<TikTokLiveChat>> g_tiktokRegistry;
-
-// Delay between a consumer letting go of a source and the sweep that
-// destroys it. Long enough to outlast the layout-restore churn above.
-constexpr int kReleaseSweepDelayMs = 3000;
-bool g_releaseSweepScheduled{false};
-
 // One ICoreWebView2Environment is reusable across many controllers; sharing
 // is also REQUIRED, because two concurrent CreateCoreWebView2EnvironmentWith-
 // Options calls against the same userDataDir race and the loser's controller
@@ -377,6 +355,9 @@ struct PendingControllerRequest
 };
 bool g_controllerInFlight{false};
 std::vector<PendingControllerRequest> g_controllerQueue;
+// Bumped by releaseIdleEnvironment(); a controller completion from an older
+// generation belongs to a released env and must not touch the queue state.
+int g_envGeneration{0};
 
 void processNextController();
 
@@ -410,17 +391,24 @@ void processNextController()
     // invocation followed by a stale E_ABORT). Guard with a one-shot flag
     // so we don't double-process the same request.
     auto fired = std::make_shared<bool>(false);
+    const int generation = g_envGeneration;
     g_env->CreateCoreWebView2Controller(
         next.host,
         Callback<
             ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-            [cb, fired](HRESULT hr,
-                        ICoreWebView2Controller *controller) -> HRESULT {
+            [cb, fired, generation](
+                HRESULT hr, ICoreWebView2Controller *controller) -> HRESULT {
                 if (*fired)
                 {
                     return S_OK;
                 }
                 *fired = true;
+                if (generation != g_envGeneration)
+                {
+                    // Its requester is gone, and a request against the
+                    // new env may already be in flight.
+                    return S_OK;
+                }
                 (*cb)(hr, controller);
                 g_controllerInFlight = false;
                 processNextController();
@@ -429,10 +417,37 @@ void processNextController()
             .Get());
 }
 
+// Process-wide registry. WebView2 hosts are expensive (each is a chromium
+// renderer); MergedChannels with the same TikTok username share one. Keyed by
+// the normalized username so different forms (`@user`, `user`, the full live
+// URL) all collapse onto the same instance.
+//
+// Holds STRONG references on purpose: the layout-restore path creates and
+// destroys throwaway MergedChannels in rapid succession (probing what each
+// "merged" descriptor resolves to), and a weak_ptr-only registry would let
+// the instance die between the throwaway MergedChannel dropping it and the
+// real one picking it up. Three controller-create attempts per source result
+// (each from a fresh Impl with a different host HWND), and the racy ones get
+// E_ABORT from WebView2. Strong-ref keeps the instance alive across the
+// churn; entries nobody else references are dropped by the delayed sweep in
+// releaseUnusedSoon(), well after that churn has settled.
+//
+// Defined after the env/controller globals so that, should it still hold
+// entries at static destruction, it is destroyed before the queue ~Impl
+// touches.
+std::mutex g_tiktokRegistryMutex;
+std::unordered_map<QString, std::shared_ptr<TikTokLiveChat>> g_tiktokRegistry;
+
+// Delay between a consumer letting go of a source and the sweep that
+// destroys it. Long enough to outlast the layout-restore churn above.
+constexpr int kReleaseSweepDelayMs = 3000;
+bool g_releaseSweepScheduled{false};
+
 // Drops the shared environment once no TikTok source is left. The env ref
 // alone keeps the msedgewebview2 browser/GPU/utility processes running even
 // with zero controllers, so it has to go for them to exit. A later source
-// recreates it through requestSharedEnvironment().
+// recreates it through requestSharedEnvironment(). A Failed env is reset
+// too, so re-enabling TikTok retries instead of staying failed until restart.
 void releaseIdleEnvironment()
 {
     {
@@ -442,15 +457,19 @@ void releaseIdleEnvironment()
             return;
         }
     }
-    if (g_envState != EnvState::Ready)
+    if (g_envState == EnvState::NotStarted ||
+        g_envState == EnvState::Creating)
     {
         // Creating: the completion handler calls back in here.
         return;
     }
     qCDebug(chatterinoTikTok)
         << "no TikTok sources left, releasing the WebView2 environment";
+    ++g_envGeneration;
+    g_controllerInFlight = false;
     g_controllerQueue.clear();
     g_env.Reset();
+    g_envHr = S_OK;
     g_envState = EnvState::NotStarted;
 }
 

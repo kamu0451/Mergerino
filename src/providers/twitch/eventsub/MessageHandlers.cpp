@@ -40,9 +40,12 @@ void handleModerateMessage(
     const lib::payload::channel_moderate::v2::Event & /*event*/,
     const lib::payload::channel_moderate::v2::Delete &action)
 {
-    runInGuiThread([chan, messageID{action.messageID.qt()}] {
-        if (chan->disableMessage(messageID, MessageFlag::InvalidReplyTarget) ==
-            nullptr)
+    // The tab can close before the GUI thread runs this.
+    runInGuiThread([weak = chan->weak_from_this(),
+                    messageID{action.messageID.qt()}] {
+        auto chan = weak.lock();
+        if (!chan || chan->disableMessage(
+                         messageID, MessageFlag::InvalidReplyTarget) == nullptr)
         {
             return;
         }

@@ -107,7 +107,7 @@ BadgeNameData nameDataFor(BadgeID id)
     return {};
 }
 
-using CacheData = std::pair<EmotePtr, MessageElementFlag>;
+using CacheData = std::pair<std::weak_ptr<const Emote>, MessageElementFlag>;
 
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-non-const-global-variables)
 std::array<CacheData, magic_enum::enum_count<BadgeID>()> CACHE{};
@@ -121,7 +121,19 @@ std::pair<EmotePtr, MessageElementFlag> KickBadges::lookup(
 {
     assertInGuiThread();
 
-    auto id = magic_enum::enum_cast<BadgeID>(name);
+    auto normalized =
+        QString::fromUtf8(name.data(), static_cast<qsizetype>(name.size()))
+            .trimmed()
+            .toLower();
+    normalized.replace('-', '_');
+    if (normalized == "lead_moderator")
+    {
+        normalized = "moderator";
+    }
+    const auto normalizedBytes = normalized.toUtf8();
+    auto id = magic_enum::enum_cast<BadgeID>(
+        std::string_view{normalizedBytes.constData(),
+                         static_cast<size_t>(normalizedBytes.size())});
     if (!id)
     {
         return {nullptr, {}};
@@ -136,11 +148,12 @@ std::pair<EmotePtr, MessageElementFlag> KickBadges::lookup(
 
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-constant-array-index) -- see above
     auto &entry = CACHE[idx];
-    if (!entry.first)
+    auto badge = entry.first.lock();
+    if (!badge)
     {
         auto data = nameDataFor(*id);
 
-        entry.first = std::make_shared<const Emote>(Emote{
+        badge = std::make_shared<const Emote>(Emote{
             .name = {data.friendlyName},
             .images =
                 ImageSet{
@@ -153,10 +166,11 @@ std::pair<EmotePtr, MessageElementFlag> KickBadges::lookup(
                 },
             .tooltip = Tooltip{data.friendlyName},
         });
+        entry.first = badge;
         entry.second = data.flag;
     }
 
-    return entry;
+    return {std::move(badge), entry.second};
 }
 
 }  // namespace chatterino

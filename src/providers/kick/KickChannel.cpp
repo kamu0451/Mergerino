@@ -726,7 +726,9 @@ bool KickChannel::isBroadcaster() const
     }
 
     auto currentUser = accounts->kick.current();
-    if (!currentUser)
+    // Before the channel resolves its userID is 0, the same as an anonymous
+    // user's, so neither may count as the broadcaster.
+    if (!currentUser || currentUser->isAnonymous() || this->userID() == 0)
     {
         return false;
     }
@@ -1009,9 +1011,11 @@ void KickChannel::resolveChannelInfo()
 void KickChannel::reloadKickChannelEmotes()
 {
     auto weak = this->weakFromThis();
+    auto generation = ++this->kickEmoteGeneration_;
     KickApi::privateEmotesInChannel(
         this->slug_,
-        [weak](const ExpectedStr<std::vector<KickPrivateEmoteSetInfo>> &res) {
+        [weak, generation](
+            const ExpectedStr<std::vector<KickPrivateEmoteSetInfo>> &res) {
             auto self = weak.lock();
             if (!self)
             {
@@ -1024,7 +1028,15 @@ void KickChannel::reloadKickChannelEmotes()
                     << *self << "Failed to fetch channel emotes:"
                     << res.error();
                 // Keep whatever's already cached (a transient failure like a
-                // Cloudflare challenge shouldn't wipe working emotes).
+                // Cloudflare challenge shouldn't wipe working emotes), and
+                // try again unless a newer reload started meanwhile.
+                QTimer::singleShot(30s, [weak, generation] {
+                    if (auto channel = weak.lock();
+                        channel && channel->kickEmoteGeneration_ == generation)
+                    {
+                        channel->reloadKickChannelEmotes();
+                    }
+                });
                 return;
             }
 

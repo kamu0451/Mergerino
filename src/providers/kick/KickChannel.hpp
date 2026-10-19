@@ -229,6 +229,9 @@ private:
     QString slug_;
 
     Atomic<std::shared_ptr<const EmoteMap>> kickChannelEmotes_;
+    /// Bumped by every channel emote reload, so a retry scheduled by an
+    /// older failed reload doesn't run after a newer one.
+    uint64_t kickEmoteGeneration_ = 0;
     Atomic<std::shared_ptr<const EmoteMap>> seventvEmotes_;
 
     struct SubscriberBadge {

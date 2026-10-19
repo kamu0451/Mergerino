@@ -577,7 +577,9 @@ bool MergedChannel::isRerun() const
 {
     if (auto *twitch = dynamic_cast<TwitchChannel *>(this->twitchChannel_.get()))
     {
-        return twitch->isRerun();
+        // Another live platform makes the tab live, not a rerun
+        return twitch->isRerun() && !this->kickLive_ && !this->youtubeLive_ &&
+               !this->tiktokLive_;
     }
     return false;
 }
@@ -1882,23 +1884,23 @@ QColor MergedChannel::platformAccent(MessagePlatform platform)
 
 EmotePtr MergedChannel::platformBadge(MessagePlatform platform)
 {
-    static EmoteMap cache;
-
-    const auto name = EmoteName{platformName(platform).toLower()};
-    auto it = cache.find(name);
-    if (it != cache.end())
+    // Messages own these images. The static lookup must not retain Qt image
+    // resources beyond the QApplication lifetime.
+    static std::unordered_map<QString, std::weak_ptr<const Emote>> cache;
+    const auto key = platformName(platform).toLower();
+    if (auto badge = cache[key].lock())
     {
-        return it->second;
+        return badge;
     }
 
-    Emote emote{
-        .name = name,
-        .images = ImageSet{Image::fromResourcePixmap(renderPlatformBadge(platform))},
+    auto badge = std::make_shared<const Emote>(Emote{
+        .name = EmoteName{key},
+        .images =
+            ImageSet{Image::fromResourcePixmap(renderPlatformBadge(platform))},
         .tooltip = Tooltip{platformName(platform)},
         .homePage = Url{},
-    };
-    auto badge = cachedOrMakeEmotePtr(std::move(emote), cache);
-    cache[badge->name] = badge;
+    });
+    cache[key] = badge;
     return badge;
 }
 

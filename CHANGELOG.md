@@ -2,6 +2,7 @@
 
 ## Unversioned
 
+- Bugfix: Kick chat shows new messages again. Kick moved its chat to a new connection key in October 2026, so the old one was refused and Kick tabs stayed silent while still showing the stream as live. Mergerino now uses the new key and asks Kick for the current one when it starts and whenever the key is refused (ported from upstream 1.3.4).
 - Bugfix: The version number moves to 1.6 and counts up from there. Builds past 1.5.255 had a version the update check could not read.
 - Bugfix: The update check no longer offers an update when you already run the latest release.
 - Bugfix: Messages from a user who was timed out or banned, and messages removed by a chat clear, are now greyed out in merged tabs too.

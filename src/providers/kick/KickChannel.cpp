@@ -35,6 +35,8 @@
 
 #include <boost/json/parse.hpp>
 #include <boost/system/error_code.hpp>
+#include <QRegularExpression>
+#include <QSet>
 
 #include <algorithm>
 #include <atomic>
@@ -58,6 +60,16 @@ QString makeLocalKickMessageID()
            QString::number(NEXT_LOCAL_MESSAGE_ID.fetch_add(1));
 }
 
+/// Level badge images live at /chat/badges/<level>_...; other global badges
+/// (the 2022 founder badge, promo badges) share the folder but not the
+/// number.
+const QRegularExpression &levelBadgePathPattern()
+{
+    static const QRegularExpression pattern(
+        R"(/chat/badges/(\d+)_)", QRegularExpression::CaseInsensitiveOption);
+    return pattern;
+}
+
 bool isKickLevelBadge(const KickPrivateUserBadgeInfo &badge)
 {
     auto type = badge.type.toLower();
@@ -65,7 +77,7 @@ bool isKickLevelBadge(const KickPrivateUserBadgeInfo &badge)
            type == u"kick-level"_s || type == u"level_badge"_s ||
            type == u"level-badge"_s || type.contains(u"level"_s) ||
            badge.level > 0 ||
-           badge.imageUrl.contains(u"/chat/badges/"_s, Qt::CaseInsensitive);
+           levelBadgePathPattern().match(badge.imageUrl).hasMatch();
 }
 
 std::unique_ptr<MessageElement> makeKickLevelBadgeElement(
@@ -85,7 +97,7 @@ std::unique_ptr<MessageElement> makeKickLevelBadgeElement(
 
     auto emote = std::make_shared<const Emote>(Emote{
         .name = {name},
-        .images = ImageSet(Image::fromAutoscaledUrl(
+        .images = ImageSet(Image::fromBoundedAutoscaledUrl(
             {badge.imageUrl}, KICK_LEVEL_BADGE_IMAGE_SIZE)),
         .tooltip = Tooltip{name},
         .homePage = {u"https://kick.com/" % slug},
@@ -1128,6 +1140,8 @@ void KickChannel::cacheOwnIdentityFromUserInfo(
     bool hasVip = false;
     bool hasSubscriberBadge = false;
     std::vector<std::unique_ptr<MessageElement>> levelBadges;
+    // Kick lists a role in both its badge lists, so show each badge once
+    QSet<QString> emittedBadges;
     for (const auto &badge : info.badges)
     {
         if (!badge.active)
@@ -1137,7 +1151,8 @@ void KickChannel::cacheOwnIdentityFromUserInfo(
 
         // A role holds even when the user hid its badge; only the badges
         // shown on our own messages follow the user's badge selection.
-        const auto type = badge.type.toLower();
+        auto type = badge.type.trimmed().toLower();
+        type.replace('-', '_');
         if (type == u"moderator"_s || type == u"lead_moderator"_s ||
             type == u"lead-moderator"_s)
         {
@@ -1173,13 +1188,27 @@ void KickChannel::cacheOwnIdentityFromUserInfo(
                                      MessageElementFlag::BadgeSubscription};
                 }
             }
-            return KickBadges::lookup(type.toStdString());
+            return KickBadges::lookup(type.toStdString(), badge.imageUrl,
+                                      badge.text);
         }();
-        if (emote)
+        if (!emote)
         {
-            identity.badges.emplace_back(
-                std::make_unique<BadgeElement>(emote, flag));
+            continue;
         }
+
+        auto badgeKey =
+            type == u"lead_moderator"_s ? u"moderator"_s : QString(type);
+        if (!KickBadges::lookup(type.toStdString()).first)
+        {
+            badgeKey += ':' + badge.imageUrl;
+        }
+        if (emittedBadges.contains(badgeKey))
+        {
+            continue;
+        }
+        emittedBadges.insert(badgeKey);
+        identity.badges.emplace_back(
+            std::make_unique<BadgeElement>(emote, flag));
     }
 
     if (!hasSubscriberBadge && info.subscriptionMonths)
@@ -1224,8 +1253,8 @@ void KickChannel::setSubscriberBadges(
 
         auto emote = std::make_shared<const Emote>(Emote{
             .name = {u"Subscriber"_s},
-            .images = ImageSet(
-                Image::fromAutoscaledUrl({badge.imageUrl}, 18)),
+            .images =
+                ImageSet(Image::fromBoundedAutoscaledUrl({badge.imageUrl}, 18)),
             .tooltip = Tooltip{std::move(tooltip)},
             .homePage = {u"https://kick.com/" % this->slug_},
         });

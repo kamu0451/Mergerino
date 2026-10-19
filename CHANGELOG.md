@@ -7,6 +7,8 @@
 - Bugfix: Kick global and channel emotes that fail to load (for example behind a Cloudflare check) are retried after 30 seconds instead of staying missing for the session.
 - Bugfix: A merged tab no longer shows the rerun marker while Kick, YouTube or TikTok is live during a Twitch rerun.
 - Bugfix: Kick emote and badge caches no longer grow for the whole session, and a renamed Kick emote picks up its new name.
+- Minor: Kick badges we have no icon for (the 2022 founder badge, GOAT and other promo badges, custom channel badges) now show using Kick's own image. Channel badges come first, a role sent in both of Kick's badge lists shows once, and your own messages no longer show the founder badge as a "Kick Level" badge.
+- Bugfix: Very large Kick badge and emote images (the founder badge is 3087x3087) are scaled down while loading instead of being dropped for their size.
 - Bugfix: The version number moves to 1.6 and counts up from there. Builds past 1.5.255 had a version the update check could not read.
 - Bugfix: The update check no longer offers an update when you already run the latest release.
 - Bugfix: Messages from a user who was timed out or banned, and messages removed by a chat clear, are now greyed out in merged tabs too.

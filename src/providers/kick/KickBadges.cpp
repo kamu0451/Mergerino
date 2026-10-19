@@ -173,4 +173,33 @@ std::pair<EmotePtr, MessageElementFlag> KickBadges::lookup(
     return {std::move(badge), entry.second};
 }
 
+std::pair<EmotePtr, MessageElementFlag> KickBadges::lookup(
+    std::string_view name, const QString &imageUrl, const QString &displayName)
+{
+    // Badges we bundle keep our icon; anything else (the 2022 founder badge,
+    // promo badges, custom channel badges) uses the image Kick sends.
+    auto known = lookup(name);
+    if (known.first || imageUrl.isEmpty())
+    {
+        return known;
+    }
+
+    auto label = displayName.trimmed();
+    if (label.isEmpty())
+    {
+        label =
+            QString::fromUtf8(name.data(), static_cast<qsizetype>(name.size()));
+    }
+    if (label.isEmpty())
+    {
+        label = u"Kick Badge"_s;
+    }
+    auto emote = std::make_shared<const Emote>(Emote{
+        .name = {label},
+        .images = ImageSet(Image::fromBoundedAutoscaledUrl({imageUrl}, 18)),
+        .tooltip = Tooltip{label.toHtmlEscaped()},
+    });
+    return {std::move(emote), MessageElementFlag::BadgeVanity};
+}
+
 }  // namespace chatterino

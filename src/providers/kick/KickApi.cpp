@@ -6,6 +6,7 @@
 #include "util/BoostJsonWrap.hpp"
 
 #include <boost/json/parse.hpp>
+#include <QUrl>
 #include <QUrlQuery>
 
 #include <algorithm>
@@ -14,6 +15,70 @@ namespace {
 
 using namespace chatterino;
 using namespace Qt::Literals;
+
+/// Kick sometimes sends numbers as strings
+uint64_t kickUnsignedValue(BoostJsonValue value, uint64_t fallback = 0)
+{
+    if (value.isString())
+    {
+        bool ok = false;
+        const auto parsed = value.toQString().toULongLong(&ok);
+        return ok ? parsed : fallback;
+    }
+    return value.toUint64(fallback);
+}
+
+/// Finds an http(s) image URL in a string, array or object, resolving
+/// protocol-relative and site-relative URLs against kick.com
+QString kickAssetUrl(BoostJsonValue value, int depth = 0)
+{
+    if (depth > 6)
+    {
+        return {};
+    }
+    if (value.isString())
+    {
+        auto text = value.toQString().trimmed();
+        if (text.startsWith("//"))
+        {
+            text.prepend("https:");
+        }
+        else if (text.startsWith('/'))
+        {
+            text.prepend("https://kick.com");
+        }
+        const QUrl url(text);
+        if (url.isValid() && !url.host().isEmpty() &&
+            (url.scheme() == "https" || url.scheme() == "http"))
+        {
+            return url.toString();
+        }
+        return {};
+    }
+    if (value.isArray())
+    {
+        for (auto item : value.toArray())
+        {
+            if (auto url = kickAssetUrl(item, depth + 1); !url.isEmpty())
+            {
+                return url;
+            }
+        }
+    }
+    if (value.isObject())
+    {
+        for (auto key : {"image_url", "imageUrl", "src", "url", "badge_image",
+                         "badgeImage", "image", "images", "icon", "icon_url",
+                         "thumbnail", "metadata"})
+        {
+            if (auto url = kickAssetUrl(value[key], depth + 1); !url.isEmpty())
+            {
+                return url;
+            }
+        }
+    }
+    return {};
+}
 
 std::vector<std::pair<QByteArray, QByteArray>> kickNoAuthHeaders()
 {
@@ -244,10 +309,16 @@ KickPrivateChatroomInfo::KickPrivateChatroomInfo(BoostJsonObject obj)
 
 KickPrivateSubscriberBadgeInfo::KickPrivateSubscriberBadgeInfo(
     BoostJsonObject obj)
-    : months(obj["months"].toUint64())
+    : months(kickUnsignedValue(obj["months"]))
 {
-    auto badgeImage = obj["badge_image"].toObject();
-    this->imageUrl = badgeImage["src"].toQString();
+    for (auto key : {"badge_image", "image_url", "image", "src"})
+    {
+        this->imageUrl = kickAssetUrl(obj[key]);
+        if (!this->imageUrl.isEmpty())
+        {
+            break;
+        }
+    }
 }
 
 KickPrivateUserBadgeInfo::KickPrivateUserBadgeInfo(BoostJsonObject obj)
@@ -257,15 +328,37 @@ KickPrivateUserBadgeInfo::KickPrivateUserBadgeInfo(BoostJsonObject obj)
     {
         this->type = obj["badge_type"].toQString();
     }
-    this->text = obj["text"].toQString(obj["label"].toQString());
-    this->imageUrl = obj["image_url"].toQString(obj["src"].toQString());
-    this->count = obj["count"].toUint64();
-    this->sortOrder = obj["sort_order"].toUint64(1000);
+    this->text = obj["text"].toQString(obj["label"].toQString(
+        obj["title"].toQString(obj["name"].toQString())));
+    for (auto key :
+         {"image_url", "imageUrl", "badge_image", "image", "src", "metadata"})
+    {
+        this->imageUrl = kickAssetUrl(obj[key]);
+        if (!this->imageUrl.isEmpty())
+        {
+            break;
+        }
+    }
+    this->count = kickUnsignedValue(obj["count"]);
+    this->sortOrder = kickUnsignedValue(obj["sort_order"], 1000);
     this->active = obj["active"].toBool(true);
     this->selected = obj["selected"].toBool(true);
 
+    auto normalizedType = this->type.trimmed().toLower();
+    normalizedType.replace('-', '_');
+    const auto category = obj["badge_type"]
+                              .toQString(obj["badgeType"].toQString())
+                              .trimmed()
+                              .toLower();
+    this->channelAssigned =
+        category == u"channel"_s || normalizedType == u"broadcaster"_s ||
+        normalizedType == u"moderator"_s ||
+        normalizedType == u"lead_moderator"_s || normalizedType == u"vip"_s ||
+        normalizedType == u"og"_s;
+
     auto metadata = obj["metadata"].toObject();
-    this->level = metadata["level"].toUint64(obj["level"].toUint64());
+    this->level =
+        kickUnsignedValue(metadata["level"], kickUnsignedValue(obj["level"]));
 }
 
 KickPrivateChannelInfo::KickPrivateChannelInfo(BoostJsonObject obj)
@@ -338,8 +431,13 @@ KickPrivateUserInChannelInfo::KickPrivateUserInChannelInfo(BoostJsonObject obj)
         }
     }
 
+    // Channel badges (broadcaster, moderator, VIP, OG, custom) come first
     std::stable_sort(this->badges.begin(), this->badges.end(),
                      [](const auto &lhs, const auto &rhs) {
+                         if (lhs.channelAssigned != rhs.channelAssigned)
+                         {
+                             return lhs.channelAssigned;
+                         }
                          return lhs.sortOrder < rhs.sortOrder;
                      });
 

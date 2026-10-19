@@ -200,8 +200,21 @@ std::optional<QPixmap> Frames::first() const
     return this->items_.front().image;
 }
 
-QList<Frame> readFrames(QImageReader &reader, const Url &url)
+QList<Frame> readFrames(QImageReader &reader, const Url &url,
+                        QSize decodeBounds)
 {
+    const bool bounded = decodeBounds.isValid() && !decodeBounds.isEmpty();
+    if (bounded)
+    {
+        auto size = reader.size();
+        if (size.width() > decodeBounds.width() ||
+            size.height() > decodeBounds.height())
+        {
+            size.scale(decodeBounds, Qt::KeepAspectRatio);
+            reader.setScaledSize(size.expandedTo({1, 1}));
+        }
+    }
+
     QList<Frame> frames;
     frames.reserve(reader.imageCount());
 
@@ -210,6 +223,14 @@ QList<Frame> readFrames(QImageReader &reader, const Url &url)
         auto pixmap = QPixmap::fromImageReader(&reader);
         if (!pixmap.isNull())
         {
+            // Some animation plugins decode at source resolution despite
+            // setScaledSize(), so enforce the bound on each frame too.
+            if (bounded && (pixmap.width() > decodeBounds.width() ||
+                            pixmap.height() > decodeBounds.height()))
+            {
+                pixmap = pixmap.scaled(decodeBounds, Qt::KeepAspectRatio,
+                                       Qt::SmoothTransformation);
+            }
             // It seems that browsers have special logic for fast animations.
             // This implements Chrome and Firefox's behavior which uses
             // a duration of 100 ms for any frames that specify a duration of <= 10 ms.
@@ -349,6 +370,14 @@ ImagePtr Image::fromAutoscaledUrl(const Url &url, uint16_t autoScale)
 {
     auto shared = Image::fromUrl(url, 1.0, {autoScale, autoScale});
     shared->autoScale_ = autoScale;
+
+    return shared;
+}
+
+ImagePtr Image::fromBoundedAutoscaledUrl(const Url &url, uint16_t autoScale)
+{
+    auto shared = Image::fromAutoscaledUrl(url, autoScale);
+    shared->boundedDecode_ = true;
 
     return shared;
 }
@@ -628,7 +657,7 @@ void Image::actuallyLoad()
             return;
         }
 
-        const auto size = reader.size();
+        auto size = reader.size();
         if (size.isEmpty())
         {
             shared->empty_ = true;
@@ -645,6 +674,34 @@ void Image::actuallyLoad()
             return;
         }
 
+        // A bounded image (e.g. a Kick badge served at 3087x3087) is decoded
+        // at four physical pixels per logical pixel, for high DPI and zoom,
+        // so the RAM check below sees the decoded size, not the source size.
+        QSize decodeBounds;
+        if (shared->boundedDecode_ && shared->autoScale_)
+        {
+            decodeBounds = QSize(*shared->autoScale_, *shared->autoScale_) * 4;
+
+            // The source frame is still decoded once before scaling
+            constexpr double maxSourceFrameBytes = 64.0 * 1024 * 1024;
+            if (double(size.width()) * double(size.height()) * 4.0 >
+                maxSourceFrameBytes)
+            {
+                qCDebug(chatterinoImage)
+                    << "source image too large" << shared->url().string;
+                shared->empty_ = true;
+                return;
+            }
+
+            // readFrames decodes at this size
+            if (size.width() > decodeBounds.width() ||
+                size.height() > decodeBounds.height())
+            {
+                size.scale(decodeBounds, Qt::KeepAspectRatio);
+                size = size.expandedTo({1, 1});
+            }
+        }
+
         // use "double" to prevent int overflows
         if (double(size.width()) * double(size.height()) *
                 double(reader.imageCount()) * 4.0 >
@@ -656,7 +713,7 @@ void Image::actuallyLoad()
             return;
         }
 
-        auto parsed = detail::readFrames(reader, shared->url());
+        auto parsed = detail::readFrames(reader, shared->url(), decodeBounds);
 
         assignFrames(shared, parsed);
     };

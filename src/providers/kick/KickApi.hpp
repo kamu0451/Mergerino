@@ -56,6 +56,9 @@ struct KickPrivateUserBadgeInfo {
     uint64_t sortOrder = 1000;
     bool active = true;
     bool selected = true;
+    /// Given by the channel (broadcaster, moderator, VIP, OG or a custom
+    /// channel badge) rather than Kick-wide
+    bool channelAssigned = false;
 };
 
 struct KickPrivateChannelInfo {

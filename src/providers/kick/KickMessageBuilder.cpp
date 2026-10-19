@@ -14,6 +14,7 @@
 #include "providers/emoji/Emojis.hpp"
 #include "providers/ffz/FfzEmotes.hpp"
 #include "providers/kick/KickAccount.hpp"
+#include "providers/kick/KickApi.hpp"
 #include "providers/kick/KickBadges.hpp"
 #include "providers/kick/KickChannel.hpp"
 #include "providers/kick/KickEmotes.hpp"
@@ -31,6 +32,7 @@
 #include "util/Variant.hpp"
 
 #include <QRegularExpression>
+#include <QSet>
 
 #include <algorithm>
 #include <cstdint>
@@ -246,10 +248,12 @@ std::string firstStdString(BoostJsonObject obj,
 
 std::string badgeTypeFromObject(BoostJsonObject obj)
 {
-    return firstStdString(obj, {"type", "badge_type", "badgeType", "kind",
-                                "id", "slug", "key", "name", "title", "alt",
-                                "tooltip", "display_name", "displayName",
-                                "badge_name", "badgeName"});
+    // "name" before "badge_type": v2 badges carry their real type in "name"
+    // and only "global"/"channel" in "badge_type"
+    return firstStdString(
+        obj, {"type", "name", "slug", "key", "badge_type", "badgeType", "kind",
+              "id", "title", "alt", "tooltip", "display_name", "displayName",
+              "badge_name", "badgeName"});
 }
 
 QString imageUrlFromObject(BoostJsonObject obj);
@@ -477,7 +481,7 @@ bool appendKickLevelBadge(KickMessageBuilder &builder, BoostJsonObject badgeObj,
 
     auto emote = std::make_shared<const Emote>(Emote{
         .name = {name},
-        .images = ImageSet(Image::fromAutoscaledUrl(
+        .images = ImageSet(Image::fromBoundedAutoscaledUrl(
             {imageUrl}, KICK_LEVEL_BADGE_IMAGE_SIZE)),
         .tooltip = Tooltip{tooltip},
         .homePage = {u"https://kick.com/" % builder.channel()->slug()},
@@ -629,21 +633,46 @@ void appendReplyButtons(KickMessageBuilder &builder)
 }
 
 std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
-                                               BoostJsonArray badges,
-                                               bool updateSelfState = true)
+                                               BoostJsonObject identity)
 {
+    // Kick sends the same role in both lists, so read them as one list:
+    // channel badges first, then Kick's sort order, without duplicates.
+    std::vector<std::pair<BoostJsonObject, KickPrivateUserBadgeInfo>> badges;
+    for (auto key : {"badges_v2", "badges"})
+    {
+        for (auto value : identity[key].toArray())
+        {
+            if (value.isObject())
+            {
+                const auto object = value.toObject();
+                badges.emplace_back(object, KickPrivateUserBadgeInfo(object));
+            }
+        }
+    }
+    std::stable_sort(
+        badges.begin(), badges.end(), [](const auto &lhs, const auto &rhs) {
+            if (lhs.second.channelAssigned != rhs.second.channelAssigned)
+            {
+                return lhs.second.channelAssigned;
+            }
+            return lhs.second.sortOrder < rhs.second.sortOrder;
+        });
+
     bool hasMod = false;
     bool hasVip = false;
     std::optional<KickLevelBadge> levelBadge;
-    for (auto badgeObj : badges)
+    QSet<QString> emittedBadges;
+    for (const auto &[obj, badgeInfo] : badges)
     {
-        auto obj = badgeObj.toObject();
         if (!isVisibleKickBadgeObject(obj))
         {
             continue;
         }
 
-        auto ty = badgeTypeFromObject(obj);
+        auto normalizedType =
+            qStringFromView(badgeTypeFromObject(obj)).trimmed().toLower();
+        normalizedType.replace('-', '_');
+        auto ty = normalizedType.toStdString();
         // Roles count even when we have no image to draw for the badge.
         if (ty == "moderator" || ty == "lead_moderator" ||
             ty == "lead-moderator")
@@ -656,9 +685,10 @@ std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
         }
         if (isKickLevelBadgeObject(obj, ty))
         {
-            if (!levelBadge)
+            // The first one with an image wins
+            if (!levelBadge || imageUrlFromObject(levelBadge->first).isEmpty())
             {
-                levelBadge.emplace(std::move(obj), std::move(ty));
+                levelBadge.emplace(obj, std::move(ty));
             }
             continue;
         }
@@ -668,7 +698,7 @@ std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
             {
                 auto subscriberBadge =
                     builder.channel()->subscriberBadgeForMonths(
-                        obj["count"].toUint64());
+                        badgeInfo.count);
                 if (subscriberBadge)
                 {
                     return std::pair{subscriberBadge,
@@ -676,12 +706,26 @@ std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
                 }
             }
 
-            return KickBadges::lookup(ty);
+            return KickBadges::lookup(ty, badgeInfo.imageUrl, badgeInfo.text);
         }();
         if (!emote)
         {
             continue;
         }
+
+        // Badges we bundle are keyed by type; others also by their image, so
+        // two different custom badges both show.
+        auto badgeKey = normalizedType == u"lead_moderator"_s ? u"moderator"_s
+                                                              : normalizedType;
+        if (!KickBadges::lookup(ty).first)
+        {
+            badgeKey += ':' + badgeInfo.imageUrl;
+        }
+        if (emittedBadges.contains(badgeKey))
+        {
+            continue;
+        }
+        emittedBadges.insert(badgeKey);
 
         if (ty == "bot")
         {
@@ -693,7 +737,7 @@ std::optional<KickLevelBadge> appendKickBadges(KickMessageBuilder &builder,
 
     bool isSelf = builder->loginName ==
                   getApp()->getAccounts()->kick.current()->username();
-    if (updateSelfState && isSelf)
+    if (isSelf)
     {
         // A message payload is not guaranteed to contain every role badge.
         // Let it confirm privileges, but leave removals to the authoritative
@@ -859,15 +903,8 @@ std::pair<MessagePtrMut, HighlightAlert> KickMessageBuilder::makeChatMessage(
     builder.emplace<TimestampElement>(builder->serverReceivedTime.time());
     builder.emplace<TwitchModerationElement>();
 
-    const auto levelBadgeV2 =
-        appendKickBadges(builder, identity["badges_v2"].toArray(), false);
-    const auto levelBadge =
-        appendKickBadges(builder, identity["badges"].toArray(), true);
-    auto hasLevelBadge = appendDeferredKickLevelBadge(builder, levelBadgeV2);
-    if (!hasLevelBadge)
-    {
-        hasLevelBadge = appendDeferredKickLevelBadge(builder, levelBadge);
-    }
+    const auto levelBadge = appendKickBadges(builder, identity);
+    appendDeferredKickLevelBadge(builder, levelBadge);
     appendSeventvBadge(builder);
 
     builder.appendUsername(identity);

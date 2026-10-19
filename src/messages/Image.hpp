@@ -65,7 +65,9 @@ private:
     pajlada::Signals::Connection gifTimerConnection_;
 };
 
-QList<Frame> readFrames(QImageReader &reader, const Url &url);
+/// A valid, non-empty `decodeBounds` caps the size of every returned frame.
+QList<Frame> readFrames(QImageReader &reader, const Url &url,
+                        QSize decodeBounds = {});
 void assignFrames(std::weak_ptr<Image> weak, QList<Frame> parsed);
 
 }  // namespace chatterino::detail
@@ -111,6 +113,10 @@ public:
     static ImagePtr getEmpty();
 
     static ImagePtr fromAutoscaledUrl(const Url &url, uint16_t autoScale);
+    /// Like fromAutoscaledUrl, but a large source is decoded at no more than
+    /// four times `autoScale` instead of being rejected for its RAM size.
+    static ImagePtr fromBoundedAutoscaledUrl(const Url &url,
+                                             uint16_t autoScale);
 
     const Url &url() const;
     bool loaded() const;
@@ -152,6 +158,8 @@ private:
     std::atomic_bool empty_{false};
 
     bool shouldLoad_{false};
+    /// Decode at most four physical pixels per `autoScale_` pixel.
+    bool boundedDecode_{false};
 
     // Number of load attempts that have transiently failed so far. GUI thread
     // only (mutated via handleLoadFailure()'s GUI-thread hop and expireFrames).
